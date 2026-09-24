@@ -1,0 +1,75 @@
+[project]
+name = "keisim"
+version = "0.1.0"
+description = "KeiSim + KeiPilot: a lightweight closed-loop driving simulator (numpy + OpenCV) and a camera-only end-to-end driving model"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "opencv-python>=4.8",
+    "imageio-ffmpeg>=0.5",   # bundled ffmpeg with H.264 for dashboard videos (system ffmpeg is used if present)
+]
+
+[project.optional-dependencies]
+# PyTorch build — pick exactly one. `bash setup.sh` chooses automatically from nvidia-smi.
+cpu = ["torch>=2.4", "torchvision>=0.19"]
+cu126 = ["torch>=2.4", "torchvision>=0.19"]
+cu128 = ["torch>=2.4", "torchvision>=0.19"]
+cu130 = ["torch>=2.4", "torchvision>=0.19"]
+
+[dependency-groups]
+dev = ["pytest>=7"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["keisim", "keipilot"]
+
+[tool.uv]
+conflicts = [
+    [
+        { extra = "cpu" },
+        { extra = "cu126" },
+        { extra = "cu128" },
+        { extra = "cu130" },
+    ],
+]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cu126", extra = "cu126" },
+    { index = "pytorch-cu128", extra = "cu128" },
+    { index = "pytorch-cu130", extra = "cu130" },
+]
+torchvision = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cu126", extra = "cu126" },
+    { index = "pytorch-cu128", extra = "cu128" },
+    { index = "pytorch-cu130", extra = "cu130" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,160 @@
+{
+ "summary": {
+  "routes": 6,
+  "DS": 0.8500000000000001,
+  "RC": 1.0,
+  "IS": 0.8500000000000001,
+  "success_rate": 1.0,
+  "km": 3.6263,
+  "avg_speed_kmh": 12.171767924250517,
+  "infractions_per_km": {
+   "red_light": 0.8272895237569975
+  },
+  "infraction_counts": {
+   "red_light": 3
+  },
+  "status": {
+   "success": 6
+  }
+ },
+ "results": [
+  {
+   "status": "success",
+   "RC": 1.0,
+   "IS": 0.7,
+   "DS": 0.7,
+   "infractions": [
+    {
+     "type": "red_light",
+     "t": 163.3,
+     "id": 21,
+     "s": 539.9
+    }
+   ],
+   "time": 172.0,
+   "distance": 599.0,
+   "route_length": 600.0,
+   "off_lane_ratio": 0.0,
+   "town": 1000,
+   "episode": 9001,
+   "steps": 1720,
+   "wall": 60.42715907096863,
+   "avg_speed": 3.484219099957428,
+   "weather": "fog"
+  },
+  {
+   "status": "success",
+   "RC": 1.0,
+   "IS": 1.0,
+   "DS": 1.0,
+   "infractions": [],
+   "time": 261.2,
+   "distance": 598.2,
+   "route_length": 600.0,
+   "off_lane_ratio": 0.0,
+   "town": 1004,
+   "episode": 9002,
+   "steps": 2612,
+   "wall": 89.64600491523743,
+   "avg_speed": 2.2913638931295304,
+   "weather": "sunset"
+  },
+  {
+   "status": "success",
+   "RC": 1.0,
+   "IS": 0.7,
+   "DS": 0.7,
+   "infractions": [
+    {
+     "type": "red_light",
+     "t": 183.1,
+     "id": 40,
+     "s": 593.1
+    }
+   ],
+   "time": 184.25,
+   "distance": 598.7,
+   "route_length": 600.0,
+   "off_lane_ratio": 0.0,
+   "town": 1001,
+   "episode": 9002,
+   "steps": 1843,
+   "wall": 69.18465733528137,
+   "avg_speed": 3.2507120641881193,
+   "weather": "noon"
+  },
+  {
+   "status": "success",
+   "RC": 1.0,
+   "IS": 1.0,
+   "DS": 1.0,
+   "infractions": [],
+   "time": 130.85,
+   "distance": 608.4,
+   "route_length": 609.2,
+   "off_lane_ratio": 0.0,
+   "town": 1003,
+   "episode": 9001,
+   "steps": 1309,
+   "wall": 45.3645498752594,
+   "avg_speed": 4.652933219147683,
+   "weather": "cloudy"
+  },
+  {
+   "status": "success",
+   "RC": 1.0,
+   "IS": 1.0,
+   "DS": 1.0,
+   "infractions": [],
+   "time": 202.15,
+   "distance": 598.6,
+   "route_length": 600.0,
+   "off_lane_ratio": 0.0,
+   "town": 1007,
+   "episode": 9102,
+   "steps": 2022,
+   "wall": 74.20722341537476,
+   "avg_speed": 2.9643978914669926,
+   "weather": "fog"
+  },
+  {
+   "status": "success",
+   "RC": 1.0,
+   "IS": 0.7,
+   "DS": 0.7,
+   "infractions": [
+    {
+     "type": "red_light",
+     "t": 35.7,
+     "id": 28,
+     "s": 111.0
+    }
+   ],
+   "time": 171.2,
+   "distance": 623.4,
+   "route_length": 624.2,
+   "off_lane_ratio": 0.0,
+   "town": 1009,
+   "episode": 9100,
+   "steps": 1712,
+   "wall": 64.372967004776,
+   "avg_speed": 3.6426537058611026,
+   "weather": "noon"
+  }
+ ],
+ "args": {
+  "agent": "model",
+  "ckpt": "runs/keipilot_dagger/last.pt",
+  "suite": "showcase",
+  "workers": 6,
+  "route_length": 600.0,
+  "weather": "random",
+  "max_steps": 4000,
+  "videos": 6,
+  "video_dir": "runs/videos",
+  "tag": null,
+  "dense": false,
+  "out": null
+ },
+ "time": 93.75318884849548
+}
