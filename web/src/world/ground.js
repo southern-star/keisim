@@ -23,7 +23,9 @@ export function build(ctx) {
     }
   }, { key: 'kv_grass', repeat: [SIZE / TILE, SIZE / TILE] });
   const mat = ctx.mat.toon('#a8c98a', { map: grass, paint: 0.1 });
-  const geo = new THREE.PlaneGeometry(SIZE, SIZE, 1, 1);
+  // 25 m cells, not one quad: near-plane clipping of two 1.8 km triangles loses enough depth
+  // precision (seen on SwiftShader) for the grass 3 cm below to show through the road.
+  const geo = new THREE.PlaneGeometry(SIZE, SIZE, SIZE / 25, SIZE / 25);
   geo.rotateX(-Math.PI / 2);
   const m = new THREE.Mesh(geo, mat);
   m.position.y = -0.03;
