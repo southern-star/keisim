@@ -32,7 +32,11 @@ SUITES = {
 }
 
 
+_ENV = None
+
+
 def run_route(job):
+    global _ENV
     (town, ep), args, idx = job
     import cv2
     cv2.setNumThreads(1)
@@ -41,13 +45,21 @@ def run_route(job):
     cfg = EnvConfig()
     cfg.render_seg = False
     cfg.render_rgb = args["agent"] == "model"
+    cfg.renderer = args.get("renderer", "keisim")
     if args.get("dense"):
         cfg.traffic.vehicle_spacing = (20.0, 28.0)
         cfg.traffic.ped_spacing = (14.0, 20.0)
         cfg.traffic.max_vehicles = 130
         cfg.traffic.max_peds = 110
         cfg.traffic.ego_cross_rate = 0.3
-    env = KeiEnv(cfg)
+    if cfg.renderer == "keiview":
+        if _ENV is None:                     # keep one headless Chrome per worker process
+            _ENV = KeiEnv(cfg)
+        env = _ENV
+        env.cfg = cfg
+        env.expert.env = env
+    else:
+        env = KeiEnv(cfg)
     agent = None
     if args["agent"] == "model":
         global _AGENT
@@ -152,6 +164,7 @@ def main():
     ap.add_argument("--video_dir", default="runs/videos")
     ap.add_argument("--tag", default=None)
     ap.add_argument("--dense", action="store_true", help="stress test: dense traffic and many crossing pedestrians")
+    ap.add_argument("--renderer", default="keisim", choices=["keisim", "keiview"], help="camera renderer")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
     if args.tag:
@@ -165,7 +178,7 @@ def main():
     jobs = SUITES[args.suite]
     a = {"agent": args.agent, "ckpt": args.ckpt, "route_length": args.route_length, "weather": args.weather,
          "max_steps": args.max_steps, "videos": args.videos, "video_dir": args.video_dir, "tag": tag,
-         "dense": args.dense}
+         "dense": args.dense, "renderer": args.renderer}
     t0 = time.time()
     ctx = mp.get_context("spawn")
     with ctx.Pool(args.workers) as pool:
@@ -176,7 +189,8 @@ def main():
                   f"inf={[i['type'] for i in m['infractions']]} ({m['wall']:.0f}s)", flush=True)
     s = summarize(results)
     print(json.dumps(s, indent=1))
-    suffix = ("_dense" if args.dense else "") + ("" if args.weather == "random" else f"_{args.weather}")
+    suffix = ("_dense" if args.dense else "") + ("" if args.weather == "random" else f"_{args.weather}") + \
+        ("_keiview" if args.renderer == "keiview" else "")
     out = args.out or f"runs/eval/{tag}_{args.suite}{suffix}.json"
     os.makedirs(os.path.dirname(out), exist_ok=True)
     with open(out, "w") as f:

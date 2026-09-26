@@ -9,6 +9,7 @@ import { createSky } from '../vendor/sakuragaoka/core/sky.js';
 import { Player } from '../vendor/sakuragaoka/core/player.js';
 import { batchStatic } from '../vendor/sakuragaoka/core/batch2.js';
 import { loadTown } from './town.js';
+import { installEgo, tagSemantics } from './ego.js';
 
 export const MODULES = ['ground', 'roads', 'houses', 'trees', 'signals', 'poles'];
 
@@ -16,6 +17,8 @@ const params = new URLSearchParams(location.search);
 const SHOT = params.has('shot');
 const ONLY = params.get('only') ? params.get('only').split(',').map(s => s.trim()).filter(Boolean) : null;
 const SEED = params.get('town') || '1000';
+const EGO = params.has('ego');                    // KeiSim ego-camera mode (src/ego.js)
+const TDIR = (params.get('tdir') || 'towns').replace(/[^\w.-]/g, '');
 const $ = (id) => document.getElementById(id);
 
 const isTouch = matchMedia('(pointer: coarse)').matches;
@@ -48,6 +51,8 @@ const audio = { start() {}, update() {}, loop: () => ({ setVolume() {}, setParam
 const ctx = createContext({ scene, camera, renderer, audio, quality, sunDir });
 ctx.sky = sky;
 window.__ctx = ctx; window.THREE = THREE;
+// ego mode draws signal heads larger so the lamps stay visible at KeiSim's 320x160 camera resolution
+ctx.signalScale = Number(params.get('sigscale') || (EGO ? 1.6 : 1));
 
 function resize() {
   const w = SHOT ? Number(params.get('w') || 1280) : innerWidth, h = SHOT ? Number(params.get('h') || 720) : innerHeight;
@@ -80,13 +85,14 @@ const LABELS = { ground: '地面', roads: '道路と歩道', houses: '家並み'
 let town = null;
 async function build() {
   setProgress(0.02, `town ${SEED} を読み込み中…`);
-  town = await loadTown(`./towns/town_${SEED}.json`);
+  town = await loadTown(`./${TDIR}/town_${SEED}.json`);
   ctx.town = town; window.__town = town;
   L.configureWorld({ play: town.play, heightAt: town.heightAt, farTown: town.farTown, farSkip: town.farSkip });
   const name = $('townname'); if (name) name.textContent = SEED;
   const sum = $('townsum'); if (sum) sum.textContent = `${town.junctions.length} junctions · ${town.buildings.length} lots · ${town.trees.length} trees`;
   await loadFonts();
-  const list = ONLY ? MODULES.filter(m => ONLY.includes(m)).concat(ONLY.filter(m => !MODULES.includes(m))) : MODULES;
+  const mods = EGO ? MODULES.concat(['actors']) : MODULES;
+  const list = ONLY ? mods.filter(m => ONLY.includes(m)).concat(ONLY.filter(m => !mods.includes(m))) : mods;
   let i = 0;
   for (const name of list) {
     setProgress((i + 1) / (list.length + 2), `${LABELS[name] || name} を準備中…`);
@@ -95,8 +101,11 @@ async function build() {
     try {
       const mod = await import(`./world/${name}.js`);
       const before = ctx.staticRoot.children.length + ctx.dynamicRoot.children.length;
+      const bS = ctx.staticRoot.children.length, bD = ctx.dynamicRoot.children.length;
       if (typeof mod.build !== 'function') throw new Error('module has no build(ctx) export');
       await mod.build(ctx);
+      for (const o of ctx.staticRoot.children.slice(bS)) o.userData.module = name;
+      for (const o of ctx.dynamicRoot.children.slice(bD)) o.userData.module = name;
       stats.modules[name] = { ms: Math.round(performance.now() - t0), objects: ctx.staticRoot.children.length + ctx.dynamicRoot.children.length - before };
     } catch (e) {
       console.error(`[module ${name}]`, e);
@@ -106,7 +115,8 @@ async function build() {
   }
   setProgress((list.length + 1) / (list.length + 2), '仕上げ中…');
   await new Promise(r => setTimeout(r, 0));
-  const wm = ctx.wires.build(); if (wm) { scene.add(wm); ctx.wires.setResolution(pipeline.size.x, pipeline.size.y); }
+  const wm = ctx.wires.build(); if (wm) { wm.userData.labelSkip = true; scene.add(wm); ctx.wires.setResolution(pipeline.size.x, pipeline.size.y); }
+  if (EGO) tagSemantics(ctx);
   stats.batch = batchStatic(ctx.staticRoot, { mat: ctx.mat });
   try { renderer.compile(scene, camera); } catch (e) { console.warn(e); }
   setProgress(1, '');
@@ -185,6 +195,14 @@ async function main() {
     console.error(e); errors.push({ module: 'load', message: String(e && e.stack || e) });
     const lab = $('loadlabel'); if (lab) lab.textContent = String(e.message || e);
     window.__ready = true; return;
+  }
+  if (EGO) {
+    const W = Number(params.get('w') || 320), H = Number(params.get('h') || 160);
+    installEgo({ ctx, renderer, scene, camera, pipeline, sky, sunDir, W, H });
+    try { window.__egoWarmup(); } catch (e) { console.error(e); errors.push({ module: 'ego', message: String(e && e.stack || e) }); }
+    document.body.classList.add('shot');
+    window.__ready = true;
+    return;
   }
   if (params.get('cam')) parseCam(params.get('cam'));
   else if (params.get('view')) window.__view(Number(params.get('view')) - 1);

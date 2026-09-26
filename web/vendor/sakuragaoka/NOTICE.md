@@ -9,7 +9,8 @@ cherry-tree generator. Paths mirror upstream `src/` so relative imports keep wor
 
 | here | upstream | changes |
 |---|---|---|
-| `core/{ctx,materials,renderer,sky,textures,geo,batch2,physics,player}.js` | `src/core/` | none |
+| `core/{ctx,materials,renderer,sky,textures,geo,physics,player}.js` | `src/core/` | none |
+| `core/batch2.js` | `src/core/batch2.js` | the merge key also includes `userData.sem` and the merged mesh keeps it, so KeiView's ego mode can render per-pixel semantic labels (`src/ego.js`) |
 | `world/houses/*.js` | `src/world/houses/` | `far.js`: the far-town cell skip rule asks the layout shim (`L.farSkip`) instead of using Sakuragaoka coordinates |
 | `world/lib/foliage.js` | `src/world/lib/` | none |
 | `world/poles/{acc,atlas,facade}.js` | `src/world/poles/` | none |

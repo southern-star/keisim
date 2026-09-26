@@ -94,6 +94,7 @@ def worker(wid, args, quota, out_dir, counter):
     cfg.route_length = (args.route_min, args.route_max)
     cfg.route_deviation = 4.0 if args.mode == "dagger" else cfg.route_deviation
     cfg.render_rgb = cfg.render_seg = False
+    cfg.renderer = args.renderer
     if args.ego_cross_rate is not None:
         cfg.traffic.ego_cross_rate = args.ego_cross_rate
     if args.ped_spacing is not None:
@@ -108,8 +109,11 @@ def worker(wid, args, quota, out_dir, counter):
     writer = ShardWriter(out_dir, f"{args.mode}_w{wid:02d}", frames_per_shard=args.shard)
     n = 0
     t0 = time.time()
+    town, left = None, 0
     while n < quota:
-        town = int(rng.integers(args.town_lo, args.town_hi))
+        if left <= 0:
+            town, left = int(rng.integers(args.town_lo, args.town_hi)), args.episodes_per_town
+        left -= 1
         ep_seed = int(rng.integers(1 << 40))
         env.reset(town_seed=town, episode_seed=ep_seed, render=False)
         env._step = 0
@@ -148,6 +152,7 @@ def worker(wid, args, quota, out_dir, counter):
             el = time.time() - t0
             print(f"[w0] {n}/{quota} frames  {n / max(el, 1e-6):.1f} fps  last={info['status']}", flush=True)
     writer.flush()
+    env.close()
     return n
 
 
@@ -171,9 +176,12 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--ego_cross_rate", type=float, default=None, help="pedestrian crossing trigger rate ahead of ego")
     ap.add_argument("--ped_spacing", type=float, nargs=2, default=None)
+    ap.add_argument("--renderer", default="keisim", choices=["keisim", "keiview"], help="camera renderer")
+    ap.add_argument("--episodes_per_town", type=int, default=1, help="episodes before switching town")
     args = ap.parse_args()
     quota = [args.frames // args.workers + (1 if i < args.frames % args.workers else 0) for i in range(args.workers)]
-    write_meta(args.out, label_version=LABEL_VERSION, mode=args.mode, ckpt=args.ckpt, frames=args.frames)
+    write_meta(args.out, label_version=LABEL_VERSION, mode=args.mode, ckpt=args.ckpt, frames=args.frames,
+               renderer=args.renderer)
     ctx = mp.get_context("spawn" if args.mode == "dagger" else "fork")
     counter = ctx.Value("i", 0)
     t0 = time.time()

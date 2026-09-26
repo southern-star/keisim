@@ -116,3 +116,5 @@ class EnvConfig:
     render_bev: bool = False
     weather: str = "random"           # random | noon | cloudy | sunset | fog
     terminate_on_collision: bool = True
+    renderer: str = "keisim"          # keisim (CPU, numpy + OpenCV) | keiview (web/, three.js on the GPU)
+    keiview_quality: str = "medium"

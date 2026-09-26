@@ -115,7 +115,7 @@ export function batchStatic(root, { mat = null, nearCell = 48, farCell = 200, fa
       }
       target = sm; bake = m.color;
     }
-    const key = `${target.uuid}|${ix},${iz}|${o.layers.mask}|${o.castShadow ? 1 : 0}${o.receiveShadow ? 1 : 0}|${o.renderOrder}|${o.frustumCulled ? 1 : 0}`;
+    const key = `${target.uuid}|${ix},${iz}|${o.layers.mask}|${o.castShadow ? 1 : 0}${o.receiveShadow ? 1 : 0}|${o.renderOrder}|${o.frustumCulled ? 1 : 0}|${o.userData.sem ?? ''}`;
     let arr = groups.get(key); if (!arr) groups.set(key, (arr = { mat: target, items: [] }));
     arr.items.push({ o, bake, tile });
   }
@@ -176,6 +176,7 @@ export function batchStatic(root, { mat = null, nearCell = 48, farCell = 200, fa
     const s = list[0].o;
     mesh.castShadow = s.castShadow; mesh.receiveShadow = s.receiveShadow; mesh.layers.mask = s.layers.mask;
     mesh.renderOrder = s.renderOrder; mesh.frustumCulled = s.frustumCulled;
+    if (s.userData.sem !== undefined) mesh.userData.sem = s.userData.sem;   // KeiView: semantic class (ego labels)
     mesh.matrixAutoUpdate = false; mesh.updateMatrix();
     out.add(mesh);
     for (const it of list) victims.push(it.o);

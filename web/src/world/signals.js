@@ -24,6 +24,7 @@ const DIM = { [TL.GREEN]: [0.13, 0.22, 0.2], [TL.YELLOW]: [0.26, 0.21, 0.12], [T
 export function build(ctx) {
   const T = ctx.town;
   const jById = new Map(T.junctions.map(j => [j.id, j]));
+  const SCALE = ctx.signalScale || 1;            // >1 in ego mode (legibility at low camera resolution)
   const mPole = ctx.mat.toon('#b4bbc1', { paint: 0.04 });
   const mHousing = ctx.mat.toon('#9aa3aa', { paint: 0.04 });
   const mFace = ctx.mat.toon('#3d3a48', { paint: 0.02 });
@@ -52,6 +53,7 @@ export function build(ctx) {
     }
     // head: housing, face plate, three visors; local +Z faces the approaching traffic
     const head = K.group([hx, headY, hz], s.rotY);
+    head.scale.setScalar(SCALE);
     const k = ctx.kit(head);
     k.rbox(1.28, 0.46, 0.2, 0.06, mHousing, [0, 0, 0]);
     k.box(1.2, 0.38, 0.02, mFace, [0, 0, 0.105]);
@@ -73,11 +75,16 @@ export function build(ctx) {
   const m4 = new THREE.Matrix4(), col = new THREE.Color();
   lamps.forEach((l, i) => {
     const world = l.head.localToWorld(l.local.clone());
-    m4.makeRotationY(l.head.rotation.y).setPosition(world);
+    m4.makeRotationY(l.head.rotation.y).scale(new THREE.Vector3(SCALE, SCALE, SCALE)).setPosition(world);
     inst.setMatrixAt(i, m4);
     inst.setColorAt(i, col.setRGB(...DIM[l.slot]));
   });
   inst.count = lamps.length;
+  // semantic label colours (src/ego.js): lit lamp -> tl_red / tl_yellow / tl_green, unlit -> pole
+  const LABEL = { [TL.RED]: 8, [TL.YELLOW]: 9, [TL.GREEN]: 10 };
+  const labelCol = new THREE.InstancedBufferAttribute(new Float32Array(Math.max(1, lamps.length) * 3), 3);
+  for (let i = 0; i < lamps.length; i++) labelCol.setXYZ(i, 7 / 255, 0, 0);
+  inst.userData.labelColors = labelCol;
   inst.castShadow = false; inst.receiveShadow = false;
   ctx.noOutline(inst);
   ctx.add(inst);
@@ -87,9 +94,13 @@ export function build(ctx) {
     for (let i = 0; i < lamps.length; i++) {
       const l = lamps[i];
       const on = signalState(l.J, l.phase, t) === l.slot ? 1 : 0;
-      if (on !== last[i]) { last[i] = on; inst.setColorAt(i, col.setRGB(...(on ? LIT : DIM)[l.slot])); dirty = true; }
+      if (on !== last[i]) {
+        last[i] = on; inst.setColorAt(i, col.setRGB(...(on ? LIT : DIM)[l.slot])); dirty = true;
+        labelCol.setXYZ(i, (on ? LABEL[l.slot] : 7) / 255, 0, 0);
+      }
     }
     if (dirty && inst.instanceColor) inst.instanceColor.needsUpdate = true;
+    if (dirty) labelCol.needsUpdate = true;
   });
   ctx.services.signals = { count: T.signals.length, lamps: lamps.length };
 }
