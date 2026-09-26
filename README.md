@@ -84,6 +84,8 @@ scripts/
   bench_speed.py         速度・決定論性の計測
   make_clips.py, build_report.py, summarize.py   レポート作成
 tests/test_keisim.py     不変条件 (レーンが道路外に出ない, 信号の排他, 決定論的リプレイ, エキスパート完走, 描画形状)
+scripts/export_town.py   街を JSON に書き出す (KeiView 用)
+web/                     KeiView: 同じ街をアニメ調 (セル調) で歩ける three.js ビューア (6 章)
 docs/                    ギャラリー画像, 上面図, ハイライト動画, 結果ページ (docs/report/index.html)
 runs/eval/               評価結果 JSON (README の数値の出所)。学習済みモデルは GitHub Releases の keipilot.pt
 data/                    収集データ (リポジトリ外, 約 3 GB。scripts/collect.py で再生成できる)
@@ -188,6 +190,23 @@ env.vector_obs()       # 物体レベルの観測 (PlanT 系プランナ向け)
 自前のモデルを載せる場合は、`obs["rgb"]` (BGR uint8, 320×160) を入力にして `[steer, throttle, brake]` を返せば `env.step()` に入れられます。
 経路 + 目標速度を出すモデルなら、`keisim.control.PlanFollower` がエキスパートと同じ制御器として使えます。
 
+## 6. KeiView — 同じ街をアニメ調で歩く
+
+![KeiView](docs/keiview_gallery.jpg)
+
+`web/` は、KeiSim の街を [Sakuragaoka Station](https://github.com/Kenton-GMI/sakuragaoka-station) の
+セル調レンダラと家の生成器で描く three.js ビューアです。道路・歩道・白線・信号は KeiSim のジオメトリそのもので、
+信号の灯火も KeiSim と同じ現示で切り替わります。KeiSim の建物の箱は区画として扱い、
+家（間取り・ベランダ・洗濯物・塀）やマンションになります。街路樹は桜、電柱と電線も生成します。
+
+```bash
+uv run scripts/export_town.py --town 1000     # web/towns/town_1000.json (1000〜1003 は同梱)
+cd web && node tools/serve.mjs                # http://localhost:5174/?town=1000
+```
+
+詳しくは [web/README.md](web/README.md)。
+
 ## ライセンス
 
 [MIT License](LICENSE)。学習済みモデル `keipilot.pt` のバックボーンは torchvision の ImageNet 学習済み ResNet-34 で初期化しています。
+`web/vendor/sakuragaoka/` は Sakuragaoka Station（MIT, © 2026 Sakuragaoka Station contributors）のコードです（[NOTICE](web/vendor/sakuragaoka/NOTICE.md)）。
