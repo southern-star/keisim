@@ -11,7 +11,7 @@
 > `uv run scripts/demo.py --agent model --ckpt runs/keipilot.pt --show`.
 > The same towns can also be rendered by KeiView (an anime cel-shaded three.js renderer in `web/`). The KeiSim-trained
 > model cannot even pull away there (DS 0.008); after fine-tuning plus DAgger on KeiView frames it scores DS 0.955 / 0.974
-> on unseen towns and keeps its KeiSim score (section 6).
+> on unseen towns and keeps its KeiSim score (section 6; weights: `keipilot_kv.pt` in Releases).
 
 ![gallery](docs/gallery.jpg)
 
@@ -243,11 +243,18 @@ uv run scripts/evaluate.py --agent model --ckpt runs/keipilot_kv_dagger/last.pt 
 uv run scripts/demo.py --agent model --ckpt runs/keipilot_kv_dagger/last.pt --renderer keiview --town 1001 --episode 3 --out runs/demo_kv.mp4
 ```
 
+学習済みの重み（fp16, 30 MB）は Release にあります。モデルの構造は `keipilot.pt` と同じなので、KeiSim でもそのまま使えます。
+
+```bash
+gh release download v0.1.0 -R southern-star/keisim -p keipilot_kv.pt -D runs
+uv run scripts/demo.py --agent model --ckpt runs/keipilot_kv.pt --renderer keiview --town 1001 --episode 3 --out runs/demo_kv.mp4
+```
+
 結果はすべて未見の街でのものです。
 
 - 学習前: KeiSim だけで学習した `keipilot.pt`
 - 追加学習: `runs/keipilot_kv/last.pt`
-- DAgger: `runs/keipilot_kv_dagger/last.pt`（最終モデル）
+- DAgger: `runs/keipilot_kv_dagger/last.pt`（最終モデル。Release の `keipilot_kv.pt` はこの fp16 版）
 
 | | 学習前 | KeiView で追加学習 | + KeiView で DAgger |
 |---|---|---|---|
