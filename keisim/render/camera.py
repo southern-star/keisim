@@ -118,6 +118,23 @@ def _clip_near(poly, near):
     return np.array(out) if len(out) >= 3 else None
 
 
+def camera_pose(cfg, x, y, yaw, offset=None):
+    """offset: (d_lateral(+left), d_yaw, d_pitch) augmentation of the rig."""
+    dl, dyaw, dpitch = (0.0, 0.0, 0.0) if offset is None else offset
+    # rigid displacement of the whole vehicle frame: shift left by dl, rotate by dyaw
+    x, y = x - math.sin(yaw) * dl, y + math.cos(yaw) * dl
+    cy_ = yaw + dyaw
+    c, s = math.cos(cy_), math.sin(cy_)
+    ox, oy = cfg.x, cfg.y
+    C = np.array([x + c * ox - s * oy, y + s * ox + c * oy, cfg.z])
+    p = math.radians(cfg.pitch_deg) + dpitch
+    fwd = np.array([math.cos(cy_) * math.cos(p), math.sin(cy_) * math.cos(p), -math.sin(p)])
+    right = np.array([math.sin(cy_), -math.cos(cy_), 0.0])
+    down = np.cross(fwd, right)
+    R = np.stack([right, down, fwd])  # world -> camera rows
+    return C, R
+
+
 class CameraRenderer:
     NEAR = 0.12
 
@@ -131,21 +148,7 @@ class CameraRenderer:
 
     # ------------------------------------------------------------------ pose
     def camera_pose(self, x, y, yaw, offset=None):
-        """offset: (d_lateral(+left), d_yaw, d_pitch) augmentation of the rig."""
-        cfg = self.cfg
-        dl, dyaw, dpitch = (0.0, 0.0, 0.0) if offset is None else offset
-        # rigid displacement of the whole vehicle frame: shift left by dl, rotate by dyaw
-        x, y = x - math.sin(yaw) * dl, y + math.cos(yaw) * dl
-        cy_ = yaw + dyaw
-        c, s = math.cos(cy_), math.sin(cy_)
-        ox, oy = cfg.x, cfg.y
-        C = np.array([x + c * ox - s * oy, y + s * ox + c * oy, cfg.z])
-        p = math.radians(cfg.pitch_deg) + dpitch
-        fwd = np.array([math.cos(cy_) * math.cos(p), math.sin(cy_) * math.cos(p), -math.sin(p)])
-        right = np.array([math.sin(cy_), -math.cos(cy_), 0.0])
-        down = np.cross(fwd, right)
-        R = np.stack([right, down, fwd])  # world -> camera rows
-        return C, R
+        return camera_pose(self.cfg, x, y, yaw, offset)
 
     def intrinsics(self, scale=1):
         f = self.f * scale

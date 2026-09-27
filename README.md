@@ -9,6 +9,9 @@
 > privileged expert plus DAgger. On 40 routes in unseen towns it completes 100% of the routes with zero
 > collisions (Driving Score 0.96). Quick start: `bash setup.sh`, download `keipilot.pt` from Releases, then
 > `uv run scripts/demo.py --agent model --ckpt runs/keipilot.pt --show`.
+> The same towns can also be rendered by KeiView (an anime cel-shaded three.js renderer in `web/`). The KeiSim-trained
+> model cannot even pull away there (DS 0.008); after fine-tuning plus DAgger on KeiView frames it scores DS 0.955 / 0.974
+> on unseen towns and keeps its KeiSim score (section 6; weights: `keipilot_kv.pt` in Releases).
 
 ![gallery](docs/gallery.jpg)
 
@@ -72,6 +75,7 @@ keisim/                  シミュレータ (numpy + OpenCV)
   world.py, env.py       World / Gym 風 Env (違反判定, DS/RC/IS, env.vector_obs())
   render/                CPU レンダラ: 地面 = 厳密な平面ホモグラフィ (ミップ帯域), 物体 = ペインタ法
                          + ピクセル単位セマンティック + BEV 可視化
+                         keiview.py: KeiView (web/) を headless Chrome で動かし、自車カメラとして使う
   viz.py                 ダッシュボード合成, H.264 動画書き出し
 keipilot/                軽量 E2E モデル (ResNet-18 + 小型 Transformer デコーダ, 14.9M params, 6.9 ms/frame)
   model.py, data.py, agent.py
@@ -84,6 +88,8 @@ scripts/
   bench_speed.py         速度・決定論性の計測
   make_clips.py, build_report.py, summarize.py   レポート作成
 tests/test_keisim.py     不変条件 (レーンが道路外に出ない, 信号の排他, 決定論的リプレイ, エキスパート完走, 描画形状)
+scripts/export_town.py   街を JSON に書き出す (KeiView 用)
+web/                     KeiView: 同じ街をアニメ調 (セル調) で歩ける three.js ビューア。KeiPilot の学習用カメラにもなる (6 章)
 docs/                    ギャラリー画像, 上面図, ハイライト動画, 結果ページ (docs/report/index.html)
 runs/eval/               評価結果 JSON (README の数値の出所)。学習済みモデルは GitHub Releases の keipilot.pt
 data/                    収集データ (リポジトリ外, 約 3 GB。scripts/collect.py で再生成できる)
@@ -188,6 +194,93 @@ env.vector_obs()       # 物体レベルの観測 (PlanT 系プランナ向け)
 自前のモデルを載せる場合は、`obs["rgb"]` (BGR uint8, 320×160) を入力にして `[steer, throttle, brake]` を返せば `env.step()` に入れられます。
 経路 + 目標速度を出すモデルなら、`keisim.control.PlanFollower` がエキスパートと同じ制御器として使えます。
 
+## 6. KeiView — 同じ街をアニメ調で歩く
+
+![KeiView](docs/keiview_gallery.jpg)
+
+`web/` は、KeiSim の街を [Sakuragaoka Station](https://github.com/Kenton-GMI/sakuragaoka-station) の
+セル調レンダラと家の生成器で描く three.js ビューアです。道路・歩道・白線・信号は KeiSim のジオメトリそのもので、
+信号の灯火も KeiSim と同じ現示で切り替わります。KeiSim の建物の箱は区画として扱い、
+家（間取り・ベランダ・洗濯物・塀）やマンションになります。街路樹は桜、電柱と電線も生成します。
+
+```bash
+uv run scripts/export_town.py --town 1000     # web/towns/town_1000.json (1000〜1003 は同梱)
+cd web && node tools/serve.mjs                # http://localhost:5174/?town=1000
+```
+
+詳しくは [web/README.md](web/README.md)。
+
+### KeiView の画像で KeiPilot を学習する
+
+![学習前後の比較](docs/keiview_before_after.jpg)
+
+KeiSim の画像だけで学習した KeiPilot を KeiView の画像で走らせると、**20 ルートすべてで発進できません**（DS 0.008）。
+アニメ調の画像では青信号を赤と読み違え、いない歩行者や車まで見えてしまうためです（上の図の 1 段目）。
+冒頭の「MetaDrive では既存のモデルが認識しない」と同じドメインギャップが、2 つのレンダラの間でも起きています。
+
+対処は KeiSim のときと同じです。KeiView の画像にもエキスパートの操作とピクセル単位の正解ラベルを付けて学習し、最後に DAgger をかけます。
+
+- `--renderer keiview` を付けると、カメラ画像だけを KeiView で描きます（headless Chrome を GPU で動かします）。
+  - シミュレーション・エキスパート・ラベルは KeiSim のままなので、同じシードなら同じエピソードになります。
+  - 仕組みは [web/README.md](web/README.md) の「エゴモード」の節にあります。
+- 必要なもの: Node.js 18 以上、Chrome または Chromium、`cd web && npm install`。
+  - GPU があると実用的な速度になります。RTX 3060 で 1 フレーム約 17 ms、6 並列の収集で約 90 fps です。
+  - 下の手順は RTX 3060 で合計約 2 時間です（収集 22 分 → 学習 50 分 → DAgger の収集 26 分 → 学習 20 分）。
+- 学習は KeiSim の既存データと混ぜ、KeiSim で学習したモデルから追加学習します。
+  - 1 バッチのうち 55〜60% が KeiView の画像です。
+  - こうすると、KeiSim での性能を保ったまま、KeiView でも走れるようになります。
+
+```bash
+cd web && npm install && cd ..
+uv run scripts/collect.py --renderer keiview --episodes_per_town 3 --out data/kv_expert --frames 120000 --workers 6 --seed 31 --ego_cross_rate 0.2
+uv run scripts/train.py --data data/kv_expert data/expert data/expert_ped data/dagger1 --init runs/keipilot_dagger/last.pt \
+    --out runs/keipilot_kv --epochs 8 --samples_per_epoch 200000 --kv_weight 3 --dagger_weight 2
+uv run scripts/collect.py --mode dagger --ckpt runs/keipilot_kv/last.pt --renderer keiview --episodes_per_town 3 --out data/kv_dagger1 \
+    --frames 60000 --workers 6 --seed 41 --ego_cross_rate 0.3
+uv run scripts/train.py --data data/kv_expert data/kv_dagger1 data/expert data/expert_ped data/dagger1 --init runs/keipilot_kv/last.pt \
+    --out runs/keipilot_kv_dagger --epochs 4 --samples_per_epoch 200000 --kv_weight 2 --dagger_weight 2
+uv run scripts/evaluate.py --agent model --ckpt runs/keipilot_kv_dagger/last.pt --suite test --renderer keiview --videos 3
+uv run scripts/demo.py --agent model --ckpt runs/keipilot_kv_dagger/last.pt --renderer keiview --town 1001 --episode 3 --out runs/demo_kv.mp4
+```
+
+学習済みの重み（fp16, 30 MB）は Release にあります。モデルの構造は `keipilot.pt` と同じなので、KeiSim でもそのまま使えます。
+
+```bash
+gh release download v0.1.0 -R southern-star/keisim -p keipilot_kv.pt -D runs
+uv run scripts/demo.py --agent model --ckpt runs/keipilot_kv.pt --renderer keiview --town 1001 --episode 3 --out runs/demo_kv.mp4
+```
+
+結果はすべて未見の街でのものです。
+
+- 学習前: KeiSim だけで学習した `keipilot.pt`
+- 追加学習: `runs/keipilot_kv/last.pt`
+- DAgger: `runs/keipilot_kv_dagger/last.pt`（最終モデル。Release の `keipilot_kv.pt` はこの fp16 版）
+
+| | 学習前 | KeiView で追加学習 | + KeiView で DAgger |
+|---|---|---|---|
+| KeiView で走行・未見の街 A (DS) | 0.008（20 ルートとも発進できず） | 0.970 | 0.955 |
+| KeiView で走行・未見の街 B (DS) | — | 0.922 | **0.974** |
+| KeiView の 40 ルート: 完走 / 衝突 / 信号無視 | — | 39 / 0 / 7 | 39 / 0 / **4** |
+| KeiSim で走行・未見の街 A (DS) | 0.970 | 0.985 | 0.970 |
+| KeiView 画像 6,000 枚: 経路 ADE / 目標速度 MAE | 0.455 m / 2.08 m/s | 0.100 m / 0.16 m/s | 0.093 m / 0.14 m/s |
+| KeiView 画像 6,000 枚: 信号 4 クラス / mIoU / 歩行者 IoU | 69.2 % / 0.373 / 0.04 | 91.9 % / 0.737 / 0.54 | 92.7 % / 0.743 / 0.55 |
+| KeiSim 画像 6,000 枚: 信号 4 クラス / mIoU | 96.2 % / 0.829 | 96.0 % / 0.809 | 96.0 % / 0.807 |
+
+走行動画（未見の街、最終モデル）:
+
+- [赤信号で止まり、青になってから左折](docs/clips/kv_redlight_turn.mp4)
+- [横断する歩行者の前で止まり、渡り終えてから進む](docs/clips/kv_pedestrian.mp4)
+
+**残る弱点**
+
+- **信号無視**: DAgger の前の 7 件を再現して調べました。
+  - 4 件は、停止線の手前まで減速したのに、線の直前で「進む」に切り替わるものでした。線が画面から消えると、越えた後と区別できなくなるためです。DAgger で狙った種類の失敗です。
+  - 3 件は黄信号のジレンマでした。KeiSim と同じ弱点です（[2. 結果](#2-結果-すべて-runsevaljson) を参照）。
+  - DAgger の後は 4 件に減りました。20 ルートでは信号無視 1 件の差は誤差の範囲なので、街 A と街 B の増減より、合計で見てください。
+- **変則的な交差点**: 右に曲がれる道が 2 本ある交差点で、違う方に入ってルートを外れました（街 B の 1 ルート）。同じルートは、KeiSim の画像なら完走できます。
+- **信号の認識**: KeiView では 92.7 % で、KeiSim の 96 % より低いままです。灯器が小さく、ブルームでにじむためです。
+
 ## ライセンス
 
 [MIT License](LICENSE)。学習済みモデル `keipilot.pt` のバックボーンは torchvision の ImageNet 学習済み ResNet-34 で初期化しています。
+`web/vendor/sakuragaoka/` は Sakuragaoka Station（MIT, © 2026 Sakuragaoka Station contributors）のコードです（[NOTICE](web/vendor/sakuragaoka/NOTICE.md)）。

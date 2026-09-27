@@ -78,14 +78,15 @@ def relabel_v1(speed, reason):
 
 def load_shards(dirs):
     files = []
-    dir_version = {}
+    dir_version, dir_renderer = {}, {}
     for d in dirs if isinstance(dirs, (list, tuple)) else [dirs]:
         fs = sorted(glob.glob(os.path.join(d, "*.npz")))
         files += fs
         meta = os.path.join(d, "meta.json")
-        v = json.load(open(meta)).get("label_version", 1) if os.path.exists(meta) else 1
+        m = json.load(open(meta)) if os.path.exists(meta) else {}
         for f in fs:
-            dir_version[f] = v
+            dir_version[f] = m.get("label_version", 1)
+            dir_renderer[f] = m.get("renderer", "keisim")
     if not files:
         raise FileNotFoundError(f"no shards in {dirs}")
     jpg, jo, seg, so, src = [], [], [], [], []
@@ -115,6 +116,7 @@ def load_shards(dirs):
         data["speed"] = data["speed"].astype(np.float32)
         data["speed"][v1] = relabel_v1(data["speed"][v1], data["reason"][v1])
     data["label_version"] = version
+    data["keiview"] = np.array([dir_renderer[f] == "keiview" for f in files])[data["src"]]
     data["on_policy"] = np.array([os.path.basename(files[i]).startswith("dagger") for i in range(len(files))])[data["src"]]
     return data, files
 

@@ -75,6 +75,19 @@ class KeiEnv:
         self.follower = PlanFollower()
         self.expert = Expert(self)
         self.world = None
+        self._keiview = None
+
+    def keiview(self):
+        """Lazily started KeiView renderer (one headless Chrome per env)."""
+        if self._keiview is None:
+            from .render.keiview import KeiViewRenderer
+            self._keiview = KeiViewRenderer(self.cfg.camera, quality=self.cfg.keiview_quality)
+        return self._keiview
+
+    def close(self):
+        if self._keiview is not None:
+            self._keiview.close()
+            self._keiview = None
 
     # ------------------------------------------------------------------ reset
     def reset(self, town_seed=0, episode_seed=None, route_length=None, weather=None, render=True):
@@ -106,6 +119,12 @@ class KeiEnv:
         self.status = "running"
         self._render = render
         self.plan = self.expert.plan()
+        if self.cfg.renderer == "keiview":
+            kv = self.keiview()
+            kv.load_town(town_seed)
+            # lighting from its own stream so the simulation is identical to the KeiSim-rendered episode
+            light_rng = np.random.default_rng([0 if episode_seed is None else int(episode_seed), 7707])
+            kv.new_episode(light_rng if self.cfg.weather == "random" else None)
         return self._obs()
 
     # ----------------------------------------------------------------- helpers
@@ -126,6 +145,9 @@ class KeiEnv:
         return world_to_local(self.route.target_point_world(self.s_ego), *pose)
 
     def render_camera(self, offset=None, want_rgb=True, want_seg=True):
+        if self.cfg.renderer == "keiview":
+            return self.keiview().render(self.world.ego.pose, self.world.scene_state(), self.world.t,
+                                         want_rgb=want_rgb, want_seg=want_seg, offset=offset)
         cam = self.assets.camera
         return cam.render(self.world.ego.pose, self.world.scene_state(), self.weather, want_rgb=want_rgb,
                           want_seg=want_seg, offset=offset)

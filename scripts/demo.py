@@ -32,10 +32,12 @@ def main():
     ap.add_argument("--max_steps", type=int, default=3000)
     ap.add_argument("--out", default="runs/demo.mp4")
     ap.add_argument("--show", action="store_true", help="also show a live OpenCV window")
+    ap.add_argument("--renderer", default="keisim", choices=["keisim", "keiview"], help="camera renderer")
     args = ap.parse_args()
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
 
     cfg = EnvConfig()
+    cfg.renderer = args.renderer
     env = KeiEnv(cfg)
     obs = env.reset(town_seed=args.town, episode_seed=args.episode, route_length=args.route, weather=args.weather)
     agent = None

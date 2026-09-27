@@ -24,9 +24,10 @@ from keipilot.model import KeiPilot, compute_loss  # noqa: E402
 from keisim.config import N_SEM  # noqa: E402
 
 
-def sample_weights(d, dagger_weight=1.0):
+def sample_weights(d, dagger_weight=1.0, kv_weight=1.0):
     w = np.ones(len(d["cmd"]), np.float64)
     w[d["on_policy"]] *= dagger_weight          # on-policy (DAgger) states
+    w[d["keiview"]] *= kv_weight                # KeiView-rendered frames (domain balance)
     reason = d["reason"]
     w[reason == 3] *= 3.0                       # pedestrian
     w[reason == 4] *= 1.5                       # red light
@@ -90,6 +91,8 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--max_iters", type=int, default=0, help="debug: stop after N iterations per epoch")
     ap.add_argument("--dagger_weight", type=float, default=2.0, help="sampling weight of on-policy frames")
+    ap.add_argument("--kv_weight", type=float, default=1.0, help="sampling weight of KeiView-rendered frames")
+    ap.add_argument("--samples_per_epoch", type=int, default=0, help="0 = one pass over the training frames")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
     torch.manual_seed(args.seed)
@@ -108,8 +111,11 @@ def main():
 
     ds_tr = DrivingDataset(data, tr_idx, train=True)
     ds_va = DrivingDataset(data, va_idx, train=False)
-    w = sample_weights(data, args.dagger_weight)[tr_idx]
-    sampler = WeightedRandomSampler(torch.from_numpy(w), num_samples=len(tr_idx), replacement=True)
+    w = sample_weights(data, args.dagger_weight, args.kv_weight)[tr_idx]
+    n_epoch = args.samples_per_epoch or len(tr_idx)
+    sampler = WeightedRandomSampler(torch.from_numpy(w), num_samples=n_epoch, replacement=True)
+    kv = data["keiview"][tr_idx]
+    print(f"KeiView frames {int(kv.sum())} / {len(tr_idx)}; expected KeiView share per batch {w[kv].sum() / w.sum():.2f}", flush=True)
     dl_tr = DataLoader(ds_tr, batch_size=args.bs, sampler=sampler, num_workers=args.workers, pin_memory=True,
                        drop_last=True, persistent_workers=True, prefetch_factor=4)
     dl_va = DataLoader(ds_va, batch_size=128, shuffle=False, num_workers=4, pin_memory=True)
