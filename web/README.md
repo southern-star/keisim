@@ -54,6 +54,28 @@ node tools/shot.mjs --town 1000 --views 1,2,3 --out shots/t1000     # 実レン�
 `shot.mjs` は Linux では SwiftShader（CPU 描画）を使うので、GPU のないクラウドコンテナでも動きます（4 コアで準備に約 30 秒、`--q medium` で 1 枚あたり約 20〜30 秒）。
 Windows / macOS では GPU を使います。ブラウザは `$CHROME`、Playwright の Chromium、Edge、Chrome の順に探します。
 
+## KeiSim のカメラとして使う（エゴモード）
+
+`?ego=1` を付けると、アニメーションループを回さず、KeiSim の自車カメラ 1 フレームを要求に応じて描画するモードになります。
+KeiPilot の学習データ収集とクローズドループ評価で使います（学習の手順と結果は [../README.md](../README.md) の 6 章）。
+
+- `src/ego.js` の `window.__ego(req)` は、カメラ・時刻・周囲の車と歩行者を受け取り、RGB 画像と **ピクセル単位で正確なセマンティックラベル** を返します。ラベルは KeiSim と同じ 13 クラスです。
+  - 静的メッシュはバッチング前に `userData.sem` でクラスを付けます（`vendor/.../batch2.js` はクラスごとに別々にまとめます）。
+  - ラベル画像は、マテリアルをクラス色に差し替えた 2 回目の描画で作ります。
+- `src/world/actors.js` は KeiSim の車（セダン・軽・バン・トラック、ブレーキランプ付き）と歩行者を同じセル調で描きます。
+- `tools/ego_server.mjs` は headless Chrome を GPU で動かし、標準入出力の JSON 行で Python（`keisim/render/keiview.py`）とやり取りします。
+  - RTX 3060 では、ラベル込みで 1 フレーム約 17 ms、RGB のみで約 12 ms です。
+  - 街の読み込みは約 8 秒です。
+- エゴモードでは信号の灯器を 1.6 倍で描きます（`?sigscale=` で変更可）。
+  - 実寸（灯火 30 cm）だと、320×160 の画像では 30 m 先の灯火が 1〜2 ピクセルになり、見えないフレームが多いためです。
+  - KeiSim 側の描画も同じ理由で灯火を誇張しています。
+- 太陽の向き・露出・霞はエピソードごとにランダムです。乱数は KeiSim とは別系列なので、同じシードなら KeiSim で描いたときと同じエピソードになります。
+
+```bash
+cd web && npm install && cd ..
+uv run scripts/demo.py --agent model --ckpt runs/keipilot_kv_dagger/last.pt --renderer keiview --town 1001 --episode 3 --out runs/demo_kv.mp4
+```
+
 ## 構成
 
 ```
@@ -67,9 +89,11 @@ src/world/plots.js          畑・月極駐車場・空き地・公園
 src/world/trees.js          街路樹 → 桜
 src/world/signals.js        信号機（灯火は KeiSim の現示どおり）
 src/world/poles.js          電柱・電線・引込線・支線
+src/world/actors.js         KeiSim の車と歩行者（エゴモード）
+src/ego.js                  エゴモード（1 フレーム描画・セマンティックラベル・ライティングのランダム化）
 vendor/sakuragaoka/         Sakuragaoka Station から持ってきたコード（MIT、変更点は NOTICE.md）
-towns/                      エクスポート済みの街（1000〜1003）
-tools/                      serve / check / shot
+towns/                      エクスポート済みの街（1000〜1003）。エゴモードの街は .towns/ に自動で出力（git 対象外）
+tools/                      serve / check / shot / ego_server
 ```
 
 ## クレジット
