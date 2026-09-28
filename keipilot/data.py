@@ -11,7 +11,14 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+from keisim.expert import target_for_speed
+
 LABEL_KEYS = ("cmd", "tp", "path", "speed", "tl", "v", "reason", "town", "episode", "step", "weather", "virtual")
+# inputs of the expert's traffic-light decision (keisim.expert.target_for_speed); shards recorded before
+# these existed load with cf_ok = False and are never relabelled
+CF_KEYS = ("target_nolight", "lt_over", "lt_d", "lt_st", "lt_trem", "lt_blocked")
+CF_DEFAULTS = {"target_nolight": np.float32(np.nan), "lt_over": False, "lt_d": np.float32(np.nan), "lt_st": np.int8(3),
+               "lt_trem": np.float32(np.nan), "lt_blocked": False}
 
 
 class ShardWriter:
@@ -37,6 +44,9 @@ class ShardWriter:
         self.seg.append(s.reshape(-1))
         for k in LABEL_KEYS:
             self.lab[k].append(labels[k])
+        for k in CF_KEYS:
+            if k in labels:
+                self.lab.setdefault(k, []).append(labels[k])
         if len(self.jpg) >= self.fps:
             self.flush()
 
@@ -90,7 +100,8 @@ def load_shards(dirs):
     if not files:
         raise FileNotFoundError(f"no shards in {dirs}")
     jpg, jo, seg, so, src = [], [], [], [], []
-    lab = {k: [] for k in LABEL_KEYS}
+    lab = {k: [] for k in LABEL_KEYS + CF_KEYS}
+    cf_ok = []
     jbase = sbase = 0
     for fi, f in enumerate(files):
         z = np.load(f)
@@ -103,12 +114,18 @@ def load_shards(dirs):
         sbase += len(z["seg"])
         for k in LABEL_KEYS:
             lab[k].append(z[k])
+        n_f = len(z["jpg_off"]) - 1
+        has_cf = all(k in z for k in CF_KEYS)
+        for k in CF_KEYS:
+            lab[k].append(z[k] if has_cf else np.full(n_f, CF_DEFAULTS[k]))
+        cf_ok.append(np.full(n_f, has_cf))
     data = {
         "jpg": np.concatenate(jpg), "jpg_off": np.concatenate(jo + [np.array([jbase])]),
         "seg": np.concatenate(seg), "seg_off": np.concatenate(so + [np.array([sbase])]),
     }
-    for k in LABEL_KEYS:
+    for k in LABEL_KEYS + CF_KEYS:
         data[k] = np.concatenate(lab[k])
+    data["cf_ok"] = np.concatenate(cf_ok)
     data["src"] = np.concatenate(src)
     version = np.array([dir_version[f] for f in files])[data["src"]]
     v1 = version < 2
@@ -122,10 +139,16 @@ def load_shards(dirs):
 
 
 class DrivingDataset(Dataset):
-    def __init__(self, data, indices, train=True):
+    """cf_prob: chance that a training frame with recorded light-decision inputs gets a random ego speed and the
+    expert's label for that speed (counterfactual). speed_drop: chance that the ego speed is hidden ("v_known"
+    False) from any other training frame, against the inertia problem. A counterfactual speed is always shown,
+    since its label depends on it."""
+
+    def __init__(self, data, indices, train=True, cf_prob=0.0, speed_drop=0.0, cf_vmax=11.5):
         self.d = data
         self.idx = np.asarray(indices)
         self.train = train
+        self.cf_prob, self.speed_drop, self.cf_vmax = cf_prob, speed_drop, cf_vmax
 
     def __len__(self):
         return len(self.idx)
@@ -152,9 +175,17 @@ class DrivingDataset(Dataset):
         d = self.d
         img = cv2.imdecode(d["jpg"][d["jpg_off"][i]:d["jpg_off"][i + 1]], cv2.IMREAD_COLOR)
         seg = cv2.imdecode(d["seg"][d["seg_off"][i]:d["seg_off"][i + 1]], cv2.IMREAD_UNCHANGED)
+        v, speed, known = float(d["v"][i]), float(d["speed"][i]), True
+        cf = bool(d["cf_ok"][i])
         if self.train:
             rng = np.random.default_rng()
             img = self._augment(img, rng)
+            if cf and self.cf_prob > 0 and rng.random() < self.cf_prob:
+                v = float(rng.uniform(0.0, self.cf_vmax))
+            elif rng.random() < self.speed_drop:
+                known = False
+        if cf:          # label from the recorded decision inputs with the current rule (and the chosen speed)
+            speed = target_for_speed(v, {k: d[k][i] for k in CF_KEYS})
         img = img[:, :, ::-1].transpose(2, 0, 1).copy()  # BGR -> RGB, CHW, uint8
         return {
             "img": torch.from_numpy(img),
@@ -162,6 +193,8 @@ class DrivingDataset(Dataset):
             "cmd": torch.tensor(int(d["cmd"][i])),
             "tp": torch.from_numpy(d["tp"][i].astype(np.float32)),
             "path": torch.from_numpy(d["path"][i].astype(np.float32)),
-            "speed": torch.tensor(float(d["speed"][i]), dtype=torch.float32),
+            "speed": torch.tensor(speed, dtype=torch.float32),
             "tl": torch.tensor(int(d["tl"][i])),
+            "v": torch.tensor(v, dtype=torch.float32),                     # ego speed (input of speed models)
+            "v_known": torch.tensor(known),
         }

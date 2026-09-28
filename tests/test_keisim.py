@@ -60,9 +60,65 @@ def test_expert_completes_short_route():
     assert info["DS"] > 0.99, info
 
 
+def test_counterfactual_speed_labels_match_expert():
+    """target_for_speed(v, plan) must reproduce the expert's own target at its actual speed, including the
+    red / yellow / overshoot / don't-block-the-box cases, so relabelling with other speeds is exact."""
+    from keisim.expert import target_for_speed
+
+    env = KeiEnv(EnvConfig())
+    seen = set()
+    for town, ep in ((1003, 2), (1001, 5), (7, 11)):
+        env.reset(town_seed=town, episode_seed=ep, route_length=500, render=False)
+        for _ in range(3000):
+            plan = env.plan
+            assert abs(target_for_speed(env.world.ego.v, plan) - plan["target_speed"]) < 1e-9, plan
+            seen.add(plan["reason"])
+            for v in (0.0, 2.5, 6.0, 11.0):           # every counterfactual speed gives a valid label
+                assert 0.0 <= target_for_speed(v, plan) <= env.world.town.cfg.speed_limit + 1e-6
+            _, _, done, _ = env.step(env.expert_action())
+            if done:
+                break
+    assert "red_light" in seen
+
+
+def test_yellow_light_follows_traffic_law():
+    """Yellow: stop at the line if the ego can still stop safely (3.5 m/s^2), whatever the remaining time; red:
+    stop unless even a hard stop (6 m/s^2) is impossible."""
+    from keisim.config import TL_GREEN, TL_RED, TL_YELLOW
+    from keisim.expert import light_stop
+
+    assert light_stop(5.0, 10.0, TL_YELLOW, 2.4, False) == "red_light"      # 3.9 m needed: stop, time left or not
+    assert light_stop(10.0, 8.0, TL_YELLOW, 0.5, False) is None             # 14.6 m needed: too close, go on
+    assert light_stop(10.0, 9.0, TL_RED, 0.0, False) == "red_light"         # red: 8.6 m needed at 6 m/s^2
+    assert light_stop(11.0, 8.0, TL_RED, 0.0, False) is None                # 10.4 m needed: cannot stop
+    assert light_stop(8.0, 6.0, TL_GREEN, 0.0, False) is None
+    assert light_stop(3.0, 8.0, TL_GREEN, 0.0, True) == "junction_blocked"  # don't block the box
+
+
 def test_camera_render_shapes():
     env = KeiEnv(EnvConfig())
     obs = env.reset(town_seed=5, episode_seed=1)
     assert obs["rgb"].shape == (160, 320, 3) and obs["rgb"].dtype == np.uint8
     assert obs["seg"].shape == (160, 320)
     assert obs["expert"]["path"].shape == (10, 2)
+
+
+def test_speed_input_starts_as_camera_only_model():
+    """A camera-only checkpoint loaded into a speed-input KeiPilot must behave exactly as before."""
+    import torch
+
+    from keipilot.model import KeiPilot
+
+    torch.manual_seed(0)
+    base = KeiPilot(pretrained=False).eval()
+    spd = KeiPilot(pretrained=False, speed_input=True).eval()
+    missing, unexpected = spd.load_state_dict(base.state_dict(), strict=False)
+    assert not unexpected and missing and all(k.startswith("speed_") for k in missing)
+    img = torch.randint(0, 256, (2, 3, 160, 320), dtype=torch.uint8)
+    cmd, tp = torch.tensor([0, 1]), torch.tensor([[20.0, 3.0], [15.0, -2.0]])
+    with torch.no_grad():
+        a = base(img, cmd, tp, with_seg=False)
+        b = spd(img, cmd, tp, with_seg=False, speed=torch.tensor([0.0, 8.0]))
+        c = spd(img, cmd, tp, with_seg=False)
+    for k in ("path", "speed_logits", "tl_logits"):
+        assert torch.allclose(a[k], b[k], atol=1e-5) and torch.allclose(a[k], c[k], atol=1e-5)

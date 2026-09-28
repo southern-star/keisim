@@ -29,13 +29,14 @@ class KeiPilotAgent:
         self.follower.reset()
 
     @torch.no_grad()
-    def plan(self, rgb_bgr, command, target_point, with_seg=False):
+    def plan(self, rgb_bgr, command, target_point, with_seg=False, speed=None):
         img = torch.from_numpy(np.ascontiguousarray(rgb_bgr[:, :, ::-1].transpose(2, 0, 1)))[None].to(self.device)
         img = img.contiguous(memory_format=torch.channels_last)
         cmd = torch.tensor([int(command)], device=self.device)
         tp = torch.tensor(np.asarray(target_point, np.float32)[None], device=self.device)
+        spd = None if speed is None else torch.tensor([float(speed)], device=self.device)
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=self.amp):
-            out = self.model(img, cmd, tp, with_seg=with_seg)
+            out = self.model(img, cmd, tp, with_seg=with_seg, speed=spd)
         v, p = self.model.decode_speed(out["speed_logits"])
         res = {
             "path": out["path"][0].float().cpu().numpy(),
@@ -49,6 +50,6 @@ class KeiPilotAgent:
         return res
 
     def act(self, rgb_bgr, command, target_point, speed, dt, with_seg=False):
-        p = self.plan(rgb_bgr, command, target_point, with_seg=with_seg)
+        p = self.plan(rgb_bgr, command, target_point, with_seg=with_seg, speed=speed)
         action = self.follower(p["path"], p["target_speed"], speed, dt)
         return action, p
