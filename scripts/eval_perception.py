@@ -27,6 +27,7 @@ def main():
     ap.add_argument("--ckpt", required=True)
     ap.add_argument("--data", nargs="+", default=["data/heldout_test"])
     ap.add_argument("--out", default=None)
+    ap.add_argument("--no_speed", action="store_true", help="hide the ego speed from a speed-input model")
     args = ap.parse_args()
     d, _ = load_shards(args.data)
     ds = DrivingDataset(d, np.arange(len(d["cmd"])), train=False)
@@ -38,7 +39,8 @@ def main():
     for b in dl:
         b = {k: v.cuda() for k, v in b.items()}
         with torch.autocast("cuda", dtype=torch.bfloat16):
-            out = model(b["img"].contiguous(memory_format=torch.channels_last), b["cmd"], b["tp"])
+            out = model(b["img"].contiguous(memory_format=torch.channels_last), b["cmd"], b["tp"],
+                        speed=None if args.no_speed else b["v"])
         err = torch.linalg.norm(out["path"] - b["path"], dim=-1)
         ade += err.mean(-1).sum().item()
         fde += err[:, -1].sum().item()
@@ -57,7 +59,7 @@ def main():
     iou = (inter / union.clamp(min=1)).numpy()
     present = (conf.sum(1) > 0).numpy()
     res = {
-        "frames": n, "ADE_m": ade / n, "FDE_m": fde / n, "speed_MAE": spd / n, "stop_acc": stop_ok / n,
+        "frames": n, "speed_input": bool(model.speed_input and not args.no_speed), "ADE_m": ade / n, "FDE_m": fde / n, "speed_MAE": spd / n, "stop_acc": stop_ok / n,
         "tl_acc": float(np.trace(tl_conf) / tl_conf.sum()),
         "tl_recall": {TL_NAMES[i]: float(tl_conf[i, i] / max(1, tl_conf[i].sum())) for i in range(4)},
         "tl_confusion": tl_conf.tolist(),

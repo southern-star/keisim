@@ -1,6 +1,6 @@
 """KeiPilot: a lightweight camera-only end-to-end driving model.
 
-image (3x160x320) + navigation command + target point
+image (3x160x320) + navigation command + target point (+ ego speed, optional)
   -> ResNet-18 trunk
   -> (aux) FPN semantic segmentation            [what the model "sees"]
   -> tiny transformer decoder with learned queries over multi-scale tokens
@@ -54,7 +54,7 @@ def _resnet18_from_local_r34():
 
 
 class KeiPilot(nn.Module):
-    def __init__(self, n_sem=13, d=256, n_layers=3, n_heads=8, pretrained=True, img_hw=(160, 320)):
+    def __init__(self, n_sem=13, d=256, n_layers=3, n_heads=8, pretrained=True, img_hw=(160, 320), speed_input=False):
         super().__init__()
         if pretrained:
             r, self.init_info = _resnet18_from_local_r34()
@@ -74,6 +74,15 @@ class KeiPilot(nn.Module):
         self.pos4 = nn.Parameter(torch.randn(1, d, H // 32, W // 32) * 0.02)
         self.queries = nn.Parameter(torch.randn(N_PATH + 2, d) * 0.02)
         self.cond = nn.Sequential(nn.Linear(N_CMD + 4, d), nn.GELU(), nn.Linear(d, d))
+        # optional ego speed condition. Its output layer starts at zero, so a camera-only checkpoint loaded into
+        # this model behaves exactly as before; `speed_unknown` stands in when the speed is dropped out in
+        # training (against the inertia problem) or not given
+        self.speed_input = speed_input
+        if speed_input:
+            self.speed_enc = nn.Sequential(nn.Linear(3, d), nn.GELU(), nn.Linear(d, d))
+            nn.init.zeros_(self.speed_enc[2].weight)
+            nn.init.zeros_(self.speed_enc[2].bias)
+            self.speed_unknown = nn.Parameter(torch.zeros(d))
         layer = nn.TransformerDecoderLayer(d, n_heads, 4 * d, dropout=0.1, batch_first=True, norm_first=True,
                                            activation="gelu")
         self.decoder = nn.TransformerDecoder(layer, n_layers)
@@ -95,8 +104,15 @@ class KeiPilot(nn.Module):
                           torch.atan2(tp[:, 1:2], tp[:, 0:1]) / 3.1416], -1)
         return feat
 
-    def forward(self, img, cmd, tp, with_seg=True):
-        """img: (B,3,H,W) uint8/float RGB in [0,255]."""
+    @staticmethod
+    def encode_speed(v):
+        """v (B,) ego speed in m/s."""
+        v = v.float().clamp(0.0, 20.0)[:, None]
+        return torch.cat([v / 10.0, (v / 10.0) ** 2, torch.log1p(v) / 2.5], -1)
+
+    def forward(self, img, cmd, tp, with_seg=True, speed=None, speed_known=None):
+        """img: (B,3,H,W) uint8/float RGB in [0,255]. speed (B,) m/s is used by speed-input models only;
+        speed_known (B,) bool hides it per sample (False -> the learned 'unknown' embedding)."""
         x = (img.float() / 255.0 - self.mean) / self.std
         x = self.stem(x)
         c1 = self.layer1(x)
@@ -114,6 +130,15 @@ class KeiPilot(nn.Module):
         t4 = (self.proj4(c4) + self.pos4).flatten(2).transpose(1, 2)
         mem = torch.cat([t3, t4], 1)
         cond = self.cond(self.encode_cond(cmd, tp))
+        if self.speed_input:
+            unknown = self.speed_unknown.to(cond.dtype)[None].expand_as(cond)
+            if speed is None:
+                cond = cond + unknown
+            else:
+                s = self.speed_enc(self.encode_speed(speed)).to(cond.dtype)
+                if speed_known is not None:
+                    s = torch.where(speed_known[:, None], s, unknown)
+                cond = cond + s
         q = self.queries[None].expand(img.shape[0], -1, -1) + cond[:, None]
         h = self.decoder(q, mem)
         out["path"] = self.path_prior[None] + self.path_head(h[:, :N_PATH]).float() * 2.0

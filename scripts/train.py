@@ -45,13 +45,17 @@ def evaluate(model, loader, device):
     n = 0
     ade = 0.0
     spd_err = 0.0
+    spd_err_blind = 0.0
     stop_ok = 0
     tl_ok = 0
     conf = torch.zeros(N_SEM, N_SEM, dtype=torch.long)
     for b in loader:
         b = {k: v.to(device, non_blocking=True) for k, v in b.items()}
+        img = b["img"].contiguous(memory_format=torch.channels_last)
         with torch.autocast("cuda", dtype=torch.bfloat16):
-            out = model(b["img"].contiguous(memory_format=torch.channels_last), b["cmd"], b["tp"])
+            out = model(img, b["cmd"], b["tp"], speed=b["v"])
+            if model.speed_input:
+                blind = model(img, b["cmd"], b["tp"], with_seg=False)
         _, logs = compute_loss(model, out, b)
         bs = b["img"].shape[0]
         for k, v in logs.items():
@@ -60,6 +64,8 @@ def evaluate(model, loader, device):
         ade += torch.linalg.norm(out["path"] - b["path"], dim=-1).mean(-1).sum().item()
         v, _ = model.decode_speed(out["speed_logits"])
         spd_err += (v - b["speed"]).abs().sum().item()
+        if model.speed_input:
+            spd_err_blind += (model.decode_speed(blind["speed_logits"])[0] - b["speed"]).abs().sum().item()
         stop_ok += ((v < 0.05) == (b["speed"] < 0.05)).sum().item()
         tl_ok += (out["tl_logits"].argmax(-1) == b["tl"]).sum().item()
         seg = torch.nn.functional.interpolate(out["seg"].float(), size=b["seg"].shape[-2:], mode="bilinear",
@@ -73,6 +79,8 @@ def evaluate(model, loader, device):
     iou = (inter / union.clamp(min=1))
     res.update({"ADE_m": ade / n, "speed_MAE": spd_err / n, "stop_acc": stop_ok / n, "tl_acc": tl_ok / n,
                 "seg_mIoU": iou[present].mean().item(), "iou": iou.tolist()})
+    if model.speed_input:
+        res["speed_MAE_no_speed"] = spd_err_blind / n
     model.train()
     return res
 
@@ -93,6 +101,9 @@ def main():
     ap.add_argument("--dagger_weight", type=float, default=2.0, help="sampling weight of on-policy frames")
     ap.add_argument("--kv_weight", type=float, default=1.0, help="sampling weight of KeiView-rendered frames")
     ap.add_argument("--samples_per_epoch", type=int, default=0, help="0 = one pass over the training frames")
+    ap.add_argument("--speed_input", action="store_true", help="also feed the ego speed to the model")
+    ap.add_argument("--speed_drop", type=float, default=0.5,
+                    help="probability of hiding the ego speed from a training sample (against the inertia problem)")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
     torch.manual_seed(args.seed)
@@ -120,12 +131,16 @@ def main():
                        drop_last=True, persistent_workers=True, prefetch_factor=4)
     dl_va = DataLoader(ds_va, batch_size=128, shuffle=False, num_workers=4, pin_memory=True)
 
-    model = KeiPilot(pretrained=args.init is None)
-    print("backbone init:", model.init_info, flush=True)
-    if args.init:
-        sd = torch.load(args.init, map_location="cpu")
-        model.load_state_dict(sd["model"])
-        print("initialised from", args.init)
+    sd = torch.load(args.init, map_location="cpu") if args.init else None
+    model_cfg = dict(sd.get("model_cfg", {})) if sd else {}
+    if args.speed_input:
+        model_cfg["speed_input"] = True
+    model = KeiPilot(pretrained=args.init is None, **model_cfg)
+    print("backbone init:", model.init_info, "| model_cfg:", model_cfg, flush=True)
+    if sd:
+        missing, unexpected = model.load_state_dict(sd["model"], strict=False)
+        assert not unexpected and all(k.startswith("speed_") for k in missing), (missing, unexpected)
+        print("initialised from", args.init, f"(new: {missing})" if missing else "")
     model = model.to(device).to(memory_format=torch.channels_last)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"params: {n_params / 1e6:.2f} M", flush=True)
@@ -155,8 +170,10 @@ def main():
                 break
             set_lr(it)
             b = {k: v.to(device, non_blocking=True) for k, v in b.items()}
+            known = torch.rand(b["v"].shape[0], device=device) >= args.speed_drop if model.speed_input else None
             with torch.autocast("cuda", dtype=torch.bfloat16):
-                out = model(b["img"].contiguous(memory_format=torch.channels_last), b["cmd"], b["tp"])
+                out = model(b["img"].contiguous(memory_format=torch.channels_last), b["cmd"], b["tp"],
+                            speed=b["v"], speed_known=known)
             loss, logs = compute_loss(model, out, b)
             opt.zero_grad(set_to_none=True)
             loss.backward()
@@ -175,9 +192,10 @@ def main():
         val["time"] = time.time() - t0
         hist.append(val)
         print(f"== ep {ep} val loss={val['loss']:.3f} ADE={val['ADE_m']:.3f}m speedMAE={val['speed_MAE']:.3f} "
-              f"stop_acc={val['stop_acc']:.3f} tl_acc={val['tl_acc']:.3f} mIoU={val['seg_mIoU']:.3f} ({val['time']:.0f}s)",
-              flush=True)
-        ck = {"model": model.state_dict(), "epoch": ep, "val": val, "model_cfg": {}, "args": vars(args)}
+              f"stop_acc={val['stop_acc']:.3f} tl_acc={val['tl_acc']:.3f} mIoU={val['seg_mIoU']:.3f}"
+              + (f" speedMAE(no speed)={val['speed_MAE_no_speed']:.3f}" if model.speed_input else "")
+              + f" ({val['time']:.0f}s)", flush=True)
+        ck = {"model": model.state_dict(), "epoch": ep, "val": val, "model_cfg": model_cfg, "args": vars(args)}
         torch.save(ck, os.path.join(args.out, "last.pt"))
         if val["loss"] < best:
             best = val["loss"]

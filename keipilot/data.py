@@ -164,4 +164,5 @@ class DrivingDataset(Dataset):
             "path": torch.from_numpy(d["path"][i].astype(np.float32)),
             "speed": torch.tensor(float(d["speed"][i]), dtype=torch.float32),
             "tl": torch.tensor(int(d["tl"][i])),
+            "v": torch.tensor(float(d["v"][i]), dtype=torch.float32),      # ego speed (input of speed models)
         }

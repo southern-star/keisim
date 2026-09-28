@@ -66,3 +66,24 @@ def test_camera_render_shapes():
     assert obs["rgb"].shape == (160, 320, 3) and obs["rgb"].dtype == np.uint8
     assert obs["seg"].shape == (160, 320)
     assert obs["expert"]["path"].shape == (10, 2)
+
+
+def test_speed_input_starts_as_camera_only_model():
+    """A camera-only checkpoint loaded into a speed-input KeiPilot must behave exactly as before."""
+    import torch
+
+    from keipilot.model import KeiPilot
+
+    torch.manual_seed(0)
+    base = KeiPilot(pretrained=False).eval()
+    spd = KeiPilot(pretrained=False, speed_input=True).eval()
+    missing, unexpected = spd.load_state_dict(base.state_dict(), strict=False)
+    assert not unexpected and missing and all(k.startswith("speed_") for k in missing)
+    img = torch.randint(0, 256, (2, 3, 160, 320), dtype=torch.uint8)
+    cmd, tp = torch.tensor([0, 1]), torch.tensor([[20.0, 3.0], [15.0, -2.0]])
+    with torch.no_grad():
+        a = base(img, cmd, tp, with_seg=False)
+        b = spd(img, cmd, tp, with_seg=False, speed=torch.tensor([0.0, 8.0]))
+        c = spd(img, cmd, tp, with_seg=False)
+    for k in ("path", "speed_logits", "tl_logits"):
+        assert torch.allclose(a[k], b[k], atol=1e-5) and torch.allclose(a[k], c[k], atol=1e-5)
