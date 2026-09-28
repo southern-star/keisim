@@ -81,6 +81,20 @@ def test_counterfactual_speed_labels_match_expert():
     assert "red_light" in seen
 
 
+def test_yellow_light_follows_traffic_law():
+    """Yellow: stop at the line if the ego can still stop safely (3.5 m/s^2), whatever the remaining time; red:
+    stop unless even a hard stop (6 m/s^2) is impossible."""
+    from keisim.config import TL_GREEN, TL_RED, TL_YELLOW
+    from keisim.expert import light_stop
+
+    assert light_stop(5.0, 10.0, TL_YELLOW, 2.4, False) == "red_light"      # 3.9 m needed: stop, time left or not
+    assert light_stop(10.0, 8.0, TL_YELLOW, 0.5, False) is None             # 14.6 m needed: too close, go on
+    assert light_stop(10.0, 9.0, TL_RED, 0.0, False) == "red_light"         # red: 8.6 m needed at 6 m/s^2
+    assert light_stop(11.0, 8.0, TL_RED, 0.0, False) is None                # 10.4 m needed: cannot stop
+    assert light_stop(8.0, 6.0, TL_GREEN, 0.0, False) is None
+    assert light_stop(3.0, 8.0, TL_GREEN, 0.0, True) == "junction_blocked"  # don't block the box
+
+
 def test_camera_render_shapes():
     env = KeiEnv(EnvConfig())
     obs = env.reset(town_seed=5, episode_seed=1)
