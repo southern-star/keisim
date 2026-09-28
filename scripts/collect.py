@@ -83,7 +83,11 @@ def record(env, writer, rng, v_prob, weather_id, virtual_prob):
                path=np.asarray(path, np.float32), speed=np.float32(plan["target_speed"]),
                tl=np.int8(plan["tl_state"]), v=np.float32(e.v), reason=np.int8(REASONS.get(plan["reason"], 0)),
                town=np.int32(env.town_seed), episode=np.int64(env.episode_seed), step=np.int32(env._step),
-               weather=np.int8(weather_id), virtual=np.bool_(offset is not None))
+               weather=np.int8(weather_id), virtual=np.bool_(offset is not None),
+               # inputs of the expert's traffic-light decision -> labels for counterfactual ego speeds
+               target_nolight=np.float32(plan["target_nolight"]), lt_over=np.bool_(plan["lt_over"]),
+               lt_d=np.float32(plan["lt_d"]), lt_st=np.int8(plan["lt_st"]), lt_trem=np.float32(plan["lt_trem"]),
+               lt_blocked=np.bool_(plan["lt_blocked"]))
 
 
 def worker(wid, args, quota, out_dir, counter):

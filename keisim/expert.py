@@ -29,6 +29,37 @@ def stop_profile(x, b=2.5):
     return min(math.sqrt(2 * b * x), 0.8 * x + 0.2)
 
 
+def light_stop(v, d, st, t_rem, exit_blocked):
+    """The expert's decision at the next stop line, `d` >= 0 metres ahead of the front bumper, at ego speed `v`:
+    the reason it stops there, or None. This is the only place where the ego speed enters the plan."""
+    can_stop = d > v * v / (2 * 6.0) + 0.3
+    if st == TL_RED:
+        stop = can_stop
+    elif st == TL_YELLOW:
+        clears = (d + 0.5) / max(v, 0.1) < t_rem - 0.3
+        stop = can_stop and not clears
+    else:
+        stop = False
+    if stop:
+        return "red_light"
+    if d < 12.0 and can_stop and exit_blocked:
+        return "junction_blocked"            # don't block the box: wait at the stop line if the exit is full
+    return None
+
+
+def target_for_speed(v, lab):
+    """The expert's target speed had the ego been driving at `v`, from the speed-independent parts of its plan
+    (target_nolight, lt_over, lt_d, lt_st, lt_trem, lt_blocked; see Expert.plan). Relabels recorded frames with
+    counterfactual ego speeds, so a speed-input model learns how the speed changes the decision."""
+    target = float(lab["target_nolight"])
+    if lab["lt_over"] and v < 3.0:
+        target = 0.0
+    d = float(lab["lt_d"])
+    if math.isfinite(d) and light_stop(v, d, int(lab["lt_st"]), float(lab["lt_trem"]), bool(lab["lt_blocked"])):
+        target = min(target, stop_profile(d - TL_MARGIN, Expert.B_COMF))
+    return 0.0 if target < 0.3 else target
+
+
 class Expert:
     B_COMF = 2.5          # m/s^2 used for stopping profiles
     GAP0_VEH = 4.0        # standstill gap to vehicles (bumper to bumper)
@@ -104,8 +135,11 @@ class Expert:
             if v_obs < target:
                 target, reason = v_obs, ("pedestrian" if lead_o[0] <= -2 else "vehicle")
 
-        # --- traffic light (privileged timing makes the yellow decision exact)
+        # --- traffic light (privileged timing makes the yellow decision exact). The speed-independent inputs
+        # of the decision are returned too (lt_*), so recorded frames can be relabelled for other ego speeds.
         tl = TL_NONE
+        target_nolight = target
+        lt = {"lt_over": False, "lt_d": math.nan, "lt_st": TL_NONE, "lt_trem": math.nan, "lt_blocked": False}
         s_front = s + hl
         for s_stop, lid in route.stops:
             d = s_stop - s_front
@@ -116,29 +150,25 @@ class Expert:
             st = w.town.signal_state_for_lane(lid, w.t)
             if d < 0.0:
                 # just past the line (overshoot): never roll into the junction on red
-                if st == TL_RED and v < 3.0:
-                    target, reason = 0.0, "red_light"
+                if st == TL_RED:
+                    lt["lt_over"] = True
+                    if v < 3.0:
+                        target, reason = 0.0, "red_light"
                 continue
             tl = st
-            can_stop = d > v * v / (2 * 6.0) + 0.3
-            if st == TL_RED:
-                stop = can_stop
-            elif st == TL_YELLOW:
+            t_rem = math.nan
+            if st == TL_YELLOW:
                 J = w.town.junctions[w.town.lanes[lid].signal[0]]
                 t_rem = J.remaining(w.town.lanes[lid].signal[1], w.t)
-                clears = (d + 0.5) / max(v, 0.1) < t_rem - 0.3
-                stop = can_stop and not clears
-            else:
-                stop = False
-            why = "red_light"
-            if not stop and d < 12.0 and can_stop:
-                # don't block the box: wait at the stop line if the junction exit is full
+            blocked = False
+            if d < 12.0:
                 k = route.lane_index_at(s_stop)
                 if k + 2 < len(route.lanes):
-                    occ = w.traffic.occupancy()
-                    if w.traffic.exit_blocked(route.lanes[k + 1], route.lanes[k + 2], ego.LENGTH + 3.0, occ):
-                        stop, why = True, "junction_blocked"
-            if stop:
+                    blocked = w.traffic.exit_blocked(route.lanes[k + 1], route.lanes[k + 2], ego.LENGTH + 3.0,
+                                                     w.traffic.occupancy())
+            lt.update(lt_d=d, lt_st=st, lt_trem=t_rem, lt_blocked=blocked)
+            why = light_stop(v, d, st, t_rem, blocked)
+            if why:
                 v_tl = stop_profile(d - TL_MARGIN, self.B_COMF)
                 if v_tl < target:
                     target, reason = v_tl, why
@@ -146,7 +176,7 @@ class Expert:
         if target < 0.3:
             target = 0.0
         return {"path": path, "target_speed": float(target), "tl_state": int(tl), "reason": reason,
-                "gap": g}
+                "gap": g, "target_nolight": float(target_nolight), **lt}
 
     def act(self, plan=None):
         env = self.env

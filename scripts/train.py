@@ -104,6 +104,9 @@ def main():
     ap.add_argument("--speed_input", action="store_true", help="also feed the ego speed to the model")
     ap.add_argument("--speed_drop", type=float, default=0.5,
                     help="probability of hiding the ego speed from a training sample (against the inertia problem)")
+    ap.add_argument("--cf_prob", type=float, default=0.0,
+                    help="probability of relabelling a frame for a random ego speed (needs recorded light inputs)")
+    ap.add_argument("--cf_weight", type=float, default=1.0, help="sampling weight of frames with light inputs")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
     torch.manual_seed(args.seed)
@@ -120,9 +123,14 @@ def main():
     tr_idx, va_idx = np.nonzero(~is_val)[0], np.nonzero(is_val)[0]
     print(f"{N} frames from {len(files)} shards, {len(eps)} episodes; train {len(tr_idx)} / val {len(va_idx)}", flush=True)
 
-    ds_tr = DrivingDataset(data, tr_idx, train=True)
+    ds_tr = DrivingDataset(data, tr_idx, train=True, cf_prob=args.cf_prob if args.speed_input else 0.0,
+                           speed_drop=args.speed_drop if args.speed_input else 0.0)
+    if args.speed_input:
+        print(f"frames with light-decision inputs (counterfactual speeds): {int(data['cf_ok'][tr_idx].sum())}", flush=True)
     ds_va = DrivingDataset(data, va_idx, train=False)
-    w = sample_weights(data, args.dagger_weight, args.kv_weight)[tr_idx]
+    w = sample_weights(data, args.dagger_weight, args.kv_weight)
+    w[data["cf_ok"]] *= args.cf_weight
+    w = w[tr_idx]
     n_epoch = args.samples_per_epoch or len(tr_idx)
     sampler = WeightedRandomSampler(torch.from_numpy(w), num_samples=n_epoch, replacement=True)
     kv = data["keiview"][tr_idx]
@@ -170,10 +178,9 @@ def main():
                 break
             set_lr(it)
             b = {k: v.to(device, non_blocking=True) for k, v in b.items()}
-            known = torch.rand(b["v"].shape[0], device=device) >= args.speed_drop if model.speed_input else None
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 out = model(b["img"].contiguous(memory_format=torch.channels_last), b["cmd"], b["tp"],
-                            speed=b["v"], speed_known=known)
+                            speed=b["v"], speed_known=b["v_known"] if model.speed_input else None)
             loss, logs = compute_loss(model, out, b)
             opt.zero_grad(set_to_none=True)
             loss.backward()

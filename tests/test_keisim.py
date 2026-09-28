@@ -60,6 +60,27 @@ def test_expert_completes_short_route():
     assert info["DS"] > 0.99, info
 
 
+def test_counterfactual_speed_labels_match_expert():
+    """target_for_speed(v, plan) must reproduce the expert's own target at its actual speed, including the
+    red / yellow / overshoot / don't-block-the-box cases, so relabelling with other speeds is exact."""
+    from keisim.expert import target_for_speed
+
+    env = KeiEnv(EnvConfig())
+    seen = set()
+    for town, ep in ((1003, 2), (1001, 5), (7, 11)):
+        env.reset(town_seed=town, episode_seed=ep, route_length=500, render=False)
+        for _ in range(3000):
+            plan = env.plan
+            assert abs(target_for_speed(env.world.ego.v, plan) - plan["target_speed"]) < 1e-9, plan
+            seen.add(plan["reason"])
+            for v in (0.0, 2.5, 6.0, 11.0):           # every counterfactual speed gives a valid label
+                assert 0.0 <= target_for_speed(v, plan) <= env.world.town.cfg.speed_limit + 1e-6
+            _, _, done, _ = env.step(env.expert_action())
+            if done:
+                break
+    assert "red_light" in seen
+
+
 def test_camera_render_shapes():
     env = KeiEnv(EnvConfig())
     obs = env.reset(town_seed=5, episode_seed=1)
