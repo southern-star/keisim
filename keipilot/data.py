@@ -176,14 +176,16 @@ class DrivingDataset(Dataset):
         img = cv2.imdecode(d["jpg"][d["jpg_off"][i]:d["jpg_off"][i + 1]], cv2.IMREAD_COLOR)
         seg = cv2.imdecode(d["seg"][d["seg_off"][i]:d["seg_off"][i + 1]], cv2.IMREAD_UNCHANGED)
         v, speed, known = float(d["v"][i]), float(d["speed"][i]), True
+        cf = bool(d["cf_ok"][i])
         if self.train:
             rng = np.random.default_rng()
             img = self._augment(img, rng)
-            if self.cf_prob > 0 and d["cf_ok"][i] and rng.random() < self.cf_prob:
+            if cf and self.cf_prob > 0 and rng.random() < self.cf_prob:
                 v = float(rng.uniform(0.0, self.cf_vmax))
-                speed = target_for_speed(v, {k: d[k][i] for k in CF_KEYS})
             elif rng.random() < self.speed_drop:
                 known = False
+        if cf:          # label from the recorded decision inputs with the current rule (and the chosen speed)
+            speed = target_for_speed(v, {k: d[k][i] for k in CF_KEYS})
         img = img[:, :, ::-1].transpose(2, 0, 1).copy()  # BGR -> RGB, CHW, uint8
         return {
             "img": torch.from_numpy(img),

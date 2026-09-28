@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from keipilot.data import DrivingDataset, load_shards  # noqa: E402
 from keipilot.model import KeiPilot, compute_loss  # noqa: E402
 from keisim.config import N_SEM  # noqa: E402
+from keisim.expert import LABEL_VERSION  # noqa: E402
 
 
 def sample_weights(d, dagger_weight=1.0, kv_weight=1.0):
@@ -130,6 +131,10 @@ def main():
     ds_va = DrivingDataset(data, va_idx, train=False)
     w = sample_weights(data, args.dagger_weight, args.kv_weight)
     w[data["cf_ok"]] *= args.cf_weight
+    # yellow-light frames whose label follows an older yellow rule and cannot be relabelled
+    stale = (data["tl"] == 1) & ~data["cf_ok"] & (data["label_version"] < LABEL_VERSION)
+    w[stale] = 0.0
+    print(f"dropped {int(stale.sum())} yellow frames labelled with an older rule", flush=True)
     w = w[tr_idx]
     n_epoch = args.samples_per_epoch or len(tr_idx)
     sampler = WeightedRandomSampler(torch.from_numpy(w), num_samples=n_epoch, replacement=True)

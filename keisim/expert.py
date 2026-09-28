@@ -16,7 +16,7 @@ from .geometry import world_to_local
 from .traffic import corridor_gaps, vehicle_circles
 
 PATH_S = np.arange(1, 11) * 2.0          # label waypoints every 2 m up to 20 m
-LABEL_VERSION = 2
+LABEL_VERSION = 3                        # 3: yellow = stop if the ego can stop comfortably (Japanese traffic law)
 TL_MARGIN = 2.5                          # stop this far before the stop line (keeps it in view)
 
 
@@ -29,15 +29,21 @@ def stop_profile(x, b=2.5):
     return min(math.sqrt(2 * b * x), 0.8 * x + 0.2)
 
 
+YELLOW_DECEL = 3.5                       # m/s^2: "can stop safely" at yellow (NPCs use the same rule)
+
+
 def light_stop(v, d, st, t_rem, exit_blocked):
     """The expert's decision at the next stop line, `d` >= 0 metres ahead of the front bumper, at ego speed `v`:
-    the reason it stops there, or None. This is the only place where the ego speed enters the plan."""
+    the reason it stops there, or None. This is the only place where the ego speed enters the plan.
+    Red: stop unless even a hard stop (6 m/s^2) is impossible. Yellow, as in Japanese traffic law: stop at the
+    line unless the ego is already too close to stop safely (YELLOW_DECEL). The remaining yellow time `t_rem`
+    is not used: a camera + speed model could not see it, and the law does not ask whether the junction clears
+    (label version 2 went through whenever it cleared in time)."""
     can_stop = d > v * v / (2 * 6.0) + 0.3
     if st == TL_RED:
         stop = can_stop
     elif st == TL_YELLOW:
-        clears = (d + 0.5) / max(v, 0.1) < t_rem - 0.3
-        stop = can_stop and not clears
+        stop = d > v * v / (2 * YELLOW_DECEL) + 0.3
     else:
         stop = False
     if stop:
@@ -135,8 +141,8 @@ class Expert:
             if v_obs < target:
                 target, reason = v_obs, ("pedestrian" if lead_o[0] <= -2 else "vehicle")
 
-        # --- traffic light (privileged timing makes the yellow decision exact). The speed-independent inputs
-        # of the decision are returned too (lt_*), so recorded frames can be relabelled for other ego speeds.
+        # --- traffic light. The speed-independent inputs of the decision are returned too (lt_*), so recorded
+        # frames can be relabelled for other ego speeds (and for later versions of the rule).
         tl = TL_NONE
         target_nolight = target
         lt = {"lt_over": False, "lt_d": math.nan, "lt_st": TL_NONE, "lt_trem": math.nan, "lt_blocked": False}
