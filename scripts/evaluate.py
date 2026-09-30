@@ -29,7 +29,11 @@ SUITES = {
     "test2": [(t, 9100 + e) for t in (1005, 1006, 1007, 1008, 1009) for e in range(4)],
     # hand-picked unseen-town routes with varied weather, used for demo videos
     "showcase": [(1000, 9001), (1004, 9002), (1001, 9002), (1003, 9001), (1007, 9102), (1009, 9100)],
+    # unseen towns not used by any other suite, 2.5 km routes (~20 signalised stop lines each): rare failures
+    "long": [(t, 9200 + e) for t in range(1010, 1020) for e in range(2)],
 }
+# per-suite defaults for arguments left unset on the command line
+SUITE_DEFAULTS = {"long": {"route_length": 2500.0, "max_steps": 20000}}
 
 
 _ENV = None
@@ -122,7 +126,8 @@ def run_route(job):
     if not done:
         m["status"] = "timeout"
     m.update({"town": town, "episode": ep, "steps": steps, "wall": time.time() - t0,
-              "avg_speed": float(np.mean(speeds)) if speeds else 0.0, "weather": env.weather.name})
+              "avg_speed": float(np.mean(speeds)) if speeds else 0.0, "weather": env.weather.name,
+              "lights_passed": int(sum(1 for s_stop, _ in env.route.stops if s_stop < env.s_ego))})
     return m
 
 
@@ -137,6 +142,7 @@ def summarize(results):
         "success_rate": float(np.mean([r["status"] == "success" for r in results])),
         "km": km,
         "avg_speed_kmh": float(np.mean([r["avg_speed"] for r in results]) * 3.6),
+        "lights_passed": int(sum(r.get("lights_passed", 0) for r in results)),
     }
     kinds = {}
     for r in results:
@@ -157,9 +163,9 @@ def main():
     ap.add_argument("--ckpt", default=None)
     ap.add_argument("--suite", default="test", choices=list(SUITES))
     ap.add_argument("--workers", type=int, default=5)
-    ap.add_argument("--route_length", type=float, default=600.0)
+    ap.add_argument("--route_length", type=float, default=None, help="default 600 m (long suite: 2500 m)")
     ap.add_argument("--weather", default="random")
-    ap.add_argument("--max_steps", type=int, default=4000)
+    ap.add_argument("--max_steps", type=int, default=None, help="default 4000 (long suite: 20000)")
     ap.add_argument("--videos", type=int, default=0)
     ap.add_argument("--video_dir", default="runs/videos")
     ap.add_argument("--tag", default=None)
@@ -167,6 +173,10 @@ def main():
     ap.add_argument("--renderer", default="keisim", choices=["keisim", "keiview"], help="camera renderer")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
+    dflt = {"route_length": 600.0, "max_steps": 4000, **SUITE_DEFAULTS.get(args.suite, {})}
+    for k, v in dflt.items():
+        if getattr(args, k) is None:
+            setattr(args, k, v)
     if args.tag:
         tag = args.tag
     elif args.agent == "expert":
