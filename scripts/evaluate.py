@@ -87,6 +87,7 @@ def run_route(job):
     steps = 0
     t0 = time.time()
     speeds = []
+    log = []            # per-step decisions, saved around failures (runs/failures/)
     while not done and steps < args["max_steps"]:
         e = env.world.ego
         if agent is None:
@@ -94,6 +95,10 @@ def run_route(job):
             mp_ = None
         else:
             action, mp_ = agent.act(obs["rgb"], obs["command"], obs["target_point"], e.v, dt, with_seg=video is not None)
+        plan = env.plan
+        log.append((round(env.elapsed, 1), round(float(env.s_ego), 1), round(float(e.v), 2), plan["reason"],
+                    int(plan["tl_state"]), None if mp_ is None else int(mp_["tl"]),
+                    None if mp_ is None else round(float(mp_["target_speed"]), 2), round(float(plan["target_speed"]), 2)))
         if video is not None:
             plan = env.plan
             paths = [(plan["path"], (80, 255, 80))]
@@ -128,6 +133,24 @@ def run_route(job):
     m.update({"town": town, "episode": ep, "steps": steps, "wall": time.time() - t0,
               "avg_speed": float(np.mean(speeds)) if speeds else 0.0, "weather": env.weather.name,
               "lights_passed": int(sum(1 for s_stop, _ in env.route.stops if s_stop < env.s_ego))})
+    if m["status"] in ("blocked", "timeout") and log:
+        # who kept the ego standing: the expert would have driven on (model) or would also wait (traffic)?
+        win = [r for r in log[-int(cfg.blocked_timeout / dt):] if r[2] < 0.1]
+        go = float(np.mean([r[7] > 1.0 for r in win])) if win else 0.0
+        reasons = {}
+        for r in win:
+            reasons[r[3]] = reasons.get(r[3], 0) + 1
+        m["blocked_by"] = {"cause": "model" if go > 0.5 else "traffic", "expert_go_frac": round(go, 3),
+                           "expert_reasons": reasons}
+    if (m["status"] != "success" or m["infractions"]) and args.get("fail_dir"):
+        keys = ("t", "s", "v", "reason", "tl_gt", "tl_pred", "target_model", "target_expert")
+        spans = [(i["t"] - 12.0, i["t"] + 3.0) for i in m["infractions"]]
+        if m["status"] != "success":
+            spans.append((log[-1][0] - cfg.blocked_timeout - 20.0, log[-1][0] + 1.0))
+        windows = [[dict(zip(keys, r)) for r in log if a <= r[0] <= b] for a, b in spans]
+        os.makedirs(args["fail_dir"], exist_ok=True)
+        with open(os.path.join(args["fail_dir"], f"{town}_{ep}.json"), "w") as f:
+            json.dump({"result": {k: v for k, v in m.items()}, "windows": windows}, f)
     return m
 
 
@@ -154,6 +177,12 @@ def summarize(results):
     for r in results:
         st[r["status"]] = st.get(r["status"], 0) + 1
     s["status"] = st
+    causes = {}
+    for r in results:
+        if "blocked_by" in r:
+            causes[r["blocked_by"]["cause"]] = causes.get(r["blocked_by"]["cause"], 0) + 1
+    if causes:
+        s["blocked_by"] = causes
     return s
 
 
@@ -186,9 +215,12 @@ def main():
     else:
         tag = os.path.splitext(os.path.basename(args.ckpt))[0]  # runs/keipilot.pt -> keipilot
     jobs = SUITES[args.suite]
+    suffix = ("_dense" if args.dense else "") + ("" if args.weather == "random" else f"_{args.weather}") + \
+        ("_keiview" if args.renderer == "keiview" else "")
+    fail_dir = os.path.join("runs", "failures", f"{tag}_{args.suite}{suffix}")
     a = {"agent": args.agent, "ckpt": args.ckpt, "route_length": args.route_length, "weather": args.weather,
          "max_steps": args.max_steps, "videos": args.videos, "video_dir": args.video_dir, "tag": tag,
-         "dense": args.dense, "renderer": args.renderer}
+         "dense": args.dense, "renderer": args.renderer, "fail_dir": fail_dir}
     t0 = time.time()
     ctx = mp.get_context("spawn")
     with ctx.Pool(args.workers) as pool:
@@ -199,8 +231,6 @@ def main():
                   f"inf={[i['type'] for i in m['infractions']]} ({m['wall']:.0f}s)", flush=True)
     s = summarize(results)
     print(json.dumps(s, indent=1))
-    suffix = ("_dense" if args.dense else "") + ("" if args.weather == "random" else f"_{args.weather}") + \
-        ("_keiview" if args.renderer == "keiview" else "")
     out = args.out or f"runs/eval/{tag}_{args.suite}{suffix}.json"
     os.makedirs(os.path.dirname(out), exist_ok=True)
     with open(out, "w") as f:
