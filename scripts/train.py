@@ -112,6 +112,8 @@ def main():
     ap.add_argument("--history_drop", type=float, default=0.3, help="probability of hiding the previous frame in training")
     ap.add_argument("--history_mode", default="frame", choices=["frame", "diff"], help="feed the earlier frame or the change")
     ap.add_argument("--history_weight", type=float, default=1.0, help="sampling weight of frames with a previous frame")
+    ap.add_argument("--dir_weight", nargs="*", default=[], metavar="DIR=W",
+                    help="extra sampling weight for every frame from a data directory, e.g. data/dir_expert=3")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
     torch.manual_seed(args.seed)
@@ -135,6 +137,11 @@ def main():
     ds_va = DrivingDataset(data, va_idx, train=False)
     w = sample_weights(data, args.dagger_weight, args.kv_weight)
     w[data["cf_ok"]] *= args.cf_weight
+    for spec in args.dir_weight:
+        d_, w_ = spec.rsplit("=", 1)
+        in_dir = np.array([os.path.dirname(os.path.abspath(f)) == os.path.abspath(d_) for f in files])[data["src"]]
+        w[in_dir] *= float(w_)
+        print(f"weight x{w_} for {int(in_dir.sum())} frames from {d_}", flush=True)
     has_prev = np.diff(data["jpg_prev_off"]) > 0
     w[has_prev] *= args.history_weight
     print(f"frames with a previous frame: {int(has_prev.sum())}", flush=True)

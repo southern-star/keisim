@@ -20,6 +20,10 @@ export function signalState(J, phase, t) {
 const SLOT = [TL.GREEN, TL.YELLOW, TL.RED];
 const LIT = { [TL.GREEN]: [0.25, 1.95, 1.45], [TL.YELLOW]: [2.3, 1.45, 0.2], [TL.RED]: [2.5, 0.32, 0.22] };
 const DIM = { [TL.GREEN]: [0.13, 0.22, 0.2], [TL.YELLOW]: [0.26, 0.21, 0.12], [TL.RED]: [0.26, 0.12, 0.12] };
+// Lamp directivity: a real lamp (LEDs behind a visor) is bright only for the traffic it faces. A lit lamp fades from
+// full at 30 deg off its axis to the unlit look at 60 deg, and is labelled lit only within 45 deg, so heads facing
+// other approaches do not look lit from the side (keisim/render/camera.py uses the same rule).
+const COS_FULL = Math.cos(Math.PI / 6), COS_ZERO = Math.cos(Math.PI / 3), COS_LABEL = Math.cos(Math.PI / 4);
 
 export function build(ctx) {
   const T = ctx.town;
@@ -73,11 +77,14 @@ export function build(ctx) {
   const inst = new THREE.InstancedMesh(disc, mLamp, Math.max(1, lamps.length));
   inst.name = 'signal-lamps';
   const m4 = new THREE.Matrix4(), col = new THREE.Color();
+  const lampPos = [], lampNrm = [];
   lamps.forEach((l, i) => {
     const world = l.head.localToWorld(l.local.clone());
     m4.makeRotationY(l.head.rotation.y).scale(new THREE.Vector3(SCALE, SCALE, SCALE)).setPosition(world);
     inst.setMatrixAt(i, m4);
     inst.setColorAt(i, col.setRGB(...DIM[l.slot]));
+    lampPos.push(world);
+    lampNrm.push(new THREE.Vector3(0, 0, 1).applyQuaternion(l.head.getWorldQuaternion(new THREE.Quaternion())));
   });
   inst.count = lamps.length;
   // semantic label colours (src/ego.js): lit lamp -> tl_red / tl_yellow / tl_green, unlit -> pole
@@ -88,19 +95,26 @@ export function build(ctx) {
   inst.castShadow = false; inst.receiveShadow = false;
   ctx.noOutline(inst);
   ctx.add(inst);
-  const last = new Int8Array(lamps.length).fill(-1);
+  const cam = new THREE.Vector3(), toCam = new THREE.Vector3();
   ctx.onUpdate((dt, t) => {
-    let dirty = false;
+    // colours follow the junction timing and, through the directivity, the camera position (every frame)
+    ctx.camera.getWorldPosition(cam);
     for (let i = 0; i < lamps.length; i++) {
       const l = lamps[i];
-      const on = signalState(l.J, l.phase, t) === l.slot ? 1 : 0;
-      if (on !== last[i]) {
-        last[i] = on; inst.setColorAt(i, col.setRGB(...(on ? LIT : DIM)[l.slot])); dirty = true;
-        labelCol.setXYZ(i, (on ? LABEL[l.slot] : 7) / 255, 0, 0);
+      let f = 0, label = 7;
+      if (signalState(l.J, l.phase, t) === l.slot) {
+        toCam.subVectors(cam, lampPos[i]);
+        const d = toCam.length();
+        const c = d > 1e-6 ? toCam.dot(lampNrm[i]) / d : 1;
+        f = Math.min(1, Math.max(0, (c - COS_ZERO) / (COS_FULL - COS_ZERO)));
+        if (c >= COS_LABEL) label = LABEL[l.slot];
       }
+      const lit = LIT[l.slot], dim = DIM[l.slot];
+      inst.setColorAt(i, col.setRGB(dim[0] + f * (lit[0] - dim[0]), dim[1] + f * (lit[1] - dim[1]), dim[2] + f * (lit[2] - dim[2])));
+      labelCol.setXYZ(i, label / 255, 0, 0);
     }
-    if (dirty && inst.instanceColor) inst.instanceColor.needsUpdate = true;
-    if (dirty) labelCol.needsUpdate = true;
+    if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+    labelCol.needsUpdate = true;
   });
   ctx.services.signals = { count: T.signals.length, lamps: lamps.length };
 }

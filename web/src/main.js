@@ -52,7 +52,7 @@ const ctx = createContext({ scene, camera, renderer, audio, quality, sunDir });
 ctx.sky = sky;
 window.__ctx = ctx; window.THREE = THREE;
 // ego mode draws signal heads larger so the lamps stay visible at KeiSim's 320x160 camera resolution
-ctx.signalScale = Number(params.get('sigscale') || (EGO ? 1.6 : 1));
+ctx.signalScale = Number(params.get('sigscale') || (EGO ? 2.2 : 1));
 
 function resize() {
   const w = SHOT ? Number(params.get('w') || 1280) : innerWidth, h = SHOT ? Number(params.get('h') || 720) : innerHeight;
