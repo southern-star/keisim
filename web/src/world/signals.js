@@ -19,7 +19,7 @@ export function signalState(J, phase, t) {
 // lamp slots left -> right as seen by the driver: 青 (blue-green), 黄, 赤
 const SLOT = [TL.GREEN, TL.YELLOW, TL.RED];
 const LIT = { [TL.GREEN]: [0.25, 1.95, 1.45], [TL.YELLOW]: [2.3, 1.45, 0.2], [TL.RED]: [2.5, 0.32, 0.22] };
-const DIM = { [TL.GREEN]: [0.13, 0.22, 0.2], [TL.YELLOW]: [0.26, 0.21, 0.12], [TL.RED]: [0.26, 0.12, 0.12] };
+const DIM = { [TL.GREEN]: [0.03, 0.055, 0.05], [TL.YELLOW]: [0.065, 0.052, 0.03], [TL.RED]: [0.065, 0.03, 0.03] };   // unlit: near-black, as real LED lamps in daylight
 // Lamp directivity: a real lamp (LEDs behind a visor) is bright only for the traffic it faces. A lit lamp fades from
 // full at 30 deg off its axis to the unlit look at 60 deg, and is labelled lit only within 45 deg, so heads facing
 // other approaches do not look lit from the side (keisim/render/camera.py uses the same rule).

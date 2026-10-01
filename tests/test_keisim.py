@@ -186,3 +186,13 @@ def test_agent_drives_with_history_and_brake_hold(tmp_path):
     for _ in range(4):
         action, p = agent.act(rgb, 1, (20.0, 0.0), 3.0, 0.1)
     assert len(agent.frames) == 3 and np.isfinite(action).all() and isinstance(p["target_speed"], float)
+
+
+def test_red_hold_blocks_creeping():
+    """Standing with the light head sure of red/yellow: no creeping; moving, or not sure: untouched."""
+    from keipilot.agent import RedHold
+
+    h = RedHold()
+    assert h(0.6, 0.3, np.array([0.9, 0.05, 0.03, 0.02])) == 0.0
+    assert h(0.6, 0.3, np.array([0.3, 0.1, 0.5, 0.1])) == 0.6
+    assert h(5.0, 6.0, np.array([0.9, 0.05, 0.03, 0.02])) == 5.0
