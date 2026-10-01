@@ -134,14 +134,7 @@ def run_route(job):
               "avg_speed": float(np.mean(speeds)) if speeds else 0.0, "weather": env.weather.name,
               "lights_passed": int(sum(1 for s_stop, _ in env.route.stops if s_stop < env.s_ego))})
     if m["status"] in ("blocked", "timeout") and log:
-        # who kept the ego standing: the expert would have driven on (model) or would also wait (traffic)?
-        win = [r for r in log[-int(cfg.blocked_timeout / dt):] if r[2] < 0.1]
-        go = float(np.mean([r[7] > 1.0 for r in win])) if win else 0.0
-        reasons = {}
-        for r in win:
-            reasons[r[3]] = reasons.get(r[3], 0) + 1
-        m["blocked_by"] = {"cause": "model" if go > 0.5 else "traffic", "expert_go_frac": round(go, 3),
-                           "expert_reasons": reasons}
+        m["blocked_by"] = blocked_cause(log[-int(cfg.blocked_timeout / dt):], dt)
     if (m["status"] != "success" or m["infractions"]) and args.get("fail_dir"):
         keys = ("t", "s", "v", "reason", "tl_gt", "tl_pred", "target_model", "target_expert")
         spans = [(i["t"] - 12.0, i["t"] + 3.0) for i in m["infractions"]]
@@ -152,6 +145,23 @@ def run_route(job):
         with open(os.path.join(args["fail_dir"], f"{town}_{ep}.json"), "w") as f:
             json.dump({"result": {k: v for k, v in m.items()}, "windows": windows}, f)
     return m
+
+
+def blocked_cause(win, dt, go_s=3.0):
+    """Who kept the ego standing? "model" if, while it stood, the expert wanted to drive on (target > 1 m/s) for
+    at least `go_s` seconds in a row - e.g. a green it did not take, even when the red around it was long -
+    else "traffic" (the expert would have waited too). win: log rows (t, s, v, reason, ..., target_expert)."""
+    run = best = 0
+    reasons = {}
+    for r in win:
+        if r[2] < 0.1:
+            reasons[r[3]] = reasons.get(r[3], 0) + 1
+            run = run + 1 if r[-1] > 1.0 else 0
+            best = max(best, run)
+        else:
+            run = 0
+    return {"cause": "model" if best * dt >= go_s else "traffic", "expert_go_s": round(best * dt, 1),
+            "expert_reasons": reasons}
 
 
 def summarize(results):
