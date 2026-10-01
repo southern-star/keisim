@@ -159,3 +159,21 @@ def test_history_model_starts_as_single_frame_model():
         c = hist(img, cmd, tp, with_seg=False, speed=v)
     for k in ("path", "speed_logits", "tl_logits"):
         assert torch.allclose(a[k], b[k], atol=1e-5) and torch.allclose(a[k], c[k], atol=1e-5)
+
+
+def test_agent_drives_with_history_and_brake_hold(tmp_path):
+    """End to end through KeiPilotAgent.act (CPU): plain numbers out, frame history filled after history_dt."""
+    import torch
+
+    from keipilot.agent import KeiPilotAgent
+    from keipilot.model import KeiPilot
+
+    ck = tmp_path / "m.pt"
+    model = KeiPilot(pretrained=False, speed_input=True, history=True, history_dt=0.2)
+    torch.save({"model": model.state_dict(), "model_cfg": {"speed_input": True, "history": True, "history_dt": 0.2}}, ck)
+    agent = KeiPilotAgent(str(ck), device="cpu", brake_hold=True)
+    agent.reset()
+    rgb = np.zeros((160, 320, 3), np.uint8)
+    for _ in range(4):
+        action, p = agent.act(rgb, 1, (20.0, 0.0), 3.0, 0.1)
+    assert len(agent.frames) == 3 and np.isfinite(action).all() and isinstance(p["target_speed"], float)

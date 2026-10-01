@@ -61,11 +61,11 @@ class KeiPilotAgent:
             self.hold.reset()
         self.frames = None
 
-    @torch.no_grad()
     def _tensor(self, bgr):
         img = torch.from_numpy(np.ascontiguousarray(bgr[:, :, ::-1].transpose(2, 0, 1)))[None].to(self.device)
         return img.contiguous(memory_format=torch.channels_last)
 
+    @torch.no_grad()
     def plan(self, rgb_bgr, command, target_point, with_seg=False, speed=None, prev_bgr=None):
         """prev_bgr: for history models, the frame `history_dt` s earlier (None: not available yet)."""
         img = self._tensor(rgb_bgr)
