@@ -193,6 +193,8 @@ def test_red_hold_blocks_creeping():
     from keipilot.agent import RedHold
 
     h = RedHold()
-    assert h(0.6, 0.3, np.array([0.9, 0.05, 0.03, 0.02])) == 0.0
-    assert h(0.6, 0.3, np.array([0.3, 0.1, 0.5, 0.1])) == 0.6
-    assert h(5.0, 6.0, np.array([0.9, 0.05, 0.03, 0.02])) == 5.0
+    red = np.array([0.9, 0.05, 0.03, 0.02])
+    assert h(0.6, 0.3, red) == 0.0                                # creeping at the line on red: held
+    assert h(0.6, 0.3, np.array([0.3, 0.1, 0.5, 0.1])) == 0.6     # not sure it is red: untouched
+    assert h(5.0, 6.0, red) == 5.0                                # moving: untouched
+    assert h(8.0, 0.0, red) == 8.0                                # standing far from the light: may pull up

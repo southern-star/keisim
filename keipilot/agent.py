@@ -47,14 +47,16 @@ class BrakeHold:
 
 
 class RedHold:
-    """Safety layer: while the model's own light head is confident the light ahead is red or yellow (`p` or more)
-    and the car is (nearly) standing, the target speed is held at zero, so it cannot creep over the line."""
+    """Safety layer against creeping over the stop line: while the model's own light head is confident the light
+    ahead is red or yellow (`p` or more), the car is (nearly) standing and the model itself only asks for a creep
+    (target below `creep` m/s, i.e. it believes it is at the stopping point), the target is held at zero. Far from
+    the line the model asks for more than a creep, so pulling up to the line is never blocked."""
 
-    def __init__(self, p=0.8, v=1.0):
-        self.p, self.v = p, v
+    def __init__(self, p=0.8, v=1.0, creep=1.0):
+        self.p, self.v, self.creep = p, v, creep
 
     def __call__(self, target, speed, tl_probs):
-        if speed < self.v and float(tl_probs[0] + tl_probs[1]) >= self.p:
+        if speed < self.v and target < self.creep and float(tl_probs[0] + tl_probs[1]) >= self.p:
             return 0.0
         return target
 
@@ -117,7 +119,7 @@ class KeiPilotAgent:
             p["target_speed_raw"] = p["target_speed"]
         if self.hold:
             p["target_speed"] = self.hold(p["target_speed"], speed, dt)
-        if self.red_hold:
-            p["target_speed"] = self.red_hold(p["target_speed"], speed, p["tl_probs"])
+        if self.red_hold:     # judged on the model's own target, before the brake hold capped it
+            p["target_speed"] = min(p["target_speed"], self.red_hold(p["target_speed_raw"], speed, p["tl_probs"]))
         action = self.follower(p["path"], p["target_speed"], speed, dt)
         return action, p
