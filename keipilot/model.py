@@ -55,7 +55,7 @@ def _resnet18_from_local_r34():
 
 class KeiPilot(nn.Module):
     def __init__(self, n_sem=13, d=256, n_layers=3, n_heads=8, pretrained=True, img_hw=(160, 320), speed_input=False,
-                 history=False, history_dt=0.4):
+                 history=False, history_dt=0.4, history_mode="frame"):
         super().__init__()
         if pretrained:
             r, self.init_info = _resnet18_from_local_r34()
@@ -63,7 +63,10 @@ class KeiPilot(nn.Module):
             r, self.init_info = torchvision.models.resnet18(weights=None), "random init"
         # optional previous frame (early fusion: 3 more input channels). Their weights start at zero, so a
         # single-frame checkpoint loads unchanged (load_compatible); a missing frame is fed as zeros.
-        self.history, self.history_dt = history, history_dt
+        # history_mode "frame": the extra channels are the earlier frame; "diff": the change since then
+        # (current - earlier, normalised). Static things cancel and moving pedestrians / cars stand out, which a
+        # stem initialised from a single-frame model learns to use far more easily than two near-identical frames.
+        self.history, self.history_dt, self.history_mode = history, history_dt, history_mode
         if history:
             conv = nn.Conv2d(6, 64, 7, 2, 3, bias=False)
             with torch.no_grad():
@@ -130,6 +133,8 @@ class KeiPilot(nn.Module):
                 xp = torch.zeros_like(x)
             else:
                 xp = (img_prev.float() / 255.0 - self.mean) / self.std
+                if self.history_mode == "diff":
+                    xp = x - xp
                 if has_prev is not None:
                     xp = xp * has_prev.to(xp.dtype)[:, None, None, None]
             x = torch.cat([x, xp], 1)

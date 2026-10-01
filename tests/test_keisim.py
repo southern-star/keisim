@@ -146,9 +146,18 @@ def test_history_model_starts_as_single_frame_model():
 
     from keipilot.model import KeiPilot
 
+    for mode in ("frame", "diff"):
+        _check_history_start(mode)
+
+
+def _check_history_start(mode):
+    import torch
+
+    from keipilot.model import KeiPilot
+
     torch.manual_seed(0)
     base = KeiPilot(pretrained=False, speed_input=True).eval()
-    hist = KeiPilot(pretrained=False, speed_input=True, history=True).eval()
+    hist = KeiPilot(pretrained=False, speed_input=True, history=True, history_mode=mode).eval()
     assert hist.load_compatible(base.state_dict()) == []
     img = torch.randint(0, 256, (2, 3, 160, 320), dtype=torch.uint8)
     prev = torch.randint(0, 256, (2, 3, 160, 320), dtype=torch.uint8)

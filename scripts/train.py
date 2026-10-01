@@ -110,6 +110,7 @@ def main():
     ap.add_argument("--cf_weight", type=float, default=1.0, help="sampling weight of frames with light inputs")
     ap.add_argument("--history", type=float, default=0.0, help="multi-frame model: also feed the frame this many s earlier")
     ap.add_argument("--history_drop", type=float, default=0.3, help="probability of hiding the previous frame in training")
+    ap.add_argument("--history_mode", default="frame", choices=["frame", "diff"], help="feed the earlier frame or the change")
     ap.add_argument("--history_weight", type=float, default=1.0, help="sampling weight of frames with a previous frame")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
@@ -155,7 +156,7 @@ def main():
     if args.speed_input:
         model_cfg["speed_input"] = True
     if args.history:
-        model_cfg.update(history=True, history_dt=args.history)
+        model_cfg.update(history=True, history_dt=args.history, history_mode=args.history_mode)
     model = KeiPilot(pretrained=args.init is None, **model_cfg)
     print("backbone init:", model.init_info, "| model_cfg:", model_cfg, flush=True)
     if sd:
