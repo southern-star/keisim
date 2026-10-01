@@ -66,6 +66,8 @@ KeiPilot の学習データ収集とクローズドループ評価で使いま�
 - `tools/ego_server.mjs` は headless Chrome を GPU で動かし、標準入出力の JSON 行で Python（`keisim/render/keiview.py`）とやり取りします。
   - RTX 3060 では、ラベル込みで 1 フレーム約 17 ms、RGB のみで約 12 ms です。
   - 街の読み込みは約 8 秒です。
+  - `--gl auto`（既定）は、GPU で WebGL2 が使えなければ SwiftShader（CPU 描画）に自動で切り替えます。`--gl hw` / `--gl soft` で固定もできます（Python 側は `EnvConfig.keiview_gl`）。
+  - SwiftShader では 1 フレーム約 2 秒です（4 vCPU のクラウド VM で計測。並列にしてもほぼ伸びません）。動作確認やデモ動画 1 本向けです。
 - エゴモードでは信号の灯器を 1.6 倍で描きます（`?sigscale=` で変更可）。
   - 実寸（灯火 30 cm）だと、320×160 の画像では 30 m 先の灯火が 1〜2 ピクセルになり、見えないフレームが多いためです。
   - KeiSim 側の描画も同じ理由で灯火を誇張しています。

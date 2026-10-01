@@ -81,7 +81,7 @@ class KeiEnv:
         """Lazily started KeiView renderer (one headless Chrome per env)."""
         if self._keiview is None:
             from .render.keiview import KeiViewRenderer
-            self._keiview = KeiViewRenderer(self.cfg.camera, quality=self.cfg.keiview_quality)
+            self._keiview = KeiViewRenderer(self.cfg.camera, quality=self.cfg.keiview_quality, gl=self.cfg.keiview_gl)
         return self._keiview
 
     def close(self):

@@ -1,5 +1,6 @@
 """KeiView camera: the KeiSim ego camera rendered by KeiView (web/, three.js with anime cel
-shading) in headless Chrome on the GPU, driven through web/tools/ego_server.mjs.
+shading) in headless Chrome on the GPU, driven through web/tools/ego_server.mjs. Without a GPU,
+gl="auto" (default) falls back to SwiftShader on the CPU (~2 s/frame).
 
 Same contract as CameraRenderer.render(): returns (bgr uint8 HxWx3, semantic class ids HxW or
 None) for the KeiSim camera configuration, so the expert labels, the model and every script work
@@ -14,6 +15,7 @@ import json
 import math
 import os
 import subprocess
+import sys
 
 import numpy as np
 
@@ -48,7 +50,7 @@ def export_town(seed: int, out_dir: str | None = None) -> str:
 
 
 class KeiViewRenderer:
-    def __init__(self, cam_cfg, quality="medium", gl="hw", node="node", max_dist=160.0, log_path=None):
+    def __init__(self, cam_cfg, quality="medium", gl="auto", node="node", max_dist=160.0, log_path=None):
         self.cfg = cam_cfg
         self.W, self.H = cam_cfg.width, cam_cfg.height
         hfov = math.radians(cam_cfg.fov_deg)
@@ -66,6 +68,9 @@ class KeiViewRenderer:
         hello = self._read()
         if not hello.get("ok"):
             raise RuntimeError(f"KeiView server failed: {hello}")
+        self.gl, self.gpu = hello.get("gl", gl), hello.get("gpu")       # mode actually used ("auto" resolves to hw/soft)
+        if self.gl == "soft":
+            print(f"KeiView: software rendering (SwiftShader, no GPU found), about 2 s/frame: {self.gpu}", file=sys.stderr)
         atexit.register(self.close)
 
     # ------------------------------------------------------------------ protocol
