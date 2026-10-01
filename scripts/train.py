@@ -54,9 +54,9 @@ def evaluate(model, loader, device):
         b = {k: v.to(device, non_blocking=True) for k, v in b.items()}
         img = b["img"].contiguous(memory_format=torch.channels_last)
         with torch.autocast("cuda", dtype=torch.bfloat16):
-            out = model(img, b["cmd"], b["tp"], speed=b["v"])
+            out = model(img, b["cmd"], b["tp"], speed=b["v"], img_prev=b["img_prev"], has_prev=b["has_prev"])
             if model.speed_input:
-                blind = model(img, b["cmd"], b["tp"], with_seg=False)
+                blind = model(img, b["cmd"], b["tp"], with_seg=False, img_prev=b["img_prev"], has_prev=b["has_prev"])
         _, logs = compute_loss(model, out, b)
         bs = b["img"].shape[0]
         for k, v in logs.items():
@@ -108,6 +108,9 @@ def main():
     ap.add_argument("--cf_prob", type=float, default=0.0,
                     help="probability of relabelling a frame for a random ego speed (needs recorded light inputs)")
     ap.add_argument("--cf_weight", type=float, default=1.0, help="sampling weight of frames with light inputs")
+    ap.add_argument("--history", type=float, default=0.0, help="multi-frame model: also feed the frame this many s earlier")
+    ap.add_argument("--history_drop", type=float, default=0.3, help="probability of hiding the previous frame in training")
+    ap.add_argument("--history_weight", type=float, default=1.0, help="sampling weight of frames with a previous frame")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
     torch.manual_seed(args.seed)
@@ -125,12 +128,15 @@ def main():
     print(f"{N} frames from {len(files)} shards, {len(eps)} episodes; train {len(tr_idx)} / val {len(va_idx)}", flush=True)
 
     ds_tr = DrivingDataset(data, tr_idx, train=True, cf_prob=args.cf_prob if args.speed_input else 0.0,
-                           speed_drop=args.speed_drop if args.speed_input else 0.0)
+                           speed_drop=args.speed_drop if args.speed_input else 0.0, history_drop=args.history_drop)
     if args.speed_input:
         print(f"frames with light-decision inputs (counterfactual speeds): {int(data['cf_ok'][tr_idx].sum())}", flush=True)
     ds_va = DrivingDataset(data, va_idx, train=False)
     w = sample_weights(data, args.dagger_weight, args.kv_weight)
     w[data["cf_ok"]] *= args.cf_weight
+    has_prev = np.diff(data["jpg_prev_off"]) > 0
+    w[has_prev] *= args.history_weight
+    print(f"frames with a previous frame: {int(has_prev.sum())}", flush=True)
     # yellow-light frames whose label follows an older yellow rule and cannot be relabelled
     stale = (data["tl"] == 1) & ~data["cf_ok"] & (data["label_version"] < LABEL_VERSION)
     w[stale] = 0.0
@@ -148,11 +154,12 @@ def main():
     model_cfg = dict(sd.get("model_cfg", {})) if sd else {}
     if args.speed_input:
         model_cfg["speed_input"] = True
+    if args.history:
+        model_cfg.update(history=True, history_dt=args.history)
     model = KeiPilot(pretrained=args.init is None, **model_cfg)
     print("backbone init:", model.init_info, "| model_cfg:", model_cfg, flush=True)
     if sd:
-        missing, unexpected = model.load_state_dict(sd["model"], strict=False)
-        assert not unexpected and all(k.startswith("speed_") for k in missing), (missing, unexpected)
+        missing = model.load_compatible(sd["model"])
         print("initialised from", args.init, f"(new: {missing})" if missing else "")
     model = model.to(device).to(memory_format=torch.channels_last)
     n_params = sum(p.numel() for p in model.parameters())
@@ -185,7 +192,8 @@ def main():
             b = {k: v.to(device, non_blocking=True) for k, v in b.items()}
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 out = model(b["img"].contiguous(memory_format=torch.channels_last), b["cmd"], b["tp"],
-                            speed=b["v"], speed_known=b["v_known"] if model.speed_input else None)
+                            speed=b["v"], speed_known=b["v_known"] if model.speed_input else None,
+                            img_prev=b["img_prev"], has_prev=b["has_prev"])
             loss, logs = compute_loss(model, out, b)
             opt.zero_grad(set_to_none=True)
             loss.backward()

@@ -66,20 +66,29 @@ class Perturbation:
         return a
 
 
-def record(env, writer, rng, v_prob, weather_id, virtual_prob):
+def random_offset(rng, virtual_prob):
+    """Virtual camera displacement (lateral m, yaw rad, pitch) or None."""
+    if rng.random() < virtual_prob:
+        return (float(rng.uniform(-1.2, 1.2)), float(np.radians(rng.uniform(-9, 9))), 0.0)
+    return None
+
+
+def record(env, writer, rng, v_prob, weather_id, virtual_prob, offset=False, rgb=None, seg=None, prev=None):
+    """offset=False: draw a random virtual camera for this frame; else use the given one (None = real camera).
+    rgb/seg: an already rendered frame for that camera; prev: its frame `--history` s earlier."""
     plan = env.plan
     e = env.world.ego
-    offset = None
-    if rng.random() < virtual_prob:
-        offset = (float(rng.uniform(-1.2, 1.2)), float(np.radians(rng.uniform(-9, 9))), 0.0)
-    rgb, seg = env.render_camera(offset=offset)
+    if offset is False:
+        offset = random_offset(rng, virtual_prob)
+    if rgb is None:
+        rgb, seg = env.render_camera(offset=offset)
     if offset is None:
         path, tp = plan["path"], env.target_point()
     else:
         vp = env.virtual_pose(offset)
         path = env.expert.path_local(env.route, env.s_ego, vp)
         tp = env.target_point(vp)
-    writer.add(rgb, seg, cmd=np.int8(env.command()), tp=np.asarray(tp, np.float32),
+    writer.add(rgb, seg, prev=prev, cmd=np.int8(env.command()), tp=np.asarray(tp, np.float32),
                path=np.asarray(path, np.float32), speed=np.float32(plan["target_speed"]),
                tl=np.int8(plan["tl_state"]), v=np.float32(e.v), reason=np.int8(REASONS.get(plan["reason"], 0)),
                town=np.int32(env.town_seed), episode=np.int64(env.episode_seed), step=np.int32(env._step),
@@ -129,6 +138,11 @@ def worker(wid, args, quota, out_dir, counter):
             agent.reset()
         done = False
         dt = cfg.dt * cfg.action_repeat
+        # multi-frame data: every eligible step is rendered (same virtual camera for `--segment` s) and kept,
+        # so a recorded frame can carry the frame `--history` s before it from the same camera
+        hist = int(round(args.history / dt))
+        assert hist % args.every == 0, "--history must be a multiple of the recording interval"
+        frames, seg_off, seg_left = {}, None, 0
         while not done and n < quota:
             a_exp = env.expert_action()
             if agent is None:
@@ -145,7 +159,19 @@ def worker(wid, args, quota, out_dir, counter):
                     beta_on = beta_t > 0
             if env._step % args.every == 0:
                 stopped = env.world.ego.v < 0.2 and env.plan["target_speed"] == 0.0
-                if not stopped or rng.random() < args.stopped_keep:
+                keep = not stopped or rng.random() < args.stopped_keep
+                if hist:
+                    if seg_left <= 0:                               # new camera segment: history restarts
+                        seg_off, seg_left, frames = random_offset(rng, args.virtual_prob), int(args.segment / dt), {}
+                    seg_left -= args.every
+                    rgb, seg = env.render_camera(offset=seg_off, want_seg=keep)
+                    frames[env._step] = rgb
+                    frames.pop(env._step - hist - args.every, None)
+                    if keep:
+                        record(env, writer, rng, None, weather_id, args.virtual_prob, offset=seg_off, rgb=rgb, seg=seg,
+                               prev=frames.get(env._step - hist))
+                        n += 1
+                elif keep:
                     record(env, writer, rng, None, weather_id, args.virtual_prob)
                     n += 1
             _, _, done, info = env.step(a)
@@ -182,9 +208,11 @@ def main():
     ap.add_argument("--ped_spacing", type=float, nargs=2, default=None)
     ap.add_argument("--renderer", default="keisim", choices=["keisim", "keiview"], help="camera renderer")
     ap.add_argument("--episodes_per_town", type=int, default=1, help="episodes before switching town")
+    ap.add_argument("--history", type=float, default=0.0, help="also store the frame this many s earlier (multi-frame)")
+    ap.add_argument("--segment", type=float, default=3.0, help="with --history: seconds a virtual camera is kept")
     args = ap.parse_args()
     quota = [args.frames // args.workers + (1 if i < args.frames % args.workers else 0) for i in range(args.workers)]
-    write_meta(args.out, label_version=LABEL_VERSION, mode=args.mode, ckpt=args.ckpt, frames=args.frames,
+    write_meta(args.out, label_version=LABEL_VERSION, mode=args.mode, ckpt=args.ckpt, frames=args.frames, history=args.history,
                renderer=args.renderer)
     ctx = mp.get_context("spawn" if args.mode == "dagger" else "fork")
     counter = ctx.Value("i", 0)

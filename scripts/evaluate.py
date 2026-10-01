@@ -69,7 +69,7 @@ def run_route(job):
         global _AGENT
         if "_AGENT" not in globals():
             from keipilot.agent import KeiPilotAgent
-            _AGENT = KeiPilotAgent(args["ckpt"])
+            _AGENT = KeiPilotAgent(args["ckpt"], brake_hold=args.get("brake_hold", False))
         agent = _AGENT
         agent.reset()
     obs = env.reset(town_seed=town, episode_seed=ep, route_length=args["route_length"], weather=args["weather"])
@@ -211,6 +211,7 @@ def main():
     ap.add_argument("--dense", action="store_true", help="stress test: dense traffic and many crossing pedestrians")
     ap.add_argument("--renderer", default="keisim", choices=["keisim", "keiview"], help="camera renderer")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--brake_hold", action="store_true", help="safety layer: no throttle burst right after firm braking")
     args = ap.parse_args()
     dflt = {"route_length": 600.0, "max_steps": 4000, **SUITE_DEFAULTS.get(args.suite, {})}
     for k, v in dflt.items():
@@ -224,13 +225,15 @@ def main():
         tag = os.path.basename(os.path.dirname(args.ckpt))      # runs/keipilot_dagger/last.pt -> keipilot_dagger
     else:
         tag = os.path.splitext(os.path.basename(args.ckpt))[0]  # runs/keipilot.pt -> keipilot
+    if args.brake_hold:
+        tag += "_hold"
     jobs = SUITES[args.suite]
     suffix = ("_dense" if args.dense else "") + ("" if args.weather == "random" else f"_{args.weather}") + \
         ("_keiview" if args.renderer == "keiview" else "")
     fail_dir = os.path.join("runs", "failures", f"{tag}_{args.suite}{suffix}")
     a = {"agent": args.agent, "ckpt": args.ckpt, "route_length": args.route_length, "weather": args.weather,
          "max_steps": args.max_steps, "videos": args.videos, "video_dir": args.video_dir, "tag": tag,
-         "dense": args.dense, "renderer": args.renderer, "fail_dir": fail_dir}
+         "dense": args.dense, "renderer": args.renderer, "fail_dir": fail_dir, "brake_hold": args.brake_hold}
     t0 = time.time()
     ctx = mp.get_context("spawn")
     with ctx.Pool(args.workers) as pool:

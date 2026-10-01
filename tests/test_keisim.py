@@ -123,3 +123,39 @@ def test_speed_input_starts_as_camera_only_model():
         c = spd(img, cmd, tp, with_seg=False)
     for k in ("path", "speed_logits", "tl_logits"):
         assert torch.allclose(a[k], b[k], atol=1e-5) and torch.allclose(a[k], c[k], atol=1e-5)
+
+
+def test_brake_hold_blocks_throttle_burst():
+    """A model that loses a pedestrian for a few frames mid-stop must keep braking; braking harder is never
+    limited, and the hold ends on its own."""
+    from keipilot.agent import BrakeHold
+
+    h = BrakeHold()
+    assert h(3.75, 7.5, 0.1) == 3.75                       # firm braking starts a hold
+    burst = [h(9.98, 7.0, 0.1) for _ in range(5)]          # pedestrian lost: the model asks for 10 m/s
+    assert max(burst) < 4.1                                # target rises only slowly -> still braking
+    assert h(0.0, 6.0, 0.1) == 0.0                         # braking harder is never limited
+    out = [h(8.0, 0.0, 0.1) for _ in range(20)]            # pedestrian gone, standing: hold runs out
+    assert out[-1] == 8.0 and out[0] < 1.0
+
+
+def test_history_model_starts_as_single_frame_model():
+    """A single-frame checkpoint loaded into a history model must behave exactly as before, with or without a
+    previous frame."""
+    import torch
+
+    from keipilot.model import KeiPilot
+
+    torch.manual_seed(0)
+    base = KeiPilot(pretrained=False, speed_input=True).eval()
+    hist = KeiPilot(pretrained=False, speed_input=True, history=True).eval()
+    assert hist.load_compatible(base.state_dict()) == []
+    img = torch.randint(0, 256, (2, 3, 160, 320), dtype=torch.uint8)
+    prev = torch.randint(0, 256, (2, 3, 160, 320), dtype=torch.uint8)
+    cmd, tp, v = torch.tensor([0, 1]), torch.tensor([[20.0, 3.0], [15.0, -2.0]]), torch.tensor([0.0, 8.0])
+    with torch.no_grad():
+        a = base(img, cmd, tp, with_seg=False, speed=v)
+        b = hist(img, cmd, tp, with_seg=False, speed=v, img_prev=prev, has_prev=torch.tensor([True, False]))
+        c = hist(img, cmd, tp, with_seg=False, speed=v)
+    for k in ("path", "speed_logits", "tl_logits"):
+        assert torch.allclose(a[k], b[k], atol=1e-5) and torch.allclose(a[k], c[k], atol=1e-5)
