@@ -393,6 +393,7 @@ KeiSim の画像だけで学習した KeiPilot を KeiView の画像で走らせ
   - 仕組みは [web/README.md](web/README.md) の「エゴモード」の節にあります。
 - 必要なもの: Node.js 18 以上、Chrome または Chromium、`cd web && npm install`。
   - GPU があると実用的な速度になります。RTX 3060 で 1 フレーム約 17 ms、6 並列の収集で約 90 fps です。
+  - GPU がない環境では自動で SwiftShader（CPU 描画）に切り替わります。1 フレーム約 2 秒なので、デモ動画 1 本（約 80 分）くらいまでが現実的です。
   - 下の手順は RTX 3060 で合計約 2 時間です（収集 22 分 → 学習 50 分 → DAgger の収集 26 分 → 学習 20 分）。
 - 学習は KeiSim の既存データと混ぜ、KeiSim で学習したモデルから追加学習します。
   - 1 バッチのうち 55〜60% が KeiView の画像です。
