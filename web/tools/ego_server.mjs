@@ -82,7 +82,8 @@ page.on('pageerror', (e) => log(`[pageerror] ${e.message}`));
 let current = null;
 async function loadTown(town) {
   const t0 = Date.now();
-  const q = new URLSearchParams({ shot: '1', ego: '1', town: String(town), w: String(W), h: String(H), q: Q, tdir: TDIR });
+  const q = new URLSearchParams({ shot: '1', ego: '1', town: String(town), w: String(W), h: String(H), q: Q, tdir: TDIR,
+    ...(args.sigscale ? { sigscale: args.sigscale } : {}) });
   await page.goto(`http://127.0.0.1:${port}/index.html?${q}`, { waitUntil: 'load', timeout: 180000 });
   await page.waitForFunction('window.__ready === true', { timeout: 900000, polling: 100 });
   const info = await page.evaluate(() => ({ errors: window.__errors || [], stats: window.__stats,

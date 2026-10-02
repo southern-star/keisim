@@ -16,7 +16,7 @@ from .geometry import world_to_local
 from .traffic import corridor_gaps, vehicle_circles
 
 PATH_S = np.arange(1, 11) * 2.0          # label waypoints every 2 m up to 20 m
-LABEL_VERSION = 3                        # 3: yellow = stop if the ego can stop comfortably (Japanese traffic law)
+LABEL_VERSION = 4                        # 3: yellow per traffic law; 4: at yellow, stop whenever the ego still can
 TL_MARGIN = 2.5                          # stop this far before the stop line (keeps it in view)
 
 
@@ -29,21 +29,18 @@ def stop_profile(x, b=2.5):
     return min(math.sqrt(2 * b * x), 0.8 * x + 0.2)
 
 
-YELLOW_DECEL = 3.5                       # m/s^2: "can stop safely" at yellow (NPCs use the same rule)
-
-
 def light_stop(v, d, st, t_rem, exit_blocked):
     """The expert's decision at the next stop line, `d` >= 0 metres ahead of the front bumper, at ego speed `v`:
     the reason it stops there, or None. This is the only place where the ego speed enters the plan.
-    Red: stop unless even a hard stop (6 m/s^2) is impossible. Yellow, as in Japanese traffic law: stop at the
-    line unless the ego is already too close to stop safely (YELLOW_DECEL). The remaining yellow time `t_rem`
-    is not used: a camera + speed model could not see it, and the law does not ask whether the junction clears
-    (label version 2 went through whenever it cleared in time)."""
+    Red and yellow: stop unless even a hard stop (6 m/s^2) is impossible. Japanese traffic law lets a car go on at
+    yellow only when it is too close to stop safely. Label version 3 read "safely" as a comfortable 3.5 m/s^2, but
+    that per-frame rule could flip to "go" halfway through a stop when the ego braked a little late (it then
+    reached the line just after red). With the hard-stop criterion the decision does not flip while the ego brakes,
+    and "go" is left only when a stop is physically impossible, i.e. the line is under a second away.
+    The remaining yellow time `t_rem` is not used: a camera + speed model could not see it."""
     can_stop = d > v * v / (2 * 6.0) + 0.3
-    if st == TL_RED:
+    if st in (TL_RED, TL_YELLOW):
         stop = can_stop
-    elif st == TL_YELLOW:
-        stop = d > v * v / (2 * YELLOW_DECEL) + 0.3
     else:
         stop = False
     if stop:

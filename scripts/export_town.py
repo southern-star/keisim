@@ -276,8 +276,8 @@ def export(seed: int) -> dict:
     roads = [{"id": rd.id, "a": rd.a, "b": rd.b, "length": round(rd.length, 2),
               "center": r2(simplify(rd.center, LINE_EPS, False))} for rd in town.roads]
     junctions = [{"id": J.id, "pos": r2(J.pos), "radius": round(J.radius, 2), "arms": len(J.arms),
-                  "signalized": bool(J.signalized), "phases": J.phases, "green": round(J.green, 3),
-                  "yellow": J.yellow, "allred": J.allred, "offset": round(J.offset, 3)}
+                  "signalized": bool(J.signalized), "phases": J.phases, "green": round(J.green, 9),
+                  "yellow": J.yellow, "allred": J.allred, "offset": round(J.offset, 9)}
                  for J in town.junctions]
     signals = [{"junction": sh["junction"], "phase": sh["phase"], "head": r2(sh["head"]),
                 "pole": r2(sh["pole"]), "yaw": round(float(sh["yaw"]), 4), "z": sh["z"]}

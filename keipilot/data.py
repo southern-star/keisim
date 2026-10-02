@@ -33,15 +33,19 @@ class ShardWriter:
         self._reset()
 
     def _reset(self):
-        self.jpg, self.seg = [], []
+        self.jpg, self.seg, self.prev = [], [], []
         self.lab = {k: [] for k in LABEL_KEYS}
 
-    def add(self, rgb, seg, **labels):
+    def add(self, rgb, seg, prev=None, **labels):
+        """prev: the same camera's frame from `history` seconds earlier (multi-frame models), None if unknown."""
         ok, j = cv2.imencode(".jpg", rgb, [cv2.IMWRITE_JPEG_QUALITY, self.q])
         seg_small = cv2.resize(seg, (seg.shape[1] // 2, seg.shape[0] // 2), interpolation=cv2.INTER_NEAREST)
         ok2, s = cv2.imencode(".png", seg_small, [cv2.IMWRITE_PNG_COMPRESSION, 3])
         self.jpg.append(j.reshape(-1))
         self.seg.append(s.reshape(-1))
+        if prev is not None:
+            prev = cv2.imencode(".jpg", prev, [cv2.IMWRITE_JPEG_QUALITY, self.q])[1].reshape(-1)
+        self.prev.append(np.zeros(0, np.uint8) if prev is None else prev)
         for k in LABEL_KEYS:
             self.lab[k].append(labels[k])
         for k in CF_KEYS:
@@ -56,6 +60,9 @@ class ShardWriter:
         jo = np.concatenate([[0], np.cumsum([len(x) for x in self.jpg])]).astype(np.int64)
         so = np.concatenate([[0], np.cumsum([len(x) for x in self.seg])]).astype(np.int64)
         arrs = {k: np.asarray(v) for k, v in self.lab.items()}
+        if any(len(x) for x in self.prev):
+            arrs["jpg_prev"] = np.concatenate(self.prev)
+            arrs["jpg_prev_off"] = np.concatenate([[0], np.cumsum([len(x) for x in self.prev])]).astype(np.int64)
         path = os.path.join(self.out_dir, f"{self.prefix}_{self.k:04d}.npz")
         np.savez(path, jpg=np.concatenate(self.jpg), jpg_off=jo, seg=np.concatenate(self.seg), seg_off=so, **arrs)
         self.total += len(self.jpg)
@@ -100,6 +107,7 @@ def load_shards(dirs):
     if not files:
         raise FileNotFoundError(f"no shards in {dirs}")
     jpg, jo, seg, so, src = [], [], [], [], []
+    pj, po, pbase = [], [], 0
     lab = {k: [] for k in LABEL_KEYS + CF_KEYS}
     cf_ok = []
     jbase = sbase = 0
@@ -112,6 +120,13 @@ def load_shards(dirs):
         so.append(z["seg_off"][:-1] + sbase)
         jbase += len(z["jpg"])
         sbase += len(z["seg"])
+        n_frames = len(z["jpg_off"]) - 1
+        if "jpg_prev" in z:
+            pj.append(z["jpg_prev"])
+            po.append(z["jpg_prev_off"][:-1] + pbase)
+            pbase += len(z["jpg_prev"])
+        else:                                        # no history recorded: zero-length entries
+            po.append(np.full(n_frames, pbase, np.int64))
         for k in LABEL_KEYS:
             lab[k].append(z[k])
         n_f = len(z["jpg_off"]) - 1
@@ -122,6 +137,8 @@ def load_shards(dirs):
     data = {
         "jpg": np.concatenate(jpg), "jpg_off": np.concatenate(jo + [np.array([jbase])]),
         "seg": np.concatenate(seg), "seg_off": np.concatenate(so + [np.array([sbase])]),
+        "jpg_prev": np.concatenate(pj) if pj else np.zeros(0, np.uint8),
+        "jpg_prev_off": np.concatenate(po + [np.array([pbase])]),
     }
     for k in LABEL_KEYS + CF_KEYS:
         data[k] = np.concatenate(lab[k])
@@ -144,30 +161,34 @@ class DrivingDataset(Dataset):
     False) from any other training frame, against the inertia problem. A counterfactual speed is always shown,
     since its label depends on it."""
 
-    def __init__(self, data, indices, train=True, cf_prob=0.0, speed_drop=0.0, cf_vmax=11.5):
+    def __init__(self, data, indices, train=True, cf_prob=0.0, speed_drop=0.0, cf_vmax=11.5, history_drop=0.0):
         self.d = data
         self.idx = np.asarray(indices)
         self.train = train
         self.cf_prob, self.speed_drop, self.cf_vmax = cf_prob, speed_drop, cf_vmax
+        self.history_drop = history_drop
 
     def __len__(self):
         return len(self.idx)
 
-    def _augment(self, img, rng):
-        img = img.astype(np.float32)
-        a = rng.uniform(0.75, 1.25)
-        b = rng.uniform(-22, 22)
-        gain = rng.uniform(0.9, 1.1, 3).astype(np.float32)
-        img = img * a * gain + b
-        # saturation jitter
-        if rng.random() < 0.5:
+    @staticmethod
+    def _aug_params(rng):
+        return {"a": rng.uniform(0.75, 1.25), "b": rng.uniform(-22, 22), "gain": rng.uniform(0.9, 1.1, 3).astype(np.float32),
+                "sat": rng.uniform(0.6, 1.3) if rng.random() < 0.5 else None,
+                "blur": rng.uniform(0.4, 1.0) if rng.random() < 0.25 else None,
+                "noise": rng.uniform(1, 6) if rng.random() < 0.5 else None}
+
+    def _augment(self, img, rng, p=None):
+        """Photometric augmentation; pass the same `p` to give two frames of one sample the same look."""
+        p = p or self._aug_params(rng)
+        img = img.astype(np.float32) * p["a"] * p["gain"] + p["b"]
+        if p["sat"] is not None:                         # saturation jitter
             g = img.mean(2, keepdims=True)
-            s = rng.uniform(0.6, 1.3)
-            img = g + (img - g) * s
-        if rng.random() < 0.25:
-            img = cv2.GaussianBlur(img, (0, 0), rng.uniform(0.4, 1.0))
-        if rng.random() < 0.5:
-            img = img + rng.normal(0, rng.uniform(1, 6), img.shape).astype(np.float32)
+            img = g + (img - g) * p["sat"]
+        if p["blur"] is not None:
+            img = cv2.GaussianBlur(img, (0, 0), p["blur"])
+        if p["noise"] is not None:
+            img = img + rng.normal(0, p["noise"], img.shape).astype(np.float32)
         return np.clip(img, 0, 255).astype(np.uint8)
 
     def __getitem__(self, k):
@@ -177,9 +198,14 @@ class DrivingDataset(Dataset):
         seg = cv2.imdecode(d["seg"][d["seg_off"][i]:d["seg_off"][i + 1]], cv2.IMREAD_UNCHANGED)
         v, speed, known = float(d["v"][i]), float(d["speed"][i]), True
         cf = bool(d["cf_ok"][i])
+        a, b = d["jpg_prev_off"][i], d["jpg_prev_off"][i + 1]
+        prev = cv2.imdecode(d["jpg_prev"][a:b], cv2.IMREAD_COLOR) if b > a else None
         if self.train:
             rng = np.random.default_rng()
-            img = self._augment(img, rng)
+            p = self._aug_params(rng)
+            img = self._augment(img, rng, p)
+            if prev is not None:
+                prev = None if rng.random() < self.history_drop else self._augment(prev, rng, p)
             if cf and self.cf_prob > 0 and rng.random() < self.cf_prob:
                 v = float(rng.uniform(0.0, self.cf_vmax))
             elif rng.random() < self.speed_drop:
@@ -187,6 +213,8 @@ class DrivingDataset(Dataset):
         if cf:          # label from the recorded decision inputs with the current rule (and the chosen speed)
             speed = target_for_speed(v, {k: d[k][i] for k in CF_KEYS})
         img = img[:, :, ::-1].transpose(2, 0, 1).copy()  # BGR -> RGB, CHW, uint8
+        has_prev = prev is not None
+        prev = prev[:, :, ::-1].transpose(2, 0, 1).copy() if has_prev else np.zeros_like(img)
         return {
             "img": torch.from_numpy(img),
             "seg": torch.from_numpy(seg.astype(np.int64)),
@@ -197,4 +225,6 @@ class DrivingDataset(Dataset):
             "tl": torch.tensor(int(d["tl"][i])),
             "v": torch.tensor(v, dtype=torch.float32),                     # ego speed (input of speed models)
             "v_known": torch.tensor(known),
+            "img_prev": torch.from_numpy(prev),                            # frame `history` s earlier (or zeros)
+            "has_prev": torch.tensor(has_prev),
         }

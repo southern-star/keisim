@@ -64,6 +64,8 @@ class KeiViewRenderer:
         self._log = open(log_path, "ab") if log_path else subprocess.DEVNULL
         cmd = [node, "tools/ego_server.mjs", "--w", str(self.W), "--h", str(self.H), "--q", quality, "--gl", gl,
                "--tdir", TOWN_DIR]
+        if os.environ.get("KEIVIEW_SIGSCALE"):         # experiments: signal-head scale in ego mode (default 1.6)
+            cmd += ["--sigscale", os.environ["KEIVIEW_SIGSCALE"]]
         self.proc = subprocess.Popen(cmd, cwd=WEB_DIR, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self._log)
         hello = self._read()
         if not hello.get("ok"):

@@ -81,14 +81,15 @@ def test_counterfactual_speed_labels_match_expert():
     assert "red_light" in seen
 
 
-def test_yellow_light_follows_traffic_law():
-    """Yellow: stop at the line if the ego can still stop safely (3.5 m/s^2), whatever the remaining time; red:
-    stop unless even a hard stop (6 m/s^2) is impossible."""
+def test_light_rules():
+    """Red and yellow: stop at the line unless even a hard stop (6 m/s^2) is impossible, whatever the remaining
+    yellow time; green: go (unless the junction exit is full)."""
     from keisim.config import TL_GREEN, TL_RED, TL_YELLOW
     from keisim.expert import light_stop
 
     assert light_stop(5.0, 10.0, TL_YELLOW, 2.4, False) == "red_light"      # 3.9 m needed: stop, time left or not
-    assert light_stop(10.0, 8.0, TL_YELLOW, 0.5, False) is None             # 14.6 m needed: too close, go on
+    assert light_stop(10.0, 8.0, TL_YELLOW, 0.5, False) is None             # 8.6 m needed: too close, go on
+    assert light_stop(10.0, 12.0, TL_YELLOW, 0.5, False) == "red_light"     # still possible -> stop (v3 went on)
     assert light_stop(10.0, 9.0, TL_RED, 0.0, False) == "red_light"         # red: 8.6 m needed at 6 m/s^2
     assert light_stop(11.0, 8.0, TL_RED, 0.0, False) is None                # 10.4 m needed: cannot stop
     assert light_stop(8.0, 6.0, TL_GREEN, 0.0, False) is None
@@ -122,3 +123,78 @@ def test_speed_input_starts_as_camera_only_model():
         c = spd(img, cmd, tp, with_seg=False)
     for k in ("path", "speed_logits", "tl_logits"):
         assert torch.allclose(a[k], b[k], atol=1e-5) and torch.allclose(a[k], c[k], atol=1e-5)
+
+
+def test_brake_hold_blocks_throttle_burst():
+    """A model that loses a pedestrian for a few frames mid-stop must keep braking; braking harder is never
+    limited, and the hold ends on its own."""
+    from keipilot.agent import BrakeHold
+
+    h = BrakeHold()
+    assert h(3.75, 7.5, 0.1) == 3.75                       # firm braking starts a hold
+    burst = [h(9.98, 7.0, 0.1) for _ in range(5)]          # pedestrian lost: the model asks for 10 m/s
+    assert max(burst) < 4.1                                # target rises only slowly -> still braking
+    assert h(0.0, 6.0, 0.1) == 0.0                         # braking harder is never limited
+    out = [h(8.0, 0.0, 0.1) for _ in range(20)]            # pedestrian gone, standing: hold runs out
+    assert out[-1] == 8.0 and out[0] < 1.0
+
+
+def test_history_model_starts_as_single_frame_model():
+    """A single-frame checkpoint loaded into a history model must behave exactly as before, with or without a
+    previous frame."""
+    import torch
+
+    from keipilot.model import KeiPilot
+
+    for mode in ("frame", "diff"):
+        _check_history_start(mode)
+
+
+def _check_history_start(mode):
+    import torch
+
+    from keipilot.model import KeiPilot
+
+    torch.manual_seed(0)
+    base = KeiPilot(pretrained=False, speed_input=True).eval()
+    hist = KeiPilot(pretrained=False, speed_input=True, history=True, history_mode=mode).eval()
+    assert hist.load_compatible(base.state_dict()) == []
+    img = torch.randint(0, 256, (2, 3, 160, 320), dtype=torch.uint8)
+    prev = torch.randint(0, 256, (2, 3, 160, 320), dtype=torch.uint8)
+    cmd, tp, v = torch.tensor([0, 1]), torch.tensor([[20.0, 3.0], [15.0, -2.0]]), torch.tensor([0.0, 8.0])
+    with torch.no_grad():
+        a = base(img, cmd, tp, with_seg=False, speed=v)
+        b = hist(img, cmd, tp, with_seg=False, speed=v, img_prev=prev, has_prev=torch.tensor([True, False]))
+        c = hist(img, cmd, tp, with_seg=False, speed=v)
+    for k in ("path", "speed_logits", "tl_logits"):
+        assert torch.allclose(a[k], b[k], atol=1e-5) and torch.allclose(a[k], c[k], atol=1e-5)
+
+
+def test_agent_drives_with_history_and_brake_hold(tmp_path):
+    """End to end through KeiPilotAgent.act (CPU): plain numbers out, frame history filled after history_dt."""
+    import torch
+
+    from keipilot.agent import KeiPilotAgent
+    from keipilot.model import KeiPilot
+
+    ck = tmp_path / "m.pt"
+    model = KeiPilot(pretrained=False, speed_input=True, history=True, history_dt=0.2)
+    torch.save({"model": model.state_dict(), "model_cfg": {"speed_input": True, "history": True, "history_dt": 0.2}}, ck)
+    agent = KeiPilotAgent(str(ck), device="cpu", brake_hold=True)
+    agent.reset()
+    rgb = np.zeros((160, 320, 3), np.uint8)
+    for _ in range(4):
+        action, p = agent.act(rgb, 1, (20.0, 0.0), 3.0, 0.1)
+    assert len(agent.frames) == 3 and np.isfinite(action).all() and isinstance(p["target_speed"], float)
+
+
+def test_red_hold_blocks_creeping():
+    """Standing with the light head sure of red/yellow: no creeping; moving, or not sure: untouched."""
+    from keipilot.agent import RedHold
+
+    h = RedHold()
+    red = np.array([0.9, 0.05, 0.03, 0.02])
+    assert h(0.6, 0.3, red) == 0.0                                # creeping at the line on red: held
+    assert h(0.6, 0.3, np.array([0.3, 0.1, 0.5, 0.1])) == 0.6     # not sure it is red: untouched
+    assert h(5.0, 6.0, red) == 5.0                                # moving: untouched
+    assert h(8.0, 0.0, red) == 8.0                                # standing far from the light: may pull up
