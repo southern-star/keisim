@@ -145,6 +145,10 @@ class CameraRenderer:
         self.f = (self.W / 2.0) / math.tan(math.radians(cfg.fov_deg) / 2.0)
         self.half_fov = math.radians(cfg.fov_deg) / 2.0
         self.side = 1.0 if town.cfg.left_hand_traffic else -1.0
+        # signal heads for lamp directivity: position and facing direction (housing +x points at the driver)
+        heads = town.signal_heads
+        self.head_pos = np.array([[*sh["head"], sh["z"]] for sh in heads], np.float64).reshape(-1, 3)
+        self.head_nrm = np.array([[math.cos(sh["yaw"]), math.sin(sh["yaw"]), 0.0] for sh in heads], np.float64).reshape(-1, 3)
 
     # ------------------------------------------------------------------ pose
     def camera_pose(self, x, y, yaw, offset=None):
@@ -370,11 +374,16 @@ class CameraRenderer:
             slot = lamp[lm] % 3
             state = scene.lamp_state[head]
             lit = ((state == 2) & (slot == 0)) | ((state == 1) & (slot == 1)) | ((state == 0) & (slot == 2))
-            cl = np.where(lit[:, None], np.stack([LAMP_COLORS_ON[int(s)] for s in state]) if len(state) else LAMP_OFF,
-                          LAMP_OFF[None])
+            # directivity: full brightness within 30 deg of the head's axis, unlit look beyond 60 deg; labelled
+            # lit only within 45 deg (the same rule as KeiView's web/src/world/signals.js)
+            to_cam = C[None] - self.head_pos[head]
+            cosv = (to_cam * self.head_nrm[head]).sum(1) / np.maximum(np.linalg.norm(to_cam, axis=1), 1e-6)
+            f = np.clip((cosv - math.cos(math.pi / 3)) / (math.cos(math.pi / 6) - math.cos(math.pi / 3)), 0.0, 1.0)
+            on = np.stack([LAMP_COLORS_ON[int(s)] for s in state]) if len(state) else LAMP_OFF[None]
+            cl = np.where(lit[:, None], LAMP_OFF[None] + f[:, None] * (on - LAMP_OFF[None]), LAMP_OFF[None])
             color[0][lm] = cl
-            sm = np.where(lit, np.array([SEM["tl_red"], SEM["tl_yellow"], SEM["tl_green"]])[np.clip(state, 0, 2)],
-                          SEM["pole"])
+            sm = np.where(lit & (cosv >= math.cos(math.pi / 4)),
+                          np.array([SEM["tl_red"], SEM["tl_yellow"], SEM["tl_green"]])[np.clip(state, 0, 2)], SEM["pole"])
             sem[0][lm] = sm.astype(np.uint8)
         shadows = []
         for dyn in self._dynamic_faces(scene, C, fwd_xy, max_dist):

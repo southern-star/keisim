@@ -33,6 +33,7 @@ def main():
     ap.add_argument("--out", default="runs/demo.mp4")
     ap.add_argument("--show", action="store_true", help="also show a live OpenCV window")
     ap.add_argument("--renderer", default="keisim", choices=["keisim", "keiview"], help="camera renderer")
+    ap.add_argument("--no_safety", action="store_true", help="model: without the BrakeHold / RedHold safety layers")
     args = ap.parse_args()
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
 
@@ -43,7 +44,7 @@ def main():
     agent = None
     if args.agent == "model":
         from keipilot.agent import KeiPilotAgent
-        agent = KeiPilotAgent(args.ckpt)
+        agent = KeiPilotAgent(args.ckpt, brake_hold=not args.no_safety, red_hold=not args.no_safety)
         agent.reset()
     vw = VideoWriter(args.out, fps=10)
     cam = env.assets.camera

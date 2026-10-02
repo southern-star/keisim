@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>KeiView</title>
+<link rel="icon" href="data:,">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&family=Noto+Serif+JP:wght@700&family=Zen+Maru+Gothic:wght@500;700;900&family=Yusei+Magic&family=Yuji+Syuku&display=swap">
@@ -17,6 +18,31 @@
   }
   html, body { height: 100%; margin: 0; background: #cfdcec; color: var(--ink); font-family: var(--sans); overflow: hidden; }
   canvas#scene { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; outline: none; }
+  /* ?pilot=1 (src/pilot.js): 2:1 car camera, the model's path, HUD and its segmentation */
+  body.pilot { background: #1d2230; }
+  body.pilot canvas#scene { right: auto; bottom: auto; }
+  #pilot-overlay { position: fixed; pointer-events: none; z-index: 3; }
+  #pilot-hud { position: fixed; left: 12px; top: 12px; z-index: 4; padding: 10px 14px; border-radius: 8px; background: rgba(20, 22, 34, .72);
+    color: #fff; font: 500 15px/1.6 var(--sans); }
+  #pilot-hud b { font-weight: 700; } #pilot-hud .ep { color: #aab; font-size: 12px; }
+  #pilot-hud .keys { margin-top: 4px; color: #aab; font-size: 12px; line-height: 1.5; }
+  #pilot-hud .msg { color: #ffc93c; font-size: 13px; min-height: 1.2em; }
+  #pilot-hud .btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  #pilot-hud button { font: 600 13px/1 var(--sans); color: #fff; background: rgba(255, 255, 255, .12); border: 1px solid rgba(255, 255, 255, .3);
+    border-radius: 6px; padding: 8px 10px; cursor: pointer; touch-action: manipulation; }
+  #pilot-hud button:hover { background: rgba(255, 255, 255, .22); }
+  #pilot-hud button.on { background: #c23aa6; border-color: #ff4fd8; }
+  body.pilot #help, body.pilot #cross { display: none; }
+  #pilot-side { position: fixed; right: 12px; bottom: 12px; z-index: 4; display: flex; gap: 10px; align-items: flex-end; }
+  #pilot-side figure { margin: 0; }
+  #pilot-side canvas { display: block; width: 220px; height: 110px; image-rendering: pixelated; border-radius: 6px;
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, .6); }
+  #pilot-side figcaption { margin-top: 4px; color: #c9cbe0; font: 500 11px/1.4 var(--sans); text-align: center; }
+  @media (max-width: 760px) {
+    #pilot-hud { font-size: 13px; padding: 8px 10px; }
+    #pilot-hud .keys { display: none; }
+    #pilot-side canvas { width: 128px; height: 64px; }
+  }
 
   #intro { position: fixed; inset: 0; display: grid; place-items: center; padding: 16px; z-index: 5;
     background: radial-gradient(120% 90% at 70% 10%, #fdf1f4 0%, #e6eef8 55%, #cfdcec 100%); transition: opacity .9s ease, visibility .9s; }

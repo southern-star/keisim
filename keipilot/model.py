@@ -1,6 +1,6 @@
 """KeiPilot: a lightweight camera-only end-to-end driving model.
 
-image (3x160x320) + navigation command + target point (+ ego speed, optional)
+image (3x160x320) [+ the frame `history_dt` s earlier] + navigation command + target point (+ ego speed)
   -> ResNet-18 trunk
   -> (aux) FPN semantic segmentation            [what the model "sees"]
   -> tiny transformer decoder with learned queries over multi-scale tokens
@@ -54,12 +54,25 @@ def _resnet18_from_local_r34():
 
 
 class KeiPilot(nn.Module):
-    def __init__(self, n_sem=13, d=256, n_layers=3, n_heads=8, pretrained=True, img_hw=(160, 320), speed_input=False):
+    def __init__(self, n_sem=13, d=256, n_layers=3, n_heads=8, pretrained=True, img_hw=(160, 320), speed_input=False,
+                 history=False, history_dt=0.4, history_mode="frame"):
         super().__init__()
         if pretrained:
             r, self.init_info = _resnet18_from_local_r34()
         else:
             r, self.init_info = torchvision.models.resnet18(weights=None), "random init"
+        # optional previous frame (early fusion: 3 more input channels). Their weights start at zero, so a
+        # single-frame checkpoint loads unchanged (load_compatible); a missing frame is fed as zeros.
+        # history_mode "frame": the extra channels are the earlier frame; "diff": the change since then
+        # (current - earlier, normalised). Static things cancel and moving pedestrians / cars stand out, which a
+        # stem initialised from a single-frame model learns to use far more easily than two near-identical frames.
+        self.history, self.history_dt, self.history_mode = history, history_dt, history_mode
+        if history:
+            conv = nn.Conv2d(6, 64, 7, 2, 3, bias=False)
+            with torch.no_grad():
+                conv.weight.zero_()
+                conv.weight[:, :3] = r.conv1.weight
+            r.conv1 = conv
         self.stem = nn.Sequential(r.conv1, r.bn1, r.relu, r.maxpool)
         self.layer1, self.layer2, self.layer3, self.layer4 = r.layer1, r.layer2, r.layer3, r.layer4
         H, W = img_hw
@@ -110,10 +123,21 @@ class KeiPilot(nn.Module):
         v = v.float().clamp(0.0, 20.0)[:, None]
         return torch.cat([v / 10.0, (v / 10.0) ** 2, torch.log1p(v) / 2.5], -1)
 
-    def forward(self, img, cmd, tp, with_seg=True, speed=None, speed_known=None):
+    def forward(self, img, cmd, tp, with_seg=True, speed=None, speed_known=None, img_prev=None, has_prev=None):
         """img: (B,3,H,W) uint8/float RGB in [0,255]. speed (B,) m/s is used by speed-input models only;
-        speed_known (B,) bool hides it per sample (False -> the learned 'unknown' embedding)."""
+        speed_known (B,) bool hides it per sample (False -> the learned 'unknown' embedding).
+        img_prev / has_prev (history models): the frame `history_dt` s earlier; missing frames enter as zeros."""
         x = (img.float() / 255.0 - self.mean) / self.std
+        if self.history:
+            if img_prev is None:
+                xp = torch.zeros_like(x)
+            else:
+                xp = (img_prev.float() / 255.0 - self.mean) / self.std
+                if self.history_mode == "diff":
+                    xp = x - xp
+                if has_prev is not None:
+                    xp = xp * has_prev.to(xp.dtype)[:, None, None, None]
+            x = torch.cat([x, xp], 1)
         x = self.stem(x)
         c1 = self.layer1(x)
         c2 = self.layer2(c1)
@@ -145,6 +169,20 @@ class KeiPilot(nn.Module):
         out["speed_logits"] = self.speed_head(h[:, N_PATH]).float()
         out["tl_logits"] = self.tl_head(h[:, N_PATH + 1]).float()
         return out
+
+    def load_compatible(self, sd):
+        """Load a checkpoint from a model with fewer inputs (no speed / no history): new parameters keep their
+        neutral init (zero speed encoder output, zero weights for the previous frame). Returns the new keys."""
+        own = self.state_dict()
+        sd = dict(sd)
+        w = sd.get("stem.0.weight")
+        if w is not None and w.shape != own["stem.0.weight"].shape:       # single-frame stem -> history stem
+            pad = torch.zeros_like(own["stem.0.weight"])
+            pad[:, :w.shape[1]] = w
+            sd["stem.0.weight"] = pad
+        missing, unexpected = self.load_state_dict(sd, strict=False)
+        assert not unexpected and all(k.startswith("speed_") for k in missing), (missing, unexpected)
+        return missing
 
     def decode_speed(self, logits):
         p = logits.softmax(-1)

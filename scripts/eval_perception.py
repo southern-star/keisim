@@ -40,7 +40,7 @@ def main():
         b = {k: v.cuda() for k, v in b.items()}
         with torch.autocast("cuda", dtype=torch.bfloat16):
             out = model(b["img"].contiguous(memory_format=torch.channels_last), b["cmd"], b["tp"],
-                        speed=None if args.no_speed else b["v"])
+                        speed=None if args.no_speed else b["v"], img_prev=b["img_prev"], has_prev=b["has_prev"])
         err = torch.linalg.norm(out["path"] - b["path"], dim=-1)
         ade += err.mean(-1).sum().item()
         fde += err[:, -1].sum().item()
