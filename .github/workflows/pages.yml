@@ -1,0 +1,54 @@
+# KeiView and the in-browser KeiPilot demo on GitHub Pages: https://<owner>.github.io/<repo>/?pilot=1
+# The site is web/ as it is (no build step); the driving model (keipilot.onnx, 30 MB) is taken from the latest
+# release rather than from git. One-time setup: Settings -> Pages -> Source: GitHub Actions. After publishing a
+# release with a new keipilot.onnx, run this workflow by hand (gh workflow run pages.yml --ref main).
+name: pages
+
+on:
+  push:
+    branches: [main]
+    paths: ["web/**", ".github/workflows/pages.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Driving model from the latest release
+        id: model
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release download --repo "$GITHUB_REPOSITORY" --pattern keipilot.onnx --dir web/models; then
+            echo "ok=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::the latest release has no keipilot.onnx yet; not deploying"
+          fi
+      - name: Site
+        if: steps.model.outputs.ok == '1'
+        run: |
+          mkdir _site
+          cp -r web/index.html web/src web/vendor web/towns web/models _site/
+          du -sh _site
+      - if: steps.model.outputs.ok == '1'
+        uses: actions/configure-pages@v5
+      - if: steps.model.outputs.ok == '1'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        if: steps.model.outputs.ok == '1'
+        uses: actions/deploy-pages@v4

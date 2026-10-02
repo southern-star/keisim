@@ -78,8 +78,50 @@ KeiPilot の学習データ収集とクローズドループ評価で使いま�
 
 ```bash
 cd web && npm install && cd ..
-uv run scripts/demo.py --agent model --ckpt runs/keipilot.pt --renderer keiview --town 1001 --episode 3 --out runs/demo_kv.mp4   # Release v0.2.0 の重み
+uv run scripts/demo.py --agent model --ckpt runs/keipilot.pt --renderer keiview --town 1001 --episode 3 --out runs/demo_kv.mp4   # Release v0.5.0 の重み
 ```
+
+## ブラウザで KeiPilot を走らせる（パイロットモード）
+
+`?pilot=1` を付けると、運転モデル KeiPilot がブラウザの中で車を運転します（Python も GPU サーバも不要）。
+公開版: <https://southern-star.github.io/keisim/?pilot=1>
+
+```bash
+uv run --with onnx --with onnxruntime scripts/export_onnx.py runs/keipilot_v5/last.pt web/models/keipilot.onnx
+#   （または Release v0.5.0 の keipilot.onnx を web/models/ に置く）
+cd web && node tools/serve.mjs                    # → http://localhost:5174/?pilot=1&town=1000
+```
+
+- KeiSim の閉ループをそのまま JavaScript に移しています。
+  - 毎秒 10 回、自車カメラをエゴモードと同じ 320×160 で描きます（表示用の高解像度の描画とは別のパイプライン）。
+  - モデル（`scripts/export_onnx.py` で ONNX にしたもの）がその画像から経路と目標速度を出します。実行は [onnxruntime-web](https://onnxruntime.ai/) で、WebGPU があれば GPU、なければ WASM（Worker の中で実行し、描画は止めません）です。
+  - 車は KeiSim と同じ制御器（Pure Pursuit と PI 速度制御、`keisim/control.py`）と車両モデル（`keisim/vehicle.py`、20 Hz）で走ります。
+  - 安全層 BrakeHold / RedHold も `keipilot/agent.py` と同じものが入っています。
+  - ルートとモデルへの 2 つの入力（次の信号交差点で曲がる方向と、その交差点を出て 4 m 先の目標点）は、`src/nav.js` が `keisim/route.py` と同じ規則で作ります。
+- 曲がる方向はキー ← ↑ →（または画面のボタン）で、次の交差点について指定します。
+  - 指定しなければランダムに曲がります。
+  - Space で一時停止、R で最初からです。
+- 画面の線の意味:
+  - ピンクはモデルが描いた走行経路です。
+  - 水色はナビのルートです。
+  - 右下に、モデルへの入力画像とモデルの領域分割を表示します。
+- 信号は KeiSim と同じ現示で切り替わります。ほかの車と歩行者はいません。
+- ルートから 6 m 外れるか、90 秒動けないと、最初からやり直します（KeiSim の打ち切り条件と同じ）。
+- 推論 1 回の時間:
+  - WebGPU（RTX 3060）は約 20〜40 ms です。
+  - WASM（1 スレッド）は約 0.2〜0.35 秒です。WASM でも閉ループは回りますが、計画の更新が遅れるぶん反応が遅くなります。
+- モデルの重みは float16 で保存し、グラフの中で float32 に戻します（30 MB、計算は float32）。値は Release の重みと同じです。
+
+URL パラメータ: `?town=1001`、`?q=low`（表示の画質。モデルの入力は常に medium）、`?ep=wasm` / `?ep=webgpu`（推論エンジンを固定）、`?model=<URL>`
+
+```bash
+node tools/pilot_check.mjs --town 1000 --sec 60   # headless Chrome で 60 秒（シミュレーション時間）走らせて記録を表示
+node tools/pilot_check.mjs --url https://southern-star.github.io/keisim/ --sec 10   # 公開版を確かめる
+```
+
+`pilot_check.mjs` は、モデルの計算を毎ステップ待つので、KeiSim と同じく推論の遅れがない状態で走ります。
+Linux では Vulkan を使い、GPU の WebGPU で推論します。フラグなしの headless Chrome の WebGPU は SwiftShader（CPU）で、1 回 6 秒かかります。
+ページ側も、SwiftShader の WebGPU しかないブラウザでは WASM を使います。
 
 ## 構成
 
@@ -96,9 +138,11 @@ src/world/signals.js        信号機（灯火は KeiSim の現示どおり）
 src/world/poles.js          電柱・電線・引込線・支線
 src/world/actors.js         KeiSim の車と歩行者（エゴモード）
 src/ego.js                  エゴモード（1 フレーム描画・セマンティックラベル・ライティングのランダム化）
+src/pilot.js                パイロットモード（モデルの入力の描画、onnxruntime-web、制御器と車両モデル、安全層、表示）
+src/nav.js                  パイロットモードのルート、コマンド、目標点（keisim/route.py と同じ規則）
 vendor/sakuragaoka/         Sakuragaoka Station から持ってきたコード（MIT、変更点は NOTICE.md）
 towns/                      エクスポート済みの街（1000〜1003）。エゴモードの街は .towns/ に自動で出力（git 対象外）
-tools/                      serve / check / shot / ego_server
+tools/                      serve / check / shot / ego_server / pilot_check
 ```
 
 ## クレジット

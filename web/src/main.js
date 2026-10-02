@@ -18,6 +18,7 @@ const SHOT = params.has('shot');
 const ONLY = params.get('only') ? params.get('only').split(',').map(s => s.trim()).filter(Boolean) : null;
 const SEED = params.get('town') || '1000';
 const EGO = params.has('ego');                    // KeiSim ego-camera mode (src/ego.js)
+const PILOT = params.has('pilot');                // KeiPilot drives in the browser (src/pilot.js)
 const TDIR = (params.get('tdir') || 'towns').replace(/[^\w.-]/g, '');
 const $ = (id) => document.getElementById(id);
 
@@ -27,7 +28,7 @@ const QUALITY = {
   medium: { name: 'medium', pixelRatio: Math.min(devicePixelRatio, 1.0), msaa: 4, shadowMap: 2048, shadowSize: 60, petals: 0.6 },
   low: { name: 'low', pixelRatio: Math.min(devicePixelRatio, 0.75), msaa: 0, shadowMap: 2048, shadowSize: 45, petals: 0.35 },
 };
-let qName = params.get('q') || (() => { try { return localStorage.getItem('keiview.q'); } catch (e) { return null; } })() || (isTouch ? 'medium' : 'high');
+let qName = params.get('q') || (PILOT ? 'medium' : null) || (() => { try { return localStorage.getItem('keiview.q'); } catch (e) { return null; } })() || (isTouch ? 'medium' : 'high');
 if (!QUALITY[qName]) qName = 'high';
 const quality = { ...QUALITY[qName] };
 if (SHOT) quality.pixelRatio = 1;
@@ -52,10 +53,14 @@ const ctx = createContext({ scene, camera, renderer, audio, quality, sunDir });
 ctx.sky = sky;
 window.__ctx = ctx; window.THREE = THREE;
 // ego mode draws signal heads larger so the lamps stay visible at KeiSim's 320x160 camera resolution
-ctx.signalScale = Number(params.get('sigscale') || (EGO ? 2.2 : 1));
+ctx.signalScale = Number(params.get('sigscale') || (EGO || PILOT ? 2.2 : 1));
 
 function resize() {
-  const w = SHOT ? Number(params.get('w') || 1280) : innerWidth, h = SHOT ? Number(params.get('h') || 720) : innerHeight;
+  let w = SHOT ? Number(params.get('w') || 1280) : innerWidth, h = SHOT ? Number(params.get('h') || 720) : innerHeight;
+  if (PILOT) {                                    // KeiSim's 2:1 car camera, centred
+    w = Math.min(innerWidth, 2 * innerHeight); h = Math.round(w / 2);
+    canvas.style.left = `${Math.round((innerWidth - w) / 2)}px`; canvas.style.top = `${Math.round((innerHeight - h) / 2)}px`;
+  }
   renderer.setSize(w, h, !SHOT);
   camera.aspect = w / h; camera.updateProjectionMatrix();
   pipeline.setSize(w, h, quality.pixelRatio);
@@ -165,17 +170,22 @@ function hudTick(t) {
 
 // ------------------------------------------------------------------ main loop
 let started = false, last = performance.now(), fpsAcc = 0, fpsN = 0, fps = 0;
+let pilot = null, manual = false;
 function frame(now) {
   requestAnimationFrame(frame);
   let dt = Math.min(0.1, (now - last) / 1000); last = now;
+  if (manual) return;
   if (SHOT) dt = 0;
   simT += dt;
-  if (!SHOT) player.update(dt);
+  if (pilot) pilot.update(dt);
+  else if (!SHOT) player.update(dt);
   ctx.physics.refreshDynamic();
   stepUpdates(dt, simT);
   sky.update(simT, camera);
   renderer.info.reset();
+  if (pilot) pilot.capture(simT, dt);             // the model's own 320x160 frame, before the main view
   pipeline.render(scene, camera, sunDir, simT);
+  if (pilot) pilot.after(dt);
   if (!SHOT) hudTick(simT);
   fpsAcc += dt; fpsN++;
   if (fpsAcc > 0.5) { fps = fpsN / fpsAcc; fpsAcc = 0; fpsN = 0; const s = $('stats'); if (s && !s.hidden) s.textContent = `${fps.toFixed(0)} fps · ${renderer.info.render.calls} calls · ${(renderer.info.render.triangles / 1e6).toFixed(2)}M tris`; }
@@ -204,6 +214,43 @@ async function main() {
     window.__ready = true;
     return;
   }
+  if (PILOT) {
+    const lab = $('loadlabel');
+    const status = (msg) => { if (lab) lab.textContent = msg; };
+    try {
+      const { installPilot } = await import('./pilot.js');
+      // the model frame gets its own pipeline at KeiSim's medium quality, like ego mode (keisim keiview_quality)
+      const modelPipeline = () => createRenderPipeline(renderer, QUALITY.medium);
+      pilot = await installPilot({ ctx, scene, renderer, camera, sunDir, modelPipeline, params, status });
+    } catch (e) {
+      console.error(e); errors.push({ module: 'pilot', message: String(e && e.stack || e) });
+      status(`運転モデルを読み込めませんでした: ${e.message || e}`);
+      return;
+    }
+    document.body.classList.add('loaded', 'playing', 'pilot');
+    wireMenus();
+    window.__pilot = pilot;
+    // tests (tools/pilot_check.mjs): drive `sec` seconds of simulated time, waiting for every model call; the
+    // real-time frame loop stays off from the first call on
+    window.__pilotRun = async (sec, dt = 0.05) => {
+      manual = true;
+      for (let k = Math.round(sec / dt); k > 0; k--) {
+        simT += dt;
+        pilot.update(dt);
+        ctx.physics.refreshDynamic();
+        stepUpdates(dt, simT);
+        sky.update(simT, camera);
+        pilot.capture(simT, dt);
+        pipeline.render(scene, camera, sunDir, simT);
+        pilot.after(dt);
+        await pilot.idle();
+      }
+      return pilot.state();
+    };
+    window.__sim(simT);
+    requestAnimationFrame(frame);
+    return;
+  }
   if (params.get('cam')) parseCam(params.get('cam'));
   else if (params.get('view')) window.__view(Number(params.get('view')) - 1);
   else applyView(town.views[0]);
@@ -228,11 +275,22 @@ async function main() {
     if (e.code === 'Backquote') { const s = $('stats'); if (s) s.hidden = !s.hidden; }
     const m = /^Digit([1-9])$/.exec(e.code); if (m) window.__view(Number(m[1]) - 1);
   });
-  const q = $('quality');
-  if (q) { q.value = qName; q.addEventListener('change', () => { try { localStorage.setItem('keiview.q', q.value); } catch (e) {} location.reload(); }); }
-  const tsel = $('townsel');
-  if (tsel) { tsel.value = SEED; tsel.addEventListener('change', () => { const u = new URL(location.href); u.searchParams.set('town', tsel.value); location.href = u.toString(); }); }
+  wireMenus();
   if (params.has('stats')) $('stats').hidden = false;
   if (errors.length) console.warn('module errors', errors);
+}
+
+function wireMenus() {
+  const q = $('quality');
+  if (q) {
+    q.value = qName;
+    q.addEventListener('change', () => {
+      if (PILOT) { const u = new URL(location.href); u.searchParams.set('q', q.value); location.href = u.toString(); return; }
+      try { localStorage.setItem('keiview.q', q.value); } catch (e) {}
+      location.reload();
+    });
+  }
+  const tsel = $('townsel');
+  if (tsel) { tsel.value = SEED; tsel.addEventListener('change', () => { const u = new URL(location.href); u.searchParams.set('town', tsel.value); location.href = u.toString(); }); }
 }
 main();
