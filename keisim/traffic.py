@@ -77,6 +77,35 @@ def vehicle_circles(xy, yaw, length, width):
             np.repeat(np.arange(n), NCIRC))
 
 
+GRID_MIN_PAIRS = 40000      # corridor_gaps: below this many (path, circle) pairs the dense test is faster
+
+
+def near_pairs(origin, radius, cxy):
+    """All (k, m) with |cxy[m] - origin[k]| < radius[k], plus some farther ones: the circles in the 3x3 grid cells
+    (cell size = the largest radius) around each origin. Unordered."""
+    K = len(origin)
+    cell = max(float(np.max(radius)), 1.0)
+    cg = np.floor(cxy / cell).astype(np.int64)
+    og = np.floor(origin / cell).astype(np.int64)
+    lo = np.minimum(cg.min(0), og.min(0)) - 2
+    cg -= lo
+    og -= lo
+    W = int(max(cg[:, 1].max(), og[:, 1].max())) + 3
+    ckey = cg[:, 0] * W + cg[:, 1]
+    order = np.argsort(ckey, kind="stable")
+    skey = ckey[order]
+    d = np.array([-1, 0, 1])
+    qk = np.repeat(np.arange(K), 9)
+    qkey = (og[qk, 0] + np.tile(np.repeat(d, 3), K)) * W + og[qk, 1] + np.tile(np.tile(d, 3), K)
+    a = np.searchsorted(skey, qkey, "left")
+    cnt = np.searchsorted(skey, qkey, "right") - a
+    nz = cnt > 0
+    qk, a, cnt = qk[nz], a[nz], cnt[nz]
+    ks = np.repeat(qk, cnt)
+    ms = order[np.repeat(a - (np.cumsum(cnt) - cnt), cnt) + np.arange(int(cnt.sum()))]
+    return ks, ms
+
+
 def corridor_gaps(paths, cum, valid, origin, heading, half_len, half_w, cxy, cr, cowner, cspeed, cyaw,
                   self_owner, margin):
     """Batched obstacle search along K paths.
@@ -97,14 +126,24 @@ def corridor_gaps(paths, cum, valid, origin, heading, half_len, half_w, cxy, cr,
         return gap, lead_v, lead_o
     maxlen = np.where(valid, cum, 0.0).max(1)
     mid = paths[:, P // 2]
-    dm = cxy[None, :, :] - mid[:, None, :]
-    dm2 = dm[..., 0] ** 2 + dm[..., 1] ** 2
-    ds = cxy[None, :, :] - origin[:, None, :]
-    ds2 = ds[..., 0] ** 2 + ds[..., 1] ** 2
     lim = maxlen + 4.0
-    cand = (ds2 < (lim * lim)[:, None]) & (dm2 < ((0.6 * lim + 6.0) ** 2)[:, None])
-    cand &= cowner[None, :] != self_owner[:, None]
-    ks, ms = np.nonzero(cand)
+    if K * len(cxy) < GRID_MIN_PAIRS:
+        dm = cxy[None, :, :] - mid[:, None, :]
+        dm2 = dm[..., 0] ** 2 + dm[..., 1] ** 2
+        ds = cxy[None, :, :] - origin[:, None, :]
+        ds2 = ds[..., 0] ** 2 + ds[..., 1] ** 2
+        cand = (ds2 < (lim * lim)[:, None]) & (dm2 < ((0.6 * lim + 6.0) ** 2)[:, None])
+        cand &= cowner[None, :] != self_owner[:, None]
+        ks, ms = np.nonzero(cand)
+    else:                       # big towns: only the circles near each path
+        ks, ms = near_pairs(origin, lim, cxy)
+        dm = cxy[ms] - mid[ks]
+        ds = cxy[ms] - origin[ks]
+        cand = (ds[:, 0] ** 2 + ds[:, 1] ** 2 < (lim * lim)[ks]) & \
+            (dm[:, 0] ** 2 + dm[:, 1] ** 2 < ((0.6 * lim + 6.0) ** 2)[ks]) & (cowner[ms] != self_owner[ks])
+        ks, ms = ks[cand], ms[cand]
+        o = np.lexsort((ms, ks))            # the dense test's order, so that ties resolve the same way
+        ks, ms = ks[o], ms[o]
     if len(ks) == 0:
         return gap, lead_v, lead_o
     u = np.stack([np.cos(heading), np.sin(heading)], -1)

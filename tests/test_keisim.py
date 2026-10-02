@@ -104,6 +104,37 @@ def test_camera_render_shapes():
     assert obs["expert"]["path"].shape == (10, 2)
 
 
+def test_corridor_search_grid_matches_dense():
+    """The grid prefilter for many NPCs must find exactly what the all-pairs test finds."""
+    from keisim import traffic
+
+    rng = np.random.default_rng(3)
+    K, P, M = 150, 48, 900
+    origin = rng.uniform(-300, 300, (K, 2))
+    heading = rng.uniform(-np.pi, np.pi, K)
+    step = rng.uniform(0.5, 1.0, K)
+    s = np.arange(P)[None] * step[:, None]
+    curve = rng.normal(0, 0.02, K)[:, None] * s
+    paths = origin[:, None] + s[..., None] * np.stack([np.cos(heading[:, None] + curve), np.sin(heading[:, None] + curve)], -1)
+    valid = s <= rng.uniform(20, 45, K)[:, None]
+    cxy = np.concatenate([rng.uniform(-320, 320, (M, 2)), paths[:20, 10] + 0.5])   # some right on paths
+    M = len(cxy)
+    args = (paths, s, valid, origin, heading, np.full(K, 2.2), np.full(K, 0.9), cxy, np.full(M, 0.9),
+            rng.integers(-3, K, M), rng.uniform(0, 10, M), rng.uniform(-np.pi, np.pi, M), np.arange(K),
+            np.where(rng.random(M) < 0.2, 0.9, 0.35)[None])
+    keep = traffic.GRID_MIN_PAIRS
+    try:
+        traffic.GRID_MIN_PAIRS = 10 ** 15
+        dense = traffic.corridor_gaps(*args)
+        traffic.GRID_MIN_PAIRS = 0
+        grid = traffic.corridor_gaps(*args)
+    finally:
+        traffic.GRID_MIN_PAIRS = keep
+    assert np.isfinite(dense[0]).sum() >= 20
+    for a, b in zip(dense, grid):
+        assert np.array_equal(a, b)
+
+
 def test_speed_input_starts_as_camera_only_model():
     """A camera-only checkpoint loaded into a speed-input KeiPilot must behave exactly as before."""
     import torch
