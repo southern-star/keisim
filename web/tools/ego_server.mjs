@@ -1,5 +1,6 @@
 // KeiView ego-camera render server for KeiSim: headless Chrome (GPU) driven over stdin/stdout.
-//   node tools/ego_server.mjs [--w 320 --h 160] [--q medium] [--gl hw|soft] [--tdir .towns]
+//   node tools/ego_server.mjs [--w 320 --h 160] [--q medium] [--gl auto|hw|soft] [--tdir .towns]
+// --gl auto (default) uses the GPU when Chrome has WebGL2 there and falls back to SwiftShader otherwise.
 // One JSON request per line on stdin, one JSON reply per line on stdout (logs go to stderr):
 //   {"id":1,"op":"town","town":1000}                        -> {"id":1,"ok":true,"ms":8800,"errors":[]}
 //   {"id":2,"op":"render","cam":{"pos":[x,y,z],"fwd":[fx,fy,fz],"vfov":61.6},"t":12.3,
@@ -30,22 +31,51 @@ function findBrowser() {
 }
 const exe = findBrowser();
 if (!exe) { reply({ id: 0, ok: false, error: 'No Chromium/Chrome found - set CHROME=/path/to/browser' }); process.exit(1); }
-const gl = args.gl || 'hw';
-const glFlags = gl === 'soft' ? ['--use-angle=swiftshader', '--enable-unsafe-swiftshader']
+// --gl auto (default): GPU if Chrome gives us WebGL2 there, otherwise SwiftShader (CPU, ~100x slower).
+// Without a GPU, --enable-gpu leaves WebGL2 unavailable and the page would never become ready.
+const glReq = args.gl || 'auto';
+if (!['auto', 'hw', 'soft'].includes(glReq)) { reply({ id: 0, ok: false, error: `--gl must be auto, hw or soft (got ${glReq})` }); process.exit(1); }
+const glFlags = (mode) => mode === 'soft' ? ['--use-angle=swiftshader', '--enable-unsafe-swiftshader']
   : process.platform === 'win32' ? ['--use-angle=d3d11', '--enable-gpu'] : ['--enable-gpu'];
 
-const server = createServer();
-await new Promise(r => server.listen(0, '127.0.0.1', r));
-const port = server.address().port;
-const browser = await puppeteer.launch({
+const launch = (mode) => puppeteer.launch({
   executablePath: exe, headless: true,
-  args: [...glFlags, '--ignore-gpu-blocklist', '--enable-webgl', '--no-sandbox', '--no-first-run', '--disable-extensions',
+  args: [...glFlags(mode), '--ignore-gpu-blocklist', '--enable-webgl', '--no-sandbox', '--no-first-run', '--disable-extensions',
     '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows',
     ...(process.env.HTTPS_PROXY ? [`--proxy-server=${process.env.HTTPS_PROXY}`] : []), `--window-size=${W},${H}`],
   defaultViewport: { width: W, height: H, deviceScaleFactor: 1 },
   protocolTimeout: 900000,
 });
-const page = await browser.newPage();
+// WebGL2 renderer string of a blank page, or null when this browser has no WebGL2
+const probeGL = (page) => page.evaluate(() => {
+  const g = document.createElement('canvas').getContext('webgl2');
+  if (!g) return null;
+  const d = g.getExtension('WEBGL_debug_renderer_info');
+  return d ? g.getParameter(d.UNMASKED_RENDERER_WEBGL) : 'unknown';
+});
+
+let gl = glReq === 'soft' ? 'soft' : 'hw';
+let browser = await launch(gl);
+let page = await browser.newPage();
+let gpu = await probeGL(page);
+if (gpu === null && glReq === 'auto') {
+  log('no WebGL2 on the GPU path (no GPU?) - falling back to SwiftShader (--gl soft), expect ~2 s/frame');
+  await browser.close();
+  gl = 'soft';
+  browser = await launch(gl);
+  page = await browser.newPage();
+  gpu = await probeGL(page);
+}
+if (gpu === null) {
+  reply({ id: 0, ok: false, error: `WebGL2 unavailable with --gl ${gl}` + (gl === 'hw' ? ' (no GPU? use --gl auto or soft)' : '') });
+  await browser.close();
+  process.exit(1);
+}
+log(`gl=${gl} renderer=${gpu}`);
+
+const server = createServer();
+await new Promise(r => server.listen(0, '127.0.0.1', r));
+const port = server.address().port;
 page.on('console', (m) => { if (m.type() === 'error') log(`[console.error] ${m.text()}`); });
 page.on('pageerror', (e) => log(`[pageerror] ${e.message}`));
 
@@ -64,7 +94,7 @@ async function loadTown(town) {
 }
 
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
-reply({ id: 0, ok: true, ready: true, w: W, h: H });
+reply({ id: 0, ok: true, ready: true, w: W, h: H, gl, gpu });
 for await (const line of rl) {
   if (!line.trim()) continue;
   let q;

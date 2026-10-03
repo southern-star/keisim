@@ -169,3 +169,4 @@ class EnvConfig:
     terminate_on_collision: bool = True
     renderer: str = "keisim"          # keisim (CPU, numpy + OpenCV) | keiview (web/, three.js on the GPU)
     keiview_quality: str = "medium"
+    keiview_gl: str = "auto"          # auto (GPU, else SwiftShader on the CPU) | hw | soft
