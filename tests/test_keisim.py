@@ -94,6 +94,9 @@ def test_light_rules():
     assert light_stop(11.0, 8.0, TL_RED, 0.0, False) is None                # 10.4 m needed: cannot stop
     assert light_stop(8.0, 6.0, TL_GREEN, 0.0, False) is None
     assert light_stop(3.0, 8.0, TL_GREEN, 0.0, True) == "junction_blocked"  # don't block the box
+    assert light_stop(0.5, 0.1, TL_RED, 0.0, False) == "red_light"          # v5: creeping with the bumper at the
+    assert light_stop(0.5, 0.1, TL_YELLOW, 2.0, False) == "red_light"       # line, it stays (no follow across)
+    assert light_stop(5.0, 0.1, TL_YELLOW, 2.0, False) is None              # at speed it still goes on
 
 
 def test_camera_render_shapes():
