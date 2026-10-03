@@ -61,6 +61,13 @@ class TownConfig:
     signal_green: tuple = (6.0, 9.0)
     signal_yellow: float = 2.5
     signal_allred: float = 1.5
+    # split: every approach has its own green (no conflicts inside a junction). two_phase: opposite approaches
+    # share the green (Japan's usual signal); right turns then wait inside the junction for a gap in the oncoming
+    # traffic (see Lane.yields).
+    signal_mode: str = "split"
+    two_phase_green: tuple = (12.0, 18.0)
+    two_phase_yellow: float = 3.0
+    two_phase_allred: float = 2.0
     building_prob: float = 0.85
     tree_prob: float = 0.55
     tex_res: float = 0.1              # metres per texel of the ground texture
@@ -118,6 +125,7 @@ class CameraConfig:
 TOWN_STYLES = {
     "classic": {},
     "varied": {"block_mode": "varied", "spacing_min": 70.0, "spacing_max": 200.0},
+    "twophase": {"block_mode": "varied", "spacing_min": 70.0, "spacing_max": 200.0, "signal_mode": "two_phase"},
 }
 
 

@@ -33,14 +33,18 @@ SUITES = {
     "long": [(t, 9200 + e) for t in range(1010, 1020) for e in range(2)],
     # the same seeds as "varied" towns (block lengths 70-200 m), with the two jam fixes (box rule, hidden release)
     "long2": [(t, 9200 + e) for t in range(1010, 1020) for e in range(2)],
+    # the same seeds again, now with two-phase signals: right turns wait inside the junction for oncoming gaps
+    "long3": [(t, 9200 + e) for t in range(1010, 1020) for e in range(2)],
 }
-CAP_SCALE = {"classic": 1, "varied": 2}      # NPC count caps per town style
+CAP_SCALE = {"classic": 1, "varied": 2, "twophase": 2}      # NPC count caps per town style
 # per-suite defaults for arguments left unset on the command line
 SUITE_DEFAULTS = {
     "long": {"route_length": 2500.0, "max_steps": 20000},
     # long2: the jam fixes leave only congestion (exit queues crawling through several signal cycles), so a route
     # counts as blocked after 180 s without progress (about 4 cycles) instead of 90 s
     "long2": {"route_length": 2500.0, "max_steps": 20000, "town_style": "varied", "jam_fixes": True,
+              "blocked_timeout": 180.0},
+    "long3": {"route_length": 2500.0, "max_steps": 20000, "town_style": "twophase", "jam_fixes": True,
               "blocked_timeout": 180.0},
 }
 
@@ -229,7 +233,8 @@ def main():
     ap.add_argument("--out", default=None)
     ap.add_argument("--brake_hold", action="store_true", help="safety layer: no throttle burst right after firm braking")
     ap.add_argument("--red_hold", action="store_true", help="safety layer: no creeping while the model sees red/yellow")
-    ap.add_argument("--town_style", default=None, choices=["classic", "varied"], help="default: classic (long2: varied)")
+    ap.add_argument("--town_style", default=None, choices=["classic", "varied", "twophase"],
+                    help="default: classic (long2: varied, long3: twophase)")
     ap.add_argument("--blocked_timeout", type=float, default=None, help="s without progress (default 90, long2 180)")
     ap.add_argument("--jam_fixes", type=int, default=None, choices=[0, 1],
                     help="box rule + release of NPCs stuck out of the ego camera's view (default: 0, long2: 1)")

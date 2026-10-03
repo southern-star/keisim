@@ -32,6 +32,7 @@ class World:
         n_ped = int(min(tc.max_peds, sum(r.length for r in town.roads) / rng.uniform(*tc.ped_spacing)))
         self.peds = Pedestrians(town, tc, rng, n_ped)
         self.route = route
+        self.ego_s = None                  # the ego's arc length along its route (set by KeiEnv after each step)
         self.n_heads = len(town.signal_heads)
         self._head_j = np.array([h["junction"] for h in town.signal_heads], int)
         self._head_p = np.array([h["phase"] for h in town.signal_heads], int)
@@ -72,7 +73,13 @@ class World:
         ext_o = np.concatenate([np.full(len(exy), -1), -2 - np.arange(pd.n)])
         ext_v = np.concatenate([np.full(len(exy), e.v), pd.vel])
         ext_yaw = np.concatenate([np.full(len(exy), e.yaw), pd.yaw])
-        self.traffic.step(dt, self.t, ext_xy, ext_r, ext_o, ext_v, ext_yaw, e.xy, e.v, e.yaw)
+        ego_info = None
+        if self.traffic.has_yields and self.route is not None and self.ego_s is not None:
+            k = self.route.lane_index_at(self.ego_s)
+            lanes = self.route.lanes
+            ego_info = (lanes[k], self.ego_s - self.route.offsets[k], lanes[k + 1] if k + 1 < len(lanes) else None,
+                        e.v, e.LENGTH)
+        self.traffic.step(dt, self.t, ext_xy, ext_r, ext_o, ext_v, ext_yaw, e.xy, e.v, e.yaw, ego_info)
         # pedestrians (crossing is triggered more often just ahead of the ego)
         tr = self.traffic
         veh_xy = np.vstack([tr.xy, e.xy[None]])

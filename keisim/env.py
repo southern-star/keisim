@@ -132,6 +132,7 @@ class KeiEnv:
         e = self.world.ego
         s, lat = self.route.poly.project(e.xy, self.s_ego - 4.0, self.s_ego + 25.0)
         self.s_ego, self.lat = s, lat
+        self.world.ego_s = s
 
     @property
     def elapsed(self):

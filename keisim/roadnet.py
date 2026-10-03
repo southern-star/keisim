@@ -62,6 +62,26 @@ class Road:
         self.lane_ba = -1
 
 
+YIELD_CLEAR = 2.4        # clearance of a waiting car's front circle from the paths it yields to
+
+
+def _two_phase_groups(angles):
+    """Signal group of each arm (angles sorted counter-clockwise): opposite arms share a green.
+    4 arms: 0+2 and 1+3. 3 arms: the most nearly opposite pair (the main road), then the stem."""
+    n = len(angles)
+    if n == 4:
+        return [0, 1, 0, 1]
+    if n == 3:
+        best, pair = -1.0, (0, 1)
+        for a in range(3):
+            for b in range(a + 1, 3):
+                d = abs(math.atan2(math.sin(angles[a] - angles[b]), math.cos(angles[a] - angles[b])))
+                if d > best:
+                    best, pair = d, (a, b)
+        return [0 if k in pair else 1 for k in range(3)]
+    return list(range(n)) if n <= 2 else [k % 2 for k in range(n)]
+
+
 class Junction:
     def __init__(self, jid, pos):
         self.id = jid
@@ -338,15 +358,24 @@ class Town:
             J.road_poly = _hull(corners_r)
             J.walk_poly = _hull(corners_w)
             if J.signalized:
-                J.phases = len(J.arms)
-                J.green = float(rng.uniform(*cfg.signal_green))
-                J.yellow = cfg.signal_yellow
-                J.allred = cfg.signal_allred
+                if cfg.signal_mode == "two_phase":
+                    group = _two_phase_groups([a["angle"] for a in J.arms])
+                    J.phases = 2
+                    J.green = float(rng.uniform(*cfg.two_phase_green))
+                    J.yellow = cfg.two_phase_yellow
+                    J.allred = cfg.two_phase_allred
+                else:
+                    group = list(range(len(J.arms)))
+                    J.phases = len(J.arms)
+                    J.green = float(rng.uniform(*cfg.signal_green))
+                    J.yellow = cfg.signal_yellow
+                    J.allred = cfg.signal_allred
                 J.offset = float(rng.uniform(0, J.cycle))
                 for k, arm in enumerate(J.arms):
                     lin = self.lanes[arm["in"]]
-                    lin.signal = (J.id, k)
+                    lin.signal = (J.id, group[k])
                     lin.stop_s = max(1.0, lin.length - cfg.stop_line_setback)
+        self._make_yields()
 
         # swept strips of junction connectors (bends / skewed junctions bulge past the hull)
         self.conn_road_polys, self.conn_walk_polys, self.conn_curb_polys = [], [], []
@@ -479,6 +508,48 @@ class Town:
                     self.crosswalks.append(strip(cc, k + 0.225, 0.45))
                     k += 0.9
 
+    def _make_yields(self):
+        """Who gives way inside a junction. Connectors of approaches that are green at the same time (opposite
+        approaches with two-phase signals) may cross; the lower-ranked movement (right < left < straight) yields.
+        Each yielding connector gets yields = [(other connector, s here, s there)], the closest points of the
+        two centre lines, and wait_s: where its front bumper waits, short of the first crossing."""
+        rank = {"right": 0, "left": 1, "straight": 2}
+        for lane in self.lanes:
+            lane.yields, lane.wait_s = [], None
+        for J in self.junctions:
+            if not J.signalized:
+                continue
+            conns = [self.lanes[c] for c in J.connectors]
+            for a in conns:
+                ga = self.lanes[a.pred[0]].signal
+                for b in conns:
+                    gb = self.lanes[b.pred[0]].signal
+                    if b.pred[0] == a.pred[0] or ga is None or gb is None or ga[1] != gb[1]:
+                        continue
+                    if rank[a.turn] >= rank[b.turn]:
+                        continue
+                    pa, pb = a.poly.pts, b.poly.pts
+                    d = np.hypot(*(pa[:, None, :] - pb[None, :, :]).transpose(2, 0, 1))
+                    i, j = np.unravel_index(int(np.argmin(d)), d.shape)
+                    if d[i, j] < 2.2:                       # the two cars would touch: a crossing or a merge
+                        a.yields.append((b.id, float(a.poly.s[i]), float(b.poly.s[j])))
+            for a in conns:
+                if not a.yields:
+                    continue
+                a.yields.sort(key=lambda y: y[1])
+                # the furthest front-bumper position whose front circle (half a car width behind the bumper) stays
+                # out of the corridor that every car it yields to checks along its path (NPCs: half width + circle
+                # radius + 0.35 m, about 2.25 m): waiting there blocks nobody
+                others = np.concatenate([self.lanes[b].poly.pts for b, _, _ in a.yields])
+                wait = 0.0
+                for sb in np.arange(a.yields[0][1], -0.01, -0.25):
+                    sc = sb - 0.9
+                    c = a.poly.interp1(sc) if sc >= 0 else a.poly.pts[0] + sc * a.poly.seg_dir[0]
+                    if np.min(np.hypot(*(others - np.asarray(c)).T)) >= YIELD_CLEAR:
+                        wait = float(sb)
+                        break
+                a.wait_s = wait
+
     def _make_signal_heads(self):
         """Far-side overhead signal (Japanese style) for every signalised approach.
 
@@ -525,7 +596,7 @@ class Town:
                             pole = c
                             break
                 self.signal_heads.append({
-                    "junction": J.id, "phase": k, "lane": lane.id,
+                    "junction": J.id, "phase": lane.signal[1], "lane": lane.id,
                     "head": head, "pole": pole, "yaw": h_in + math.pi, "z": 5.4,
                 })
 

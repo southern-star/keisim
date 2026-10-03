@@ -138,6 +138,25 @@ class Expert:
             if v_obs < target:
                 target, reason = v_obs, ("pedestrian" if lead_o[0] <= -2 else "vehicle")
 
+        # --- give way (two-phase signals): a right turn waits at its connector's wait point, inside the
+        # junction, while oncoming traffic would reach the crossing within YIELD_GAP s. Independent of the ego
+        # speed, so it is part of target_nolight (the counterfactual labels keep it as it is).
+        if tr.has_yields:
+            s_front = s + hl
+            for jn in route.junctions:
+                if jn["s_out"] < s_front:
+                    continue
+                if jn["s_in"] - s_front > 45.0:
+                    break
+                conn = w.town.lanes[jn["lane"]]
+                if conn.yields:
+                    d_wait = jn["s_in"] + conn.wait_s - s_front
+                    if d_wait >= -0.5 and tr.must_yield(conn, w.t, tr.yield_tables()):
+                        v_y = stop_profile(max(d_wait, 0.0), self.B_COMF)
+                        if v_y < target:
+                            target, reason = v_y, "yield"
+                break
+
         # --- traffic light. The speed-independent inputs of the decision are returned too (lt_*), so recorded
         # frames can be relabelled for other ego speeds (and for later versions of the rule).
         tl = TL_NONE

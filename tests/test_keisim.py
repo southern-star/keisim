@@ -175,6 +175,82 @@ def test_box_rule():
             assert tr.s[i] <= lane.stop_s - 19.0 or tr.s[i] > lane.stop_s
 
 
+def test_two_phase_signals_and_yields():
+    """Two-phase towns: opposite approaches share a green; right turns across oncoming traffic yield and wait
+    where they block nobody. Split-signal (classic) towns have no yields."""
+    from keisim.config import town_config
+    from keisim.roadnet import YIELD_CLEAR
+
+    assert not any(getattr(l, "yields", None) for l in Town(1012).lanes)
+    T = Town(1012, town_config("twophase"))
+    n_right = 0
+    for J in T.junctions:
+        if not J.signalized:
+            continue
+        assert J.phases == 2
+        groups = [T.lanes[a["in"]].signal[1] for a in J.arms]
+        assert sorted(set(groups)) == [0, 1]
+        for c in J.connectors:
+            L = T.lanes[c]
+            if not L.yields:
+                continue
+            assert L.turn != "straight"
+            n_right += L.turn == "right"
+            assert 0.0 <= L.wait_s <= L.yields[0][1]
+            for b, _, _ in L.yields:          # yields only to the other approach of the same signal group
+                B = T.lanes[b]
+                assert B.pred[0] != L.pred[0] and T.lanes[B.pred[0]].signal[1] == T.lanes[L.pred[0]].signal[1]
+            # the waiting car's front circle stays out of the paths it yields to
+            c0 = L.poly.interp1(max(L.wait_s - 0.9, 0.0))
+            others = np.concatenate([T.lanes[b].poly.pts for b, _, _ in L.yields])
+            assert np.min(np.hypot(*(others - np.asarray(c0)).T)) >= YIELD_CLEAR - 0.05
+    assert n_right >= 4
+
+
+def test_right_turn_gap_acceptance():
+    """must_yield: an oncoming car close to the crossing makes a right turn wait; a far one, or one stopping at its
+    red light, does not."""
+    from keisim.config import TL_GREEN, town_config
+
+    cfg = EnvConfig()
+    cfg.render_rgb = cfg.render_seg = False
+    cfg.town = town_config("twophase")
+    env = KeiEnv(cfg)
+    env.reset(town_seed=1012, episode_seed=1)
+    tr, town = env.world.traffic, env.world.town
+    conn = next(l for l in town.lanes if l.kind == "conn" and l.turn == "right" and l.yields
+                and len(town.junctions[l.junction].arms) == 4)
+    b, _, s2 = next(y for y in conn.yields if town.lanes[y[0]].turn == "straight")
+    pred = town.lanes[b].pred[0]
+    L = town.lanes[pred].length
+    J = town.junctions[conn.junction]
+    t_green = next(t for t in np.arange(0, J.cycle, 0.1) if town.signal_state_for_lane(pred, t) == TL_GREEN)
+
+    def tables(s_center, v, ego=False):
+        return {pred: [(s_center, v, 4.5, ego, b)]}
+    assert not tr.must_yield(conn, t_green, {})
+    assert tr.must_yield(conn, t_green, tables(L - 10.0, 8.0))            # about 2 s away
+    assert not tr.must_yield(conn, t_green, tables(L - 80.0, 8.0))        # about 11 s away
+    assert tr.must_yield(conn, t_green, {b: [(s2 - 2.0, 0.0, 4.5, False, None)]})  # standing in the crossing
+    # an oncoming car queued behind one that stands still to turn right itself cannot come: no deadlock
+    targets = {y[0] for y in conn.yields}
+    other = next(c for c in town.lanes[pred].succ if c not in targets)            # the oncoming right turn
+    queue = {pred: [(L - 4.0, 0.0, 4.5, False, other), (L - 11.0, 0.0, 4.5, False, b)]}
+    assert not tr.must_yield(conn, t_green, queue)
+    assert not tr.must_yield(conn, t_green, {other: [(1.0, 0.0, 4.5, False, None)], pred: [(L - 4.0, 0.0, 4.5, False, b)]})
+    t_red = next(t for t in np.arange(0, J.cycle, 0.1) if town.signal_state_for_lane(pred, t) != TL_GREEN
+                 and town.signal_state_for_lane(pred, t + 3.0) != TL_GREEN)
+    assert not tr.must_yield(conn, t_red, tables(L - 25.0, 6.0))          # stops at its red line
+    stop_front = town.lanes[pred].stop_s - 0.5                               # creeping at the line: the NPC rule
+    yellow = [t for t in np.arange(0, J.cycle, 0.1) if town.signal_state_for_lane(pred, t) == 1]
+    if yellow:                                                               # lets it go at yellow, so it counts
+        assert tr.must_yield(conn, yellow[0], tables(stop_front - 2.25, 0.5))
+    assert tr.must_yield(conn, t_red, tables(L - 25.0, 6.0, ego=True))     # the ego might take it anyway
+    # arrival estimates: a standing NPC reacts for 1 s, then accelerates; the ego could go at once
+    assert 4.8 < tr._arrival(15.5, 0.0, 10.5) < 5.1 and tr._arrival(15.5, 0.0, 10.5, ego=True) < 3.1
+    assert 3.8 < tr._arrival(40.0, 8.0, 10.5) < 4.1
+
+
 def test_release_hidden_stuck_vehicles():
     """With release_hidden, long-stuck NPCs the ego camera cannot see are moved away; visible ones stay."""
     cfg = EnvConfig()
