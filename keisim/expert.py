@@ -167,8 +167,10 @@ class Expert:
             if d < 12.0:
                 k = route.lane_index_at(s_stop)
                 if k + 2 < len(route.lanes):
-                    blocked = w.traffic.exit_blocked(route.lanes[k + 1], route.lanes[k + 2], ego.LENGTH + 3.0,
-                                                     w.traffic.occupancy())
+                    occ = w.traffic.occupancy()
+                    blocked = w.traffic.exit_blocked(route.lanes[k + 1], route.lanes[k + 2], ego.LENGTH + 3.0, occ)
+                    if not blocked and w.traffic.cfg.box_rule:      # another approach's vehicle still inside
+                        blocked = w.traffic.box_busy(route.lanes[k + 1], w.traffic.box_occupants(occ))
             lt.update(lt_d=d, lt_st=st, lt_trem=t_rem, lt_blocked=blocked)
             why = light_stop(v, d, st, t_rem, blocked)
             if why:

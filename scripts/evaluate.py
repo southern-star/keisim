@@ -31,9 +31,18 @@ SUITES = {
     "showcase": [(1000, 9001), (1004, 9002), (1001, 9002), (1003, 9001), (1007, 9102), (1009, 9100)],
     # unseen towns not used by any other suite, 2.5 km routes (~20 signalised stop lines each): rare failures
     "long": [(t, 9200 + e) for t in range(1010, 1020) for e in range(2)],
+    # the same seeds as "varied" towns (block lengths 70-200 m), with the two jam fixes (box rule, hidden release)
+    "long2": [(t, 9200 + e) for t in range(1010, 1020) for e in range(2)],
 }
+CAP_SCALE = {"classic": 1, "varied": 2}      # NPC count caps per town style
 # per-suite defaults for arguments left unset on the command line
-SUITE_DEFAULTS = {"long": {"route_length": 2500.0, "max_steps": 20000}}
+SUITE_DEFAULTS = {
+    "long": {"route_length": 2500.0, "max_steps": 20000},
+    # long2: the jam fixes leave only congestion (exit queues crawling through several signal cycles), so a route
+    # counts as blocked after 180 s without progress (about 4 cycles) instead of 90 s
+    "long2": {"route_length": 2500.0, "max_steps": 20000, "town_style": "varied", "jam_fixes": True,
+              "blocked_timeout": 180.0},
+}
 
 
 _ENV = None
@@ -44,9 +53,12 @@ def run_route(job):
     (town, ep), args, idx = job
     import cv2
     cv2.setNumThreads(1)
-    from keisim.config import EnvConfig
+    from keisim.config import EnvConfig, town_config
     from keisim.env import KeiEnv
     cfg = EnvConfig()
+    cfg.town = town_config(args.get("town_style", "classic"))
+    cfg.traffic.box_rule = cfg.traffic.release_hidden = bool(args.get("jam_fixes", False))
+    cfg.blocked_timeout = float(args.get("blocked_timeout", 90.0))
     cfg.render_seg = False
     cfg.render_rgb = args["agent"] == "model"
     cfg.renderer = args.get("renderer", "keisim")
@@ -56,6 +68,10 @@ def run_route(job):
         cfg.traffic.max_vehicles = 130
         cfg.traffic.max_peds = 110
         cfg.traffic.ego_cross_rate = 0.3
+    # varied towns have ~1.75x the lane length: twice the caps keep the traffic density of the classic towns
+    cap = CAP_SCALE.get(args.get("town_style", "classic"), 1)
+    cfg.traffic.max_vehicles *= cap
+    cfg.traffic.max_peds *= cap
     if cfg.renderer == "keiview":
         if _ENV is None:                     # keep one headless Chrome per worker process
             _ENV = KeiEnv(cfg)
@@ -213,8 +229,14 @@ def main():
     ap.add_argument("--out", default=None)
     ap.add_argument("--brake_hold", action="store_true", help="safety layer: no throttle burst right after firm braking")
     ap.add_argument("--red_hold", action="store_true", help="safety layer: no creeping while the model sees red/yellow")
+    ap.add_argument("--town_style", default=None, choices=["classic", "varied"], help="default: classic (long2: varied)")
+    ap.add_argument("--blocked_timeout", type=float, default=None, help="s without progress (default 90, long2 180)")
+    ap.add_argument("--jam_fixes", type=int, default=None, choices=[0, 1],
+                    help="box rule + release of NPCs stuck out of the ego camera's view (default: 0, long2: 1)")
     args = ap.parse_args()
-    dflt = {"route_length": 600.0, "max_steps": 4000, **SUITE_DEFAULTS.get(args.suite, {})}
+    dflt = {"route_length": 600.0, "max_steps": 4000, "town_style": "classic", "jam_fixes": 0, "blocked_timeout": 90.0,
+            **SUITE_DEFAULTS.get(args.suite, {})}
+    suite_style, suite_fixes, suite_timeout = dflt["town_style"], int(dflt["jam_fixes"]), dflt["blocked_timeout"]
     for k, v in dflt.items():
         if getattr(args, k) is None:
             setattr(args, k, v)
@@ -232,12 +254,16 @@ def main():
         tag += "_red"
     jobs = SUITES[args.suite]
     suffix = ("_dense" if args.dense else "") + ("" if args.weather == "random" else f"_{args.weather}") + \
-        ("_keiview" if args.renderer == "keiview" else "")
+        ("_keiview" if args.renderer == "keiview" else "") + \
+        ("" if args.town_style == suite_style else f"_{args.town_style}") + \
+        ("" if int(args.jam_fixes) == suite_fixes else ("_jamfix" if args.jam_fixes else "_nojamfix")) + \
+        ("" if args.blocked_timeout == suite_timeout else f"_wait{args.blocked_timeout:.0f}")
     fail_dir = os.path.join("runs", "failures", f"{tag}_{args.suite}{suffix}")
     a = {"agent": args.agent, "ckpt": args.ckpt, "route_length": args.route_length, "weather": args.weather,
          "max_steps": args.max_steps, "videos": args.videos, "video_dir": args.video_dir, "tag": tag,
          "dense": args.dense, "renderer": args.renderer, "fail_dir": fail_dir, "brake_hold": args.brake_hold,
-         "red_hold": args.red_hold}
+         "red_hold": args.red_hold, "town_style": args.town_style, "jam_fixes": bool(args.jam_fixes),
+         "blocked_timeout": args.blocked_timeout}
     t0 = time.time()
     ctx = mp.get_context("spawn")
     with ctx.Pool(args.workers) as pool:

@@ -135,6 +135,70 @@ def test_corridor_search_grid_matches_dense():
         assert np.array_equal(a, b)
 
 
+def test_varied_town_style():
+    """'varied' towns mix block lengths of 70-200 m; the classic towns keep their settings and file names."""
+    from keisim.config import TownConfig, town_config, town_key
+
+    assert town_key(1010, town_config("classic")) == "1010" and town_key(1010, TownConfig()) == "1010"
+    key = town_key(1010, town_config("varied"))
+    assert key.startswith("1010-") and len(key) == 13
+    lengths = []
+    for seed in (1010, 1011, 1012):
+        T = Town(seed, town_config("varied"))
+        lengths += [float(np.linalg.norm(np.diff(r.center, axis=0), axis=1).sum()) for r in T.roads]
+        assert T.total_lane_length() > Town(seed).total_lane_length()
+    assert min(lengths) > 40.0 and max(lengths) > 150.0 and np.percentile(lengths, 10) < 90.0
+
+
+def test_box_rule():
+    """A vehicle from another approach inside the junction makes the box busy; one from our own approach does not."""
+    cfg = EnvConfig()
+    cfg.render_rgb = cfg.render_seg = False
+    cfg.traffic.box_rule = True
+    env = KeiEnv(cfg)
+    env.reset(town_seed=5, episode_seed=2)
+    tr, town = env.world.traffic, env.world.town
+    J = next(j for j in town.junctions if j.signalized)
+    conns = [town.lanes[c] for c in J.connectors]
+    a = conns[0]
+    other = next(c for c in conns if c.pred[0] != a.pred[0])
+    same = [c for c in conns if c.pred[0] == a.pred[0] and c.id != a.id]
+    assert not tr.box_busy(a.id, tr.box_occupants({}))
+    assert tr.box_busy(a.id, tr.box_occupants({other.id: [(1.0, 0.0, 4.5)]}))
+    if same:
+        assert not tr.box_busy(a.id, tr.box_occupants({same[0].id: [(1.0, 0.0, 4.5)]}))
+    assert tr.box_busy(a.id, tr.box_occupants({}, ego_xy=J.pos))          # the ego inside the junction
+    # with the box rule, NPCs are never placed right before a stop line (they could not stop at a red light)
+    for i in range(tr.n):
+        lane = town.lanes[tr.route[i][0]]
+        if lane.stop_s is not None and tr.ri[i] == 0:
+            assert tr.s[i] <= lane.stop_s - 19.0 or tr.s[i] > lane.stop_s
+
+
+def test_release_hidden_stuck_vehicles():
+    """With release_hidden, long-stuck NPCs the ego camera cannot see are moved away; visible ones stay."""
+    cfg = EnvConfig()
+    cfg.render_rgb = cfg.render_seg = False
+    cfg.traffic.release_hidden = True
+    env = KeiEnv(cfg)
+    env.reset(town_seed=5, episode_seed=2)
+    env.step(env.expert_action())
+    tr, e = env.world.traffic, env.world.ego
+    assert tr.n >= 4
+    fwd, left = np.array([np.cos(e.yaw), np.sin(e.yaw)]), np.array([-np.sin(e.yaw), np.cos(e.yaw)])
+    spots = {0: e.xy + 30 * fwd, 1: e.xy - 30 * fwd, 2: e.xy + 25 * left, 3: e.xy + 80 * fwd}   # ahead, behind, side, far
+    tr.stuck[:] = 0.0
+    for i, p in spots.items():
+        tr.xy[i] = p
+        tr.stuck[i] = 50.0                     # past stuck_hidden_s (45 s), not yet stuck_far_s (60 s)
+    tr.release_stuck(e.xy, e.yaw)
+    moved = {i: not np.allclose(tr.xy[i], p) for i, p in spots.items()}
+    assert moved == {0: False, 1: True, 2: True, 3: False}
+    tr.stuck[3] = 61.0                          # far from the ego: the old rule
+    tr.release_stuck(e.xy, e.yaw)
+    assert not np.allclose(tr.xy[3], spots[3])
+
+
 def test_speed_input_starts_as_camera_only_model():
     """A camera-only checkpoint loaded into a speed-input KeiPilot must behave exactly as before."""
     import torch

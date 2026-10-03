@@ -72,7 +72,7 @@ class World:
         ext_o = np.concatenate([np.full(len(exy), -1), -2 - np.arange(pd.n)])
         ext_v = np.concatenate([np.full(len(exy), e.v), pd.vel])
         ext_yaw = np.concatenate([np.full(len(exy), e.yaw), pd.yaw])
-        self.traffic.step(dt, self.t, ext_xy, ext_r, ext_o, ext_v, ext_yaw, e.xy, e.v)
+        self.traffic.step(dt, self.t, ext_xy, ext_r, ext_o, ext_v, ext_yaw, e.xy, e.v, e.yaw)
         # pedestrians (crossing is triggered more often just ahead of the ego)
         tr = self.traffic
         veh_xy = np.vstack([tr.xy, e.xy[None]])

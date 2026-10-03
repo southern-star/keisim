@@ -233,10 +233,12 @@ class Traffic:
             lid = cand[rng.choice(len(cand), p=w)]
             lane = town.lanes[lid]
             if s_range is None:
-                s = rng.uniform(4.0, max(4.5, lane.length - 4.0))
+                s = rng.uniform(4.0, max(4.5, self._spawn_end(lane)))
             else:
                 s = rng.uniform(*s_range)
                 if s < 0 or s > lane.length:
+                    continue
+                if self.cfg.box_rule and lane.stop_s is not None and s > lane.stop_s - 20.0:
                     continue
             p = lane.poly.interp(s)
             if avoid_xy is not None and len(avoid_xy) and np.min(np.hypot(*(avoid_xy - p).T)) < avoid_r:
@@ -245,6 +247,14 @@ class Traffic:
                 continue
             self._add(lid, s, p, float(lane.poly.heading(s)))
             placed += 1
+
+    def _spawn_end(self, lane):
+        """Last spawn position on a lane. With the box rule, 20 m before a stop line: a car placed right at the line
+        at speed could not stop and would roll into the junction regardless of the light and the box."""
+        end = lane.length - 4.0
+        if self.cfg.box_rule and lane.stop_s is not None:
+            end = min(end, lane.stop_s - 20.0)
+        return end
 
     def _add(self, lid, s, p, yaw):
         dims, kind = self._sample_dims()
@@ -290,7 +300,7 @@ class Traffic:
         for _ in range(40):
             lid = town.road_lanes[rng.integers(len(town.road_lanes))]
             lane = town.lanes[lid]
-            s = rng.uniform(4.0, max(4.5, lane.length - 4.0))
+            s = rng.uniform(4.0, max(4.5, self._spawn_end(lane)))
             p = lane.poly.interp(s)
             if np.min(np.hypot(*(avoid_xy - p).T)) < 60.0:
                 continue
@@ -353,6 +363,25 @@ class Traffic:
             occ.setdefault(self.route[i][self.ri[i]], []).append((float(self.s[i]), float(self.v[i]), float(self.dims[i, 0])))
         return occ
 
+    def box_occupants(self, occ, ego_xy=None):
+        """junction id -> incoming lanes of the vehicles inside it (NPCs on its connectors; the ego, as None, while
+        it is within the junction radius)."""
+        lanes = self.town.lanes
+        box = {}
+        for lid in occ:
+            if lanes[lid].kind == "conn":
+                box.setdefault(lanes[lid].junction, set()).add(lanes[lid].pred[0])
+        if ego_xy is not None:
+            for J in self.town.junctions:
+                if J.signalized and math.hypot(*(np.asarray(ego_xy) - J.pos)) < J.radius:
+                    box.setdefault(J.id, set()).add(None)
+        return box
+
+    def box_busy(self, conn_id, box):
+        """True if a vehicle from another approach is inside the junction of connector `conn_id`."""
+        c = self.town.lanes[conn_id]
+        return any(p != c.pred[0] for p in box.get(c.junction, ()))
+
     def exit_blocked(self, conn_id, exit_id, need, occ, ego=None, ignore=None):
         """True if the junction exit `exit_id` (reached via connector `conn_id`) has
         no room for a vehicle needing `need` metres ("don't block the box")."""
@@ -374,7 +403,7 @@ class Traffic:
                     return True
         return False
 
-    def step(self, dt, t, ext_xy, ext_r, ext_owner, ext_speed, ext_yaw, ego_xy, ego_v=0.0):
+    def step(self, dt, t, ext_xy, ext_r, ext_owner, ext_speed, ext_yaw, ego_xy, ego_v=0.0, ego_yaw=None):
         """ext_*: external obstacles (ego circles with owner -1, pedestrians owner -2-k)."""
         n = self.n
         if n == 0:
@@ -409,7 +438,7 @@ class Traffic:
         ahead = d_stop >= -0.5
         has = ahead.any(1)
         first = np.argmax(ahead, 1)
-        occ = None
+        occ = box = None
         for i in np.nonzero(has)[0]:
             d = d_stop[i, first[i]]
             if d > 45.0:
@@ -428,7 +457,9 @@ class Traffic:
                 if k + 2 < len(r):
                     if occ is None:
                         occ = self.occupancy()
-                    if self.exit_blocked(r[k + 1], r[k + 2], self.dims[i, 0] + 3.0, occ, (ego_xy, ego_v)):
+                        box = self.box_occupants(occ, ego_xy) if cfg.box_rule else None
+                    if self.exit_blocked(r[k + 1], r[k + 2], self.dims[i, 0] + 3.0, occ, (ego_xy, ego_v)) or \
+                            (box is not None and self.box_busy(r[k + 1], box)):
                         stop_gap[i] = d - 0.6
         # obstacles: other NPCs + external
         cxy, cr, cow = self.circles()
@@ -484,10 +515,23 @@ class Traffic:
             si = float(self.s[i])
             self.xy[i, 0], self.xy[i, 1] = poly.interp1(si)
             self.yaw[i] = poly.heading1(si)
-        # stuck handling (teleport vehicles that have been stopped for ages, far from the ego)
         self.stuck = np.where(self.v < 0.1, self.stuck + dt, 0.0)
-        for i in np.nonzero(self.stuck > 60.0)[0]:
-            if np.hypot(*(self.xy[i] - ego_xy)) > 60.0:
+        self.release_stuck(ego_xy, ego_yaw)
+
+    def release_stuck(self, ego_xy, ego_yaw=None):
+        """Teleport vehicles that have been stopped for ages far from the ego and, with cfg.release_hidden, those
+        the ego camera cannot see: deadlocks around the ego then clear up without anything vanishing in view."""
+        cfg = self.cfg
+        first = min(cfg.stuck_far_s, cfg.stuck_hidden_s) if cfg.release_hidden else cfg.stuck_far_s
+        for i in np.nonzero(self.stuck > first)[0]:
+            d = self.xy[i] - ego_xy
+            dist = float(np.hypot(*d))
+            go = dist > 60.0 and self.stuck[i] > cfg.stuck_far_s
+            if not go and cfg.release_hidden and self.stuck[i] > cfg.stuck_hidden_s and ego_yaw is not None:
+                b = math.atan2(d[1], d[0]) - ego_yaw
+                off = abs(math.atan2(math.sin(b), math.cos(b)))
+                go = dist > cfg.view_dist or (dist > 8.0 and off > math.radians(cfg.view_half_deg))
+            if go:
                 self.respawn(i, ego_xy[None])
                 self._refresh(i)
 

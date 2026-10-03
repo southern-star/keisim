@@ -205,10 +205,17 @@ class Town:
         ny = int(rng.integers(cfg.grid_min, cfg.grid_max + 1))
         sp = float(rng.uniform(cfg.spacing_min, cfg.spacing_max))
         self.spacing = sp
+        if cfg.block_mode == "varied":     # every grid column and row gets its own block length
+            gx = np.concatenate([[0.0], np.cumsum(rng.uniform(cfg.spacing_min, cfg.spacing_max, nx - 1))])
+            gy = np.concatenate([[0.0], np.cumsum(rng.uniform(cfg.spacing_min, cfg.spacing_max, ny - 1))])
+            jit = cfg.jitter * cfg.spacing_min
         nodes = {}
         for i in range(nx):
             for j in range(ny):
-                nodes[(i, j)] = np.array([i * sp, j * sp]) + rng.uniform(-1, 1, 2) * cfg.jitter * sp
+                if cfg.block_mode == "varied":
+                    nodes[(i, j)] = np.array([gx[i], gy[j]]) + rng.uniform(-1, 1, 2) * jit
+                else:
+                    nodes[(i, j)] = np.array([i * sp, j * sp]) + rng.uniform(-1, 1, 2) * cfg.jitter * sp
         edges = []
         for i in range(nx):
             for j in range(ny):

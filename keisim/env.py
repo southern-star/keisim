@@ -121,7 +121,7 @@ class KeiEnv:
         self.plan = self.expert.plan()
         if self.cfg.renderer == "keiview":
             kv = self.keiview()
-            kv.load_town(town_seed)
+            kv.load_town(town_seed, cfg.town)
             # lighting from its own stream so the simulation is identical to the KeiSim-rendered episode
             light_rng = np.random.default_rng([0 if episode_seed is None else int(episode_seed), 7707])
             kv.new_episode(light_rng if self.cfg.weather == "random" else None)
