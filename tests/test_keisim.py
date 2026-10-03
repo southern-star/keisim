@@ -171,6 +171,12 @@ def test_box_rule():
     if same:
         assert not tr.box_busy(a.id, tr.box_occupants({same[0].id: [(1.0, 0.0, 4.5)]}))
     assert tr.box_busy(a.id, tr.box_occupants({}, ego_xy=J.pos))          # the ego inside the junction
+    # a car past its stop line and still moving is entering (e.g. at the end of a yellow): busy as well
+    lo = town.lanes[other.pred[0]]
+    past = lo.stop_s + 1.5 + 2.25                                            # its front 1.5 m past the line
+    assert tr.box_busy(a.id, tr.box_occupants({lo.id: [(past, 5.0, 4.5)]}))
+    assert not tr.box_busy(a.id, tr.box_occupants({lo.id: [(past, 0.0, 4.5)]}))           # standing: not counted
+    assert not tr.box_busy(a.id, tr.box_occupants({lo.id: [(lo.stop_s - 10.0, 5.0, 4.5)]}))  # not at the line yet
     # with the box rule, NPCs are never placed right before a stop line (they could not stop at a red light)
     for i in range(tr.n):
         lane = town.lanes[tr.route[i][0]]

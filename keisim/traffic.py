@@ -366,13 +366,17 @@ class Traffic:
         return occ
 
     def box_occupants(self, occ, ego_xy=None):
-        """junction id -> incoming lanes of the vehicles inside it (NPCs on its connectors; the ego, as None, while
-        it is within the junction radius)."""
+        """junction id -> incoming lanes of the vehicles inside it: NPCs on its connectors, NPCs past their stop line
+        and still moving (committed to enter, e.g. at the end of a yellow), and the ego, as None, while it is within
+        the junction radius."""
         lanes = self.town.lanes
         box = {}
-        for lid in occ:
-            if lanes[lid].kind == "conn":
-                box.setdefault(lanes[lid].junction, set()).add(lanes[lid].pred[0])
+        for lid, cars in occ.items():
+            L = lanes[lid]
+            if L.kind == "conn":
+                box.setdefault(L.junction, set()).add(L.pred[0])
+            elif L.stop_s is not None and any(s + n / 2 > L.stop_s + 0.5 and v > 1.0 for s, v, n in cars):
+                box.setdefault(L.end_junction, set()).add(lid)     # past its stop line and moving: entering
         if ego_xy is not None:
             for J in self.town.junctions:
                 if J.signalized and math.hypot(*(np.asarray(ego_xy) - J.pos)) < J.radius:
