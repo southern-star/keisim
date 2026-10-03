@@ -118,6 +118,8 @@ def worker(wid, args, quota, out_dir, counter):
         cfg.traffic.ego_cross_rate = args.ego_cross_rate
     if args.ped_spacing is not None:
         cfg.traffic.ped_spacing = tuple(args.ped_spacing)
+    if args.vehicle_spacing is not None:
+        cfg.traffic.vehicle_spacing = tuple(args.vehicle_spacing)
     if args.mode == "dagger":
         cfg.blocked_timeout = 40.0
     env = KeiEnv(cfg)
@@ -212,6 +214,7 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--ego_cross_rate", type=float, default=None, help="pedestrian crossing trigger rate ahead of ego")
     ap.add_argument("--ped_spacing", type=float, nargs=2, default=None)
+    ap.add_argument("--vehicle_spacing", type=float, nargs=2, default=None, help="m of lane per NPC vehicle (default 32 75)")
     ap.add_argument("--renderer", default="keisim", choices=["keisim", "keiview"], help="camera renderer")
     ap.add_argument("--episodes_per_town", type=int, default=1, help="episodes before switching town")
     ap.add_argument("--town_style", default="classic", choices=["classic", "varied", "twophase"],
