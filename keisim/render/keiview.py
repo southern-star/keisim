@@ -19,6 +19,7 @@ import sys
 
 import numpy as np
 
+from ..config import town_key
 from .camera import camera_pose
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -28,12 +29,12 @@ TOWN_DIR = ".towns"
 _EXPORT = None
 
 
-def export_town(seed: int, out_dir: str | None = None) -> str:
-    """Write web/.towns/town_<seed>.json (atomic, safe with parallel workers)."""
+def export_town(seed: int, town_cfg=None, out_dir: str | None = None) -> str:
+    """Write web/.towns/town_<key>.json (atomic, safe with parallel workers); key = town_key(seed, town_cfg)."""
     global _EXPORT
     out_dir = out_dir or os.path.join(WEB_DIR, TOWN_DIR)
     os.makedirs(out_dir, exist_ok=True)
-    path = os.path.join(out_dir, f"town_{seed}.json")
+    path = os.path.join(out_dir, f"town_{town_key(seed, town_cfg)}.json")
     if os.path.exists(path):
         return path
     if _EXPORT is None:
@@ -41,7 +42,7 @@ def export_town(seed: int, out_dir: str | None = None) -> str:
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         _EXPORT = mod.export
-    data = _EXPORT(int(seed))
+    data = _EXPORT(int(seed), town_cfg)
     tmp = f"{path}.{os.getpid()}.tmp"
     with open(tmp, "w") as f:
         json.dump(data, f, separators=(",", ":"))
@@ -93,14 +94,15 @@ class KeiViewRenderer:
         return r
 
     # ------------------------------------------------------------------ API
-    def load_town(self, seed):
-        if self.town == seed:
+    def load_town(self, seed, town_cfg=None):
+        key = town_key(seed, town_cfg)
+        if self.town == key:
             return {"cached": True}
-        export_town(int(seed))
-        r = self._call({"op": "town", "town": int(seed)})
+        export_town(int(seed), town_cfg)
+        r = self._call({"op": "town", "town": key})
         if r.get("errors"):
-            raise RuntimeError(f"KeiView town {seed}: {r['errors']}")
-        self.town = seed
+            raise RuntimeError(f"KeiView town {key}: {r['errors']}")
+        self.town = key
         self._new_episode = True
         return r
 

@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from keisim.config import EnvConfig  # noqa: E402
 from keisim.env import KeiEnv  # noqa: E402
 from keipilot.data import ShardWriter, write_meta  # noqa: E402
+from keisim.config import town_config  # noqa: E402
 from keisim.expert import LABEL_VERSION  # noqa: E402
 
 REASONS = {"cruise": 0, "curve": 1, "vehicle": 2, "pedestrian": 3, "red_light": 4, "junction_blocked": 5}
@@ -104,6 +105,11 @@ def worker(wid, args, quota, out_dir, counter):
     cv2.setNumThreads(1)
     rng = np.random.default_rng(args.seed * 1000 + wid)
     cfg = EnvConfig()
+    cfg.town = town_config(args.town_style)
+    cfg.traffic.box_rule = cfg.traffic.release_hidden = bool(args.jam_fixes)
+    if args.town_style != "classic":                   # varied towns: twice the caps keep the classic density
+        cfg.traffic.max_vehicles *= 2
+        cfg.traffic.max_peds *= 2
     cfg.route_length = (args.route_min, args.route_max)
     cfg.route_deviation = 4.0 if args.mode == "dagger" else cfg.route_deviation
     cfg.render_rgb = cfg.render_seg = False
@@ -112,6 +118,8 @@ def worker(wid, args, quota, out_dir, counter):
         cfg.traffic.ego_cross_rate = args.ego_cross_rate
     if args.ped_spacing is not None:
         cfg.traffic.ped_spacing = tuple(args.ped_spacing)
+    if args.vehicle_spacing is not None:
+        cfg.traffic.vehicle_spacing = tuple(args.vehicle_spacing)
     if args.mode == "dagger":
         cfg.blocked_timeout = 40.0
     env = KeiEnv(cfg)
@@ -206,14 +214,18 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--ego_cross_rate", type=float, default=None, help="pedestrian crossing trigger rate ahead of ego")
     ap.add_argument("--ped_spacing", type=float, nargs=2, default=None)
+    ap.add_argument("--vehicle_spacing", type=float, nargs=2, default=None, help="m of lane per NPC vehicle (default 32 75)")
     ap.add_argument("--renderer", default="keisim", choices=["keisim", "keiview"], help="camera renderer")
     ap.add_argument("--episodes_per_town", type=int, default=1, help="episodes before switching town")
+    ap.add_argument("--town_style", default="classic", choices=["classic", "varied", "twophase"],
+                    help="town style (keisim/config.py); twophase: right turns wait for gaps in the oncoming traffic")
+    ap.add_argument("--jam_fixes", type=int, default=0, choices=[0, 1], help="box rule + hidden jam release (long2/3)")
     ap.add_argument("--history", type=float, default=0.0, help="also store the frame this many s earlier (multi-frame)")
     ap.add_argument("--segment", type=float, default=3.0, help="with --history: seconds a virtual camera is kept")
     args = ap.parse_args()
     quota = [args.frames // args.workers + (1 if i < args.frames % args.workers else 0) for i in range(args.workers)]
     write_meta(args.out, label_version=LABEL_VERSION, mode=args.mode, ckpt=args.ckpt, frames=args.frames, history=args.history,
-               renderer=args.renderer)
+               renderer=args.renderer, town_style=args.town_style, jam_fixes=args.jam_fixes)
     ctx = mp.get_context("spawn" if args.mode == "dagger" else "fork")
     counter = ctx.Value("i", 0)
     t0 = time.time()

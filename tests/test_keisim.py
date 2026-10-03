@@ -94,6 +94,9 @@ def test_light_rules():
     assert light_stop(11.0, 8.0, TL_RED, 0.0, False) is None                # 10.4 m needed: cannot stop
     assert light_stop(8.0, 6.0, TL_GREEN, 0.0, False) is None
     assert light_stop(3.0, 8.0, TL_GREEN, 0.0, True) == "junction_blocked"  # don't block the box
+    assert light_stop(0.5, 0.1, TL_RED, 0.0, False) == "red_light"          # v5: creeping with the bumper at the
+    assert light_stop(0.5, 0.1, TL_YELLOW, 2.0, False) == "red_light"       # line, it stays (no follow across)
+    assert light_stop(5.0, 0.1, TL_YELLOW, 2.0, False) is None              # at speed it still goes on
 
 
 def test_camera_render_shapes():
@@ -102,6 +105,183 @@ def test_camera_render_shapes():
     assert obs["rgb"].shape == (160, 320, 3) and obs["rgb"].dtype == np.uint8
     assert obs["seg"].shape == (160, 320)
     assert obs["expert"]["path"].shape == (10, 2)
+
+
+def test_corridor_search_grid_matches_dense():
+    """The grid prefilter for many NPCs must find exactly what the all-pairs test finds."""
+    from keisim import traffic
+
+    rng = np.random.default_rng(3)
+    K, P, M = 150, 48, 900
+    origin = rng.uniform(-300, 300, (K, 2))
+    heading = rng.uniform(-np.pi, np.pi, K)
+    step = rng.uniform(0.5, 1.0, K)
+    s = np.arange(P)[None] * step[:, None]
+    curve = rng.normal(0, 0.02, K)[:, None] * s
+    paths = origin[:, None] + s[..., None] * np.stack([np.cos(heading[:, None] + curve), np.sin(heading[:, None] + curve)], -1)
+    valid = s <= rng.uniform(20, 45, K)[:, None]
+    cxy = np.concatenate([rng.uniform(-320, 320, (M, 2)), paths[:20, 10] + 0.5])   # some right on paths
+    M = len(cxy)
+    args = (paths, s, valid, origin, heading, np.full(K, 2.2), np.full(K, 0.9), cxy, np.full(M, 0.9),
+            rng.integers(-3, K, M), rng.uniform(0, 10, M), rng.uniform(-np.pi, np.pi, M), np.arange(K),
+            np.where(rng.random(M) < 0.2, 0.9, 0.35)[None])
+    keep = traffic.GRID_MIN_PAIRS
+    try:
+        traffic.GRID_MIN_PAIRS = 10 ** 15
+        dense = traffic.corridor_gaps(*args)
+        traffic.GRID_MIN_PAIRS = 0
+        grid = traffic.corridor_gaps(*args)
+    finally:
+        traffic.GRID_MIN_PAIRS = keep
+    assert np.isfinite(dense[0]).sum() >= 20
+    for a, b in zip(dense, grid):
+        assert np.array_equal(a, b)
+
+
+def test_varied_town_style():
+    """'varied' towns mix block lengths of 70-200 m; the classic towns keep their settings and file names."""
+    from keisim.config import TownConfig, town_config, town_key
+
+    assert town_key(1010, town_config("classic")) == "1010" and town_key(1010, TownConfig()) == "1010"
+    key = town_key(1010, town_config("varied"))
+    assert key.startswith("1010-") and len(key) == 13
+    lengths = []
+    for seed in (1010, 1011, 1012):
+        T = Town(seed, town_config("varied"))
+        lengths += [float(np.linalg.norm(np.diff(r.center, axis=0), axis=1).sum()) for r in T.roads]
+        assert T.total_lane_length() > Town(seed).total_lane_length()
+    assert min(lengths) > 40.0 and max(lengths) > 150.0 and np.percentile(lengths, 10) < 90.0
+
+
+def test_box_rule():
+    """A vehicle from another approach inside the junction makes the box busy; one from our own approach does not."""
+    cfg = EnvConfig()
+    cfg.render_rgb = cfg.render_seg = False
+    cfg.traffic.box_rule = True
+    env = KeiEnv(cfg)
+    env.reset(town_seed=5, episode_seed=2)
+    tr, town = env.world.traffic, env.world.town
+    J = next(j for j in town.junctions if j.signalized)
+    conns = [town.lanes[c] for c in J.connectors]
+    a = conns[0]
+    other = next(c for c in conns if c.pred[0] != a.pred[0])
+    same = [c for c in conns if c.pred[0] == a.pred[0] and c.id != a.id]
+    assert not tr.box_busy(a.id, tr.box_occupants({}))
+    assert tr.box_busy(a.id, tr.box_occupants({other.id: [(1.0, 0.0, 4.5)]}))
+    if same:
+        assert not tr.box_busy(a.id, tr.box_occupants({same[0].id: [(1.0, 0.0, 4.5)]}))
+    assert tr.box_busy(a.id, tr.box_occupants({}, ego_xy=J.pos))          # the ego inside the junction
+    # a car past its stop line and still moving is entering (e.g. at the end of a yellow): busy as well
+    lo = town.lanes[other.pred[0]]
+    past = lo.stop_s + 1.5 + 2.25                                            # its front 1.5 m past the line
+    assert tr.box_busy(a.id, tr.box_occupants({lo.id: [(past, 5.0, 4.5)]}))
+    assert not tr.box_busy(a.id, tr.box_occupants({lo.id: [(past, 0.0, 4.5)]}))           # standing: not counted
+    assert not tr.box_busy(a.id, tr.box_occupants({lo.id: [(lo.stop_s - 10.0, 5.0, 4.5)]}))  # not at the line yet
+    # with the box rule, NPCs are never placed right before a stop line (they could not stop at a red light)
+    for i in range(tr.n):
+        lane = town.lanes[tr.route[i][0]]
+        if lane.stop_s is not None and tr.ri[i] == 0:
+            assert tr.s[i] <= lane.stop_s - 19.0 or tr.s[i] > lane.stop_s
+
+
+def test_two_phase_signals_and_yields():
+    """Two-phase towns: opposite approaches share a green; right turns across oncoming traffic yield and wait
+    where they block nobody. Split-signal (classic) towns have no yields."""
+    from keisim.config import town_config
+    from keisim.roadnet import YIELD_CLEAR
+
+    assert not any(getattr(l, "yields", None) for l in Town(1012).lanes)
+    T = Town(1012, town_config("twophase"))
+    n_right = 0
+    for J in T.junctions:
+        if not J.signalized:
+            continue
+        assert J.phases == 2
+        groups = [T.lanes[a["in"]].signal[1] for a in J.arms]
+        assert sorted(set(groups)) == [0, 1]
+        for c in J.connectors:
+            L = T.lanes[c]
+            if not L.yields:
+                continue
+            assert L.turn != "straight"
+            n_right += L.turn == "right"
+            assert 0.0 <= L.wait_s <= L.yields[0][1]
+            for b, _, _ in L.yields:          # yields only to the other approach of the same signal group
+                B = T.lanes[b]
+                assert B.pred[0] != L.pred[0] and T.lanes[B.pred[0]].signal[1] == T.lanes[L.pred[0]].signal[1]
+            # the waiting car's front circle stays out of the paths it yields to
+            c0 = L.poly.interp1(max(L.wait_s - 0.9, 0.0))
+            others = np.concatenate([T.lanes[b].poly.pts for b, _, _ in L.yields])
+            assert np.min(np.hypot(*(others - np.asarray(c0)).T)) >= YIELD_CLEAR - 0.05
+    assert n_right >= 4
+
+
+def test_right_turn_gap_acceptance():
+    """must_yield: an oncoming car close to the crossing makes a right turn wait; a far one, or one stopping at its
+    red light, does not."""
+    from keisim.config import TL_GREEN, town_config
+
+    cfg = EnvConfig()
+    cfg.render_rgb = cfg.render_seg = False
+    cfg.town = town_config("twophase")
+    env = KeiEnv(cfg)
+    env.reset(town_seed=1012, episode_seed=1)
+    tr, town = env.world.traffic, env.world.town
+    conn = next(l for l in town.lanes if l.kind == "conn" and l.turn == "right" and l.yields
+                and len(town.junctions[l.junction].arms) == 4)
+    b, _, s2 = next(y for y in conn.yields if town.lanes[y[0]].turn == "straight")
+    pred = town.lanes[b].pred[0]
+    L = town.lanes[pred].length
+    J = town.junctions[conn.junction]
+    t_green = next(t for t in np.arange(0, J.cycle, 0.1) if town.signal_state_for_lane(pred, t) == TL_GREEN)
+
+    def tables(s_center, v, ego=False):
+        return {pred: [(s_center, v, 4.5, ego, b)]}
+    assert not tr.must_yield(conn, t_green, {})
+    assert tr.must_yield(conn, t_green, tables(L - 10.0, 8.0))            # about 2 s away
+    assert not tr.must_yield(conn, t_green, tables(L - 80.0, 8.0))        # about 11 s away
+    assert tr.must_yield(conn, t_green, {b: [(s2 - 2.0, 0.0, 4.5, False, None)]})  # standing in the crossing
+    # an oncoming car queued behind one that stands still to turn right itself cannot come: no deadlock
+    targets = {y[0] for y in conn.yields}
+    other = next(c for c in town.lanes[pred].succ if c not in targets)            # the oncoming right turn
+    queue = {pred: [(L - 4.0, 0.0, 4.5, False, other), (L - 11.0, 0.0, 4.5, False, b)]}
+    assert not tr.must_yield(conn, t_green, queue)
+    assert not tr.must_yield(conn, t_green, {other: [(1.0, 0.0, 4.5, False, None)], pred: [(L - 4.0, 0.0, 4.5, False, b)]})
+    t_red = next(t for t in np.arange(0, J.cycle, 0.1) if town.signal_state_for_lane(pred, t) != TL_GREEN
+                 and town.signal_state_for_lane(pred, t + 3.0) != TL_GREEN)
+    assert not tr.must_yield(conn, t_red, tables(L - 25.0, 6.0))          # stops at its red line
+    stop_front = town.lanes[pred].stop_s - 0.5                               # creeping at the line: the NPC rule
+    yellow = [t for t in np.arange(0, J.cycle, 0.1) if town.signal_state_for_lane(pred, t) == 1]
+    if yellow:                                                               # lets it go at yellow, so it counts
+        assert tr.must_yield(conn, yellow[0], tables(stop_front - 2.25, 0.5))
+    assert tr.must_yield(conn, t_red, tables(L - 25.0, 6.0, ego=True))     # the ego might take it anyway
+    # arrival estimates: a standing NPC reacts for 1 s, then accelerates; the ego could go at once
+    assert 4.8 < tr._arrival(15.5, 0.0, 10.5) < 5.1 and tr._arrival(15.5, 0.0, 10.5, ego=True) < 3.1
+    assert 3.8 < tr._arrival(40.0, 8.0, 10.5) < 4.1
+
+
+def test_release_hidden_stuck_vehicles():
+    """With release_hidden, long-stuck NPCs the ego camera cannot see are moved away; visible ones stay."""
+    cfg = EnvConfig()
+    cfg.render_rgb = cfg.render_seg = False
+    cfg.traffic.release_hidden = True
+    env = KeiEnv(cfg)
+    env.reset(town_seed=5, episode_seed=2)
+    env.step(env.expert_action())
+    tr, e = env.world.traffic, env.world.ego
+    assert tr.n >= 4
+    fwd, left = np.array([np.cos(e.yaw), np.sin(e.yaw)]), np.array([-np.sin(e.yaw), np.cos(e.yaw)])
+    spots = {0: e.xy + 30 * fwd, 1: e.xy - 30 * fwd, 2: e.xy + 25 * left, 3: e.xy + 80 * fwd}   # ahead, behind, side, far
+    tr.stuck[:] = 0.0
+    for i, p in spots.items():
+        tr.xy[i] = p
+        tr.stuck[i] = 50.0                     # past stuck_hidden_s (45 s), not yet stuck_far_s (60 s)
+    tr.release_stuck(e.xy, e.yaw)
+    moved = {i: not np.allclose(tr.xy[i], p) for i, p in spots.items()}
+    assert moved == {0: False, 1: True, 2: True, 3: False}
+    tr.stuck[3] = 61.0                          # far from the ego: the old rule
+    tr.release_stuck(e.xy, e.yaw)
+    assert not np.allclose(tr.xy[3], spots[3])
 
 
 def test_speed_input_starts_as_camera_only_model():
