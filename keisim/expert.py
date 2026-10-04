@@ -16,7 +16,8 @@ from .geometry import world_to_local
 from .traffic import corridor_gaps, vehicle_circles
 
 PATH_S = np.arange(1, 11) * 2.0          # label waypoints every 2 m up to 20 m
-LABEL_VERSION = 4                        # 3: yellow per traffic law; 4: at yellow, stop whenever the ego still can
+LABEL_VERSION = 5                        # 3: yellow per traffic law; 4: at yellow, stop whenever the ego still can;
+                                         # 5: and always when creeping (< 1 m/s) with the bumper at the line
 TL_MARGIN = 2.5                          # stop this far before the stop line (keeps it in view)
 
 
@@ -37,8 +38,11 @@ def light_stop(v, d, st, t_rem, exit_blocked):
     that per-frame rule could flip to "go" halfway through a stop when the ego braked a little late (it then
     reached the line just after red). With the hard-stop criterion the decision does not flip while the ego brakes,
     and "go" is left only when a stop is physically impossible, i.e. the line is under a second away.
-    The remaining yellow time `t_rem` is not used: a camera + speed model could not see it."""
-    can_stop = d > v * v / (2 * 6.0) + 0.3
+    The remaining yellow time `t_rem` is not used: a camera + speed model could not see it.
+    Label version 5: the 0.3 m margin (a moving car whose bumper is about at the line) does not apply below 1 m/s,
+    so a car creeping up a queue with its bumper at the line stops there at yellow and red instead of following the
+    car ahead across it (seen in queues behind cars waiting to turn right inside two-phase junctions)."""
+    can_stop = d > v * v / (2 * 6.0) + (0.3 if v >= 1.0 else 0.0)
     if st in (TL_RED, TL_YELLOW):
         stop = can_stop
     else:
@@ -138,6 +142,25 @@ class Expert:
             if v_obs < target:
                 target, reason = v_obs, ("pedestrian" if lead_o[0] <= -2 else "vehicle")
 
+        # --- give way (two-phase signals): a right turn waits at its connector's wait point, inside the
+        # junction, while oncoming traffic would reach the crossing within YIELD_GAP s. Independent of the ego
+        # speed, so it is part of target_nolight (the counterfactual labels keep it as it is).
+        if tr.has_yields:
+            s_front = s + hl
+            for jn in route.junctions:
+                if jn["s_out"] < s_front:
+                    continue
+                if jn["s_in"] - s_front > 45.0:
+                    break
+                conn = w.town.lanes[jn["lane"]]
+                if conn.yields:
+                    d_wait = jn["s_in"] + conn.wait_s - s_front
+                    if d_wait >= -0.5 and tr.must_yield(conn, w.t, tr.yield_tables()):
+                        v_y = stop_profile(max(d_wait, 0.0), self.B_COMF)
+                        if v_y < target:
+                            target, reason = v_y, "yield"
+                break
+
         # --- traffic light. The speed-independent inputs of the decision are returned too (lt_*), so recorded
         # frames can be relabelled for other ego speeds (and for later versions of the rule).
         tl = TL_NONE
@@ -167,8 +190,10 @@ class Expert:
             if d < 12.0:
                 k = route.lane_index_at(s_stop)
                 if k + 2 < len(route.lanes):
-                    blocked = w.traffic.exit_blocked(route.lanes[k + 1], route.lanes[k + 2], ego.LENGTH + 3.0,
-                                                     w.traffic.occupancy())
+                    occ = w.traffic.occupancy()
+                    blocked = w.traffic.exit_blocked(route.lanes[k + 1], route.lanes[k + 2], ego.LENGTH + 3.0, occ)
+                    if not blocked and w.traffic.cfg.box_rule:      # another approach's vehicle still inside
+                        blocked = w.traffic.box_busy(route.lanes[k + 1], w.traffic.box_occupants(occ))
             lt.update(lt_d=d, lt_st=st, lt_trem=t_rem, lt_blocked=blocked)
             why = light_stop(v, d, st, t_rem, blocked)
             if why:

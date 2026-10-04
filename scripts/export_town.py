@@ -21,6 +21,7 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from keisim.config import TOWN_STYLES, town_config, town_key, town_tag  # noqa: E402
 from keisim.geometry import box_corners  # noqa: E402
 from keisim.roadnet import Raster, Town  # noqa: E402
 
@@ -266,8 +267,8 @@ def make_parcels(town: Town, buildings):
     return parcels
 
 
-def export(seed: int) -> dict:
-    town = Town(seed)
+def export(seed: int, town_cfg=None) -> dict:
+    town = Town(seed, town_cfg)
     cfg = town.cfg
     x0, y0, x1, y1 = town.bbox
     origin = [round((x0 + x1) / 2, 1), round((y0 + y1) / 2, 1)]
@@ -291,7 +292,7 @@ def export(seed: int) -> dict:
     trees = [{"x": round(t["x"], 2), "y": round(t["y"], 2), "trunk_h": round(t["trunk_h"], 2),
               "r": round(t["r"], 2), "ch": round(t["ch"], 2)} for t in town.trees]
     return {
-        "format": "keisim-town", "version": 1, "seed": seed, "summary": town.summary(),
+        "format": "keisim-town", "version": 1, "seed": seed, "style": town_tag(cfg), "summary": town.summary(),
         "origin": origin, "bbox": r2(town.bbox),
         "cfg": {"lane_width": cfg.lane_width, "shoulder": cfg.shoulder, "sidewalk_width": cfg.sidewalk_width,
                 "road_half_width": cfg.road_half_width, "walk_outer": cfg.walk_outer,
@@ -309,11 +310,13 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--town", type=int, nargs="+", default=[1000])
     ap.add_argument("--out", default="web/towns")
+    ap.add_argument("--style", default="classic", choices=list(TOWN_STYLES), help="town style (keisim/config.py)")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
     for seed in args.town:
-        data = export(seed)
-        path = os.path.join(args.out, f"town_{seed}.json")
+        cfg = town_config(args.style)
+        data = export(seed, cfg)
+        path = os.path.join(args.out, f"town_{town_key(seed, cfg)}.json")
         with open(path, "w") as f:
             json.dump(data, f, separators=(",", ":"))
         print(f"{path}  {os.path.getsize(path) / 1024:.0f} KB  {data['summary']}")

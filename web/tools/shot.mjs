@@ -2,6 +2,7 @@
 // Adapted from Sakuragaoka Station tools/shot.mjs (MIT). Starts its own server.
 //   node tools/shot.mjs --town 1000 [--views 1,2,3] [--cams "x,z,yaw,pitch;x,y,z,yaw,pitch"] [--only ground,roads]
 //                       [--out shots/t1000] [--t 20] [--w 1280 --h 720] [--q high] [--bench 3] [--gl auto|soft|hw]
+//                       [--tdir .towns]   (towns exported by KeiSim on demand, e.g. town styles: --town 1017-<hash>)
 //   --views  1-based indices of the town's preset views (default: all presets, unless --cams is given)
 //   --cams   ';'-separated cameras. 4 numbers = walking eye (x,z,yawDeg,pitchDeg); 5 = free camera (x,y,z,yaw,pitch).
 //            yaw 0 = north(-Z), 90 = west, 180 = south, -90 = east.
@@ -51,7 +52,8 @@ try {
   page.on('console', (m) => { const t = m.type(); if (t === 'error' || t === 'warning' || t === 'warn') logs.push(`[console.${t}] ${m.text()}`); });
   page.on('pageerror', (e) => logs.push(`[pageerror] ${e.message}`));
   page.on('requestfailed', (r) => logs.push(`[requestfailed] ${r.url()} ${r.failure()?.errorText}`));
-  const q = new URLSearchParams({ shot: '1', town, w: String(W), h: String(H), t: String(args.t || 0), q: args.q || 'high' });
+  const q = new URLSearchParams({ shot: '1', town, w: String(W), h: String(H), t: String(args.t || 0), q: args.q || 'high',
+    ...(args.tdir ? { tdir: args.tdir } : {}) });
   if (args.only) q.set('only', args.only);
   await page.goto(`http://127.0.0.1:${port}/index.html?${q}`, { waitUntil: 'load', timeout: 120000 });
   await page.waitForFunction('window.__ready === true', { timeout: 900000, polling: 250 });

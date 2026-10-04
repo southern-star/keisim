@@ -77,6 +77,36 @@ def vehicle_circles(xy, yaw, length, width):
             np.repeat(np.arange(n), NCIRC))
 
 
+GRID_MIN_PAIRS = 40000      # corridor_gaps: below this many (path, circle) pairs the dense test is faster
+YIELD_GAP = 5.0             # s: a yielding turn goes only if no car with priority reaches the crossing sooner
+
+
+def near_pairs(origin, radius, cxy):
+    """All (k, m) with |cxy[m] - origin[k]| < radius[k], plus some farther ones: the circles in the 3x3 grid cells
+    (cell size = the largest radius) around each origin. Unordered."""
+    K = len(origin)
+    cell = max(float(np.max(radius)), 1.0)
+    cg = np.floor(cxy / cell).astype(np.int64)
+    og = np.floor(origin / cell).astype(np.int64)
+    lo = np.minimum(cg.min(0), og.min(0)) - 2
+    cg -= lo
+    og -= lo
+    W = int(max(cg[:, 1].max(), og[:, 1].max())) + 3
+    ckey = cg[:, 0] * W + cg[:, 1]
+    order = np.argsort(ckey, kind="stable")
+    skey = ckey[order]
+    d = np.array([-1, 0, 1])
+    qk = np.repeat(np.arange(K), 9)
+    qkey = (og[qk, 0] + np.tile(np.repeat(d, 3), K)) * W + og[qk, 1] + np.tile(np.tile(d, 3), K)
+    a = np.searchsorted(skey, qkey, "left")
+    cnt = np.searchsorted(skey, qkey, "right") - a
+    nz = cnt > 0
+    qk, a, cnt = qk[nz], a[nz], cnt[nz]
+    ks = np.repeat(qk, cnt)
+    ms = order[np.repeat(a - (np.cumsum(cnt) - cnt), cnt) + np.arange(int(cnt.sum()))]
+    return ks, ms
+
+
 def corridor_gaps(paths, cum, valid, origin, heading, half_len, half_w, cxy, cr, cowner, cspeed, cyaw,
                   self_owner, margin):
     """Batched obstacle search along K paths.
@@ -97,14 +127,24 @@ def corridor_gaps(paths, cum, valid, origin, heading, half_len, half_w, cxy, cr,
         return gap, lead_v, lead_o
     maxlen = np.where(valid, cum, 0.0).max(1)
     mid = paths[:, P // 2]
-    dm = cxy[None, :, :] - mid[:, None, :]
-    dm2 = dm[..., 0] ** 2 + dm[..., 1] ** 2
-    ds = cxy[None, :, :] - origin[:, None, :]
-    ds2 = ds[..., 0] ** 2 + ds[..., 1] ** 2
     lim = maxlen + 4.0
-    cand = (ds2 < (lim * lim)[:, None]) & (dm2 < ((0.6 * lim + 6.0) ** 2)[:, None])
-    cand &= cowner[None, :] != self_owner[:, None]
-    ks, ms = np.nonzero(cand)
+    if K * len(cxy) < GRID_MIN_PAIRS:
+        dm = cxy[None, :, :] - mid[:, None, :]
+        dm2 = dm[..., 0] ** 2 + dm[..., 1] ** 2
+        ds = cxy[None, :, :] - origin[:, None, :]
+        ds2 = ds[..., 0] ** 2 + ds[..., 1] ** 2
+        cand = (ds2 < (lim * lim)[:, None]) & (dm2 < ((0.6 * lim + 6.0) ** 2)[:, None])
+        cand &= cowner[None, :] != self_owner[:, None]
+        ks, ms = np.nonzero(cand)
+    else:                       # big towns: only the circles near each path
+        ks, ms = near_pairs(origin, lim, cxy)
+        dm = cxy[ms] - mid[ks]
+        ds = cxy[ms] - origin[ks]
+        cand = (ds[:, 0] ** 2 + ds[:, 1] ** 2 < (lim * lim)[ks]) & \
+            (dm[:, 0] ** 2 + dm[:, 1] ** 2 < ((0.6 * lim + 6.0) ** 2)[ks]) & (cowner[ms] != self_owner[ks])
+        ks, ms = ks[cand], ms[cand]
+        o = np.lexsort((ms, ks))            # the dense test's order, so that ties resolve the same way
+        ks, ms = ks[o], ms[o]
     if len(ks) == 0:
         return gap, lead_v, lead_o
     u = np.stack([np.cos(heading), np.sin(heading)], -1)
@@ -168,6 +208,7 @@ class Traffic:
         self.yaw = np.zeros(0)
         self.stuck = np.zeros(0)
         self.target_n = n
+        self.has_yields = any(getattr(l, "yields", None) for l in town.lanes)
 
     # --------------------------------------------------------------- spawning
     def _sample_dims(self):
@@ -194,10 +235,12 @@ class Traffic:
             lid = cand[rng.choice(len(cand), p=w)]
             lane = town.lanes[lid]
             if s_range is None:
-                s = rng.uniform(4.0, max(4.5, lane.length - 4.0))
+                s = rng.uniform(4.0, max(4.5, self._spawn_end(lane)))
             else:
                 s = rng.uniform(*s_range)
                 if s < 0 or s > lane.length:
+                    continue
+                if self.cfg.box_rule and lane.stop_s is not None and s > lane.stop_s - 20.0:
                     continue
             p = lane.poly.interp(s)
             if avoid_xy is not None and len(avoid_xy) and np.min(np.hypot(*(avoid_xy - p).T)) < avoid_r:
@@ -206,6 +249,14 @@ class Traffic:
                 continue
             self._add(lid, s, p, float(lane.poly.heading(s)))
             placed += 1
+
+    def _spawn_end(self, lane):
+        """Last spawn position on a lane. With the box rule, 20 m before a stop line: a car placed right at the line
+        at speed could not stop and would roll into the junction regardless of the light and the box."""
+        end = lane.length - 4.0
+        if self.cfg.box_rule and lane.stop_s is not None:
+            end = min(end, lane.stop_s - 20.0)
+        return end
 
     def _add(self, lid, s, p, yaw):
         dims, kind = self._sample_dims()
@@ -251,7 +302,7 @@ class Traffic:
         for _ in range(40):
             lid = town.road_lanes[rng.integers(len(town.road_lanes))]
             lane = town.lanes[lid]
-            s = rng.uniform(4.0, max(4.5, lane.length - 4.0))
+            s = rng.uniform(4.0, max(4.5, self._spawn_end(lane)))
             p = lane.poly.interp(s)
             if np.min(np.hypot(*(avoid_xy - p).T)) < 60.0:
                 continue
@@ -314,6 +365,143 @@ class Traffic:
             occ.setdefault(self.route[i][self.ri[i]], []).append((float(self.s[i]), float(self.v[i]), float(self.dims[i, 0])))
         return occ
 
+    def box_occupants(self, occ, ego_xy=None):
+        """junction id -> incoming lanes of the vehicles inside it: NPCs on its connectors, NPCs past their stop line
+        and still moving (committed to enter, e.g. at the end of a yellow), and the ego, as None, while it is within
+        the junction radius."""
+        lanes = self.town.lanes
+        box = {}
+        for lid, cars in occ.items():
+            L = lanes[lid]
+            if L.kind == "conn":
+                box.setdefault(L.junction, set()).add(L.pred[0])
+            elif L.stop_s is not None and any(s + n / 2 > L.stop_s + 0.5 and v > 1.0 for s, v, n in cars):
+                box.setdefault(L.end_junction, set()).add(lid)     # past its stop line and moving: entering
+        if ego_xy is not None:
+            for J in self.town.junctions:
+                if J.signalized and math.hypot(*(np.asarray(ego_xy) - J.pos)) < J.radius:
+                    box.setdefault(J.id, set()).add(None)
+        return box
+
+    def box_busy(self, conn_id, box):
+        """True if a vehicle from an approach of another signal group (or the ego) is inside the junction of
+        connector `conn_id`. With split signals every approach is its own group; with two-phase signals the
+        opposite approach shares the green and is handled by yielding (Lane.yields)."""
+        lanes = self.town.lanes
+        c = lanes[conn_id]
+        mine = lanes[c.pred[0]].signal
+        for p in box.get(c.junction, ()):
+            if p is None:
+                return True
+            if p != c.pred[0] and (mine is None or lanes[p].signal is None or lanes[p].signal[1] != mine[1]):
+                return True
+        return False
+
+    # ------------------------------------------------------------------- yielding (two-phase signals)
+    def yield_tables(self, ego_info=None):
+        """Who is where, for must_yield: lane -> [(s, v, length, is_ego, next lane)], front first.
+        ego_info = (lane, s on lane, next lane, v, length) adds the ego."""
+        on_lane = {}
+        for j in range(self.n):
+            r, k = self.route[j], self.ri[j]
+            on_lane.setdefault(r[k], []).append((float(self.s[j]), float(self.v[j]), float(self.dims[j, 0]), False,
+                                                 r[k + 1] if k + 1 < len(r) else None))
+        if ego_info is not None:
+            lid, s, nxt, v, L = ego_info
+            on_lane.setdefault(lid, []).append((s, v, L, True, nxt))
+        for lst in on_lane.values():
+            lst.sort(key=lambda e: -e[0])
+        return on_lane
+
+    def must_yield(self, conn, t, on_lane):
+        """True if a car with priority over connector `conn` (Lane) is in its crossing or reaches it within
+        YIELD_GAP seconds. Cars that will stop at a red or yellow light do not count, nor do cars queued behind
+        one that is standing still to go elsewhere (e.g. an oncoming car waiting to turn right itself)."""
+        town = self.town
+        lanes = town.lanes
+        for b, _, s2 in conn.yields:
+            vmax = 1.05 * lanes[b].speed_limit
+            for s, v, L, ego, _ in on_lane.get(b, ()):
+                if s - L / 2 > s2 + 1.5:
+                    continue                                    # its rear is past the crossing
+                d = s2 - (s + L / 2)
+                if d < 3.0 or self._arrival(d, v, vmax, ego) < YIELD_GAP:
+                    return True
+            pred = lanes[b].pred[0]
+            # a car standing at the entry of one of pred's other connectors blocks the whole approach lane
+            if any(e[1] < 0.5 and e[0] < 4.0 for c in lanes[pred].succ if c != b for e in on_lane.get(c, ())):
+                continue
+            stop_s = lanes[pred].stop_s
+            st = town.signal_state_for_lane(pred, t)
+            for s, v, L, ego, nxt in on_lane.get(pred, ()):    # front first
+                if nxt != b:
+                    if v < 0.5:
+                        break                                   # standing to go elsewhere: the rest queue behind
+                    continue
+                front = s + L / 2
+                if not (st != TL_GREEN and stop_s is not None and self._will_stop(st, stop_s - front, v, ego)) and \
+                        self._arrival(lanes[pred].length - front + s2, v, vmax, ego) < YIELD_GAP:
+                    return True
+                break                                           # the cars behind it arrive later
+        return False
+
+    @staticmethod
+    def _arrival(d, v, vmax, ego=False):
+        """Earliest time a car `d` m away at speed `v` can be there, accelerating up to `vmax` (a car starting
+        from its stop line arrives much sooner than d / v suggests): moving NPCs (even creeping) at 2.5 m/s^2,
+        standing NPCs after a 1 s reaction at their IDM acceleration (2 m/s^2), the ego at once at 3.5 m/s^2."""
+        if d <= 0.0:
+            return 0.0
+        a, t0 = (3.5, 0.0) if ego else ((2.5, 0.0) if v >= 0.2 else (2.0, 1.0))
+        return t0 + Traffic._reach(d, v, vmax, a)
+
+    @staticmethod
+    def _reach(d, v, vmax, a):
+        t1 = max(0.0, (vmax - v) / a)
+        d1 = v * t1 + 0.5 * a * t1 * t1
+        if d1 >= d:
+            return (-v + math.sqrt(v * v + 2.0 * a * d)) / a
+        return t1 + (d - d1) / max(vmax, 0.1)
+
+    @staticmethod
+    def _will_stop(st, d, v, ego):
+        """Whether a car `d` m before its red / yellow stop line (front bumper) at speed `v` stops there: the NPC
+        rule of step() (red: always, if it physically can; yellow: if d > v^2 / 7 + 1), and for the ego only when
+        it is already nearly standing before the line (the driving model may take a late yellow)."""
+        if ego:
+            return v < 2.0 and d > -0.5
+        if d < -0.5:
+            return False                                        # already past the line
+        if st == TL_RED:
+            return d + 0.5 >= v * v / 16.0                      # the line counts until 0.5 m past it
+        return d > v * v / 7.0 + 1.0
+
+    def _yield_gaps(self, stop_gap, t, ego_info, hl):
+        """Turns that give way wait at their connector's wait point while must_yield holds."""
+        lanes = self.town.lanes
+        tables = None
+        for i in range(self.n):
+            r, k = self.route[i], self.ri[i]
+            cur = lanes[r[k]]
+            if cur.kind == "conn":
+                if not cur.yields:
+                    continue
+                c, d = cur, cur.wait_s - (self.s[i] + hl[i])
+            elif k + 1 < len(r) and lanes[r[k + 1]].yields:
+                c = lanes[r[k + 1]]
+                d = cur.length - (self.s[i] + hl[i]) + c.wait_s
+            else:
+                continue
+            if d < -0.5 or d > 40.0:
+                continue                                        # past the wait point (committed) or far away
+            v = self.v[i]
+            if v > 1.0 and d < v * v / 8.0:
+                continue                                        # too close to stop gently: go on
+            if tables is None:
+                tables = self.yield_tables(ego_info)
+            if self.must_yield(c, t, tables):
+                stop_gap[i] = min(stop_gap[i], max(d, 0.0))
+
     def exit_blocked(self, conn_id, exit_id, need, occ, ego=None, ignore=None):
         """True if the junction exit `exit_id` (reached via connector `conn_id`) has
         no room for a vehicle needing `need` metres ("don't block the box")."""
@@ -335,7 +523,8 @@ class Traffic:
                     return True
         return False
 
-    def step(self, dt, t, ext_xy, ext_r, ext_owner, ext_speed, ext_yaw, ego_xy, ego_v=0.0):
+    def step(self, dt, t, ext_xy, ext_r, ext_owner, ext_speed, ext_yaw, ego_xy, ego_v=0.0, ego_yaw=None,
+             ego_info=None):
         """ext_*: external obstacles (ego circles with owner -1, pedestrians owner -2-k)."""
         n = self.n
         if n == 0:
@@ -370,7 +559,7 @@ class Traffic:
         ahead = d_stop >= -0.5
         has = ahead.any(1)
         first = np.argmax(ahead, 1)
-        occ = None
+        occ = box = None
         for i in np.nonzero(has)[0]:
             d = d_stop[i, first[i]]
             if d > 45.0:
@@ -389,8 +578,12 @@ class Traffic:
                 if k + 2 < len(r):
                     if occ is None:
                         occ = self.occupancy()
-                    if self.exit_blocked(r[k + 1], r[k + 2], self.dims[i, 0] + 3.0, occ, (ego_xy, ego_v)):
+                        box = self.box_occupants(occ, ego_xy) if cfg.box_rule else None
+                    if self.exit_blocked(r[k + 1], r[k + 2], self.dims[i, 0] + 3.0, occ, (ego_xy, ego_v)) or \
+                            (box is not None and self.box_busy(r[k + 1], box)):
                         stop_gap[i] = d - 0.6
+        if self.has_yields:          # two-phase signals: turns wait for a gap in the oncoming traffic
+            self._yield_gaps(stop_gap, t, ego_info, hl)
         # obstacles: other NPCs + external
         cxy, cr, cow = self.circles()
         csp = self.v[cow]
@@ -445,10 +638,23 @@ class Traffic:
             si = float(self.s[i])
             self.xy[i, 0], self.xy[i, 1] = poly.interp1(si)
             self.yaw[i] = poly.heading1(si)
-        # stuck handling (teleport vehicles that have been stopped for ages, far from the ego)
         self.stuck = np.where(self.v < 0.1, self.stuck + dt, 0.0)
-        for i in np.nonzero(self.stuck > 60.0)[0]:
-            if np.hypot(*(self.xy[i] - ego_xy)) > 60.0:
+        self.release_stuck(ego_xy, ego_yaw)
+
+    def release_stuck(self, ego_xy, ego_yaw=None):
+        """Teleport vehicles that have been stopped for ages far from the ego and, with cfg.release_hidden, those
+        the ego camera cannot see: deadlocks around the ego then clear up without anything vanishing in view."""
+        cfg = self.cfg
+        first = min(cfg.stuck_far_s, cfg.stuck_hidden_s) if cfg.release_hidden else cfg.stuck_far_s
+        for i in np.nonzero(self.stuck > first)[0]:
+            d = self.xy[i] - ego_xy
+            dist = float(np.hypot(*d))
+            go = dist > 60.0 and self.stuck[i] > cfg.stuck_far_s
+            if not go and cfg.release_hidden and self.stuck[i] > cfg.stuck_hidden_s and ego_yaw is not None:
+                b = math.atan2(d[1], d[0]) - ego_yaw
+                off = abs(math.atan2(math.sin(b), math.cos(b)))
+                go = dist > cfg.view_dist or (dist > 8.0 and off > math.radians(cfg.view_half_deg))
+            if go:
                 self.respawn(i, ego_xy[None])
                 self._refresh(i)
 

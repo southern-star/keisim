@@ -47,6 +47,7 @@ class TownConfig:
     grid_max: int = 5
     spacing_min: float = 70.0
     spacing_max: float = 100.0
+    block_mode: str = "uniform"       # uniform: one block length per town | varied: one per grid row and column
     jitter: float = 0.12              # node jitter as a fraction of spacing
     edge_drop: float = 0.22           # probability of dropping a grid edge
     curve_prob: float = 0.4           # probability that a road is curved
@@ -60,6 +61,13 @@ class TownConfig:
     signal_green: tuple = (6.0, 9.0)
     signal_yellow: float = 2.5
     signal_allred: float = 1.5
+    # split: every approach has its own green (no conflicts inside a junction). two_phase: opposite approaches
+    # share the green (Japan's usual signal); right turns then wait inside the junction for a gap in the oncoming
+    # traffic (see Lane.yields).
+    signal_mode: str = "split"
+    two_phase_green: tuple = (12.0, 18.0)
+    two_phase_yellow: float = 3.0
+    two_phase_allred: float = 2.0
     building_prob: float = 0.85
     tree_prob: float = 0.55
     tex_res: float = 0.1              # metres per texel of the ground texture
@@ -86,6 +94,17 @@ class TrafficConfig:
     idm_T: float = 1.2
     idm_s0: float = 2.5
     lat_acc: float = 2.0              # comfortable lateral acceleration for curve speed
+    # Box rule: wait at the stop line, even at green, while a vehicle from another approach is still inside the
+    # junction (it may be crossing our path; two such vehicles stopped head to head never get out again).
+    box_rule: bool = False
+    # Deadlock release: NPCs standing still for `stuck_far_s` more than 60 m from the ego are moved elsewhere.
+    # With release_hidden, so are those standing for `stuck_hidden_s` anywhere the ego camera cannot see
+    # (beyond view_dist or more than view_half_deg off its heading); jams around the ego then clear up.
+    stuck_far_s: float = 60.0
+    release_hidden: bool = False
+    stuck_hidden_s: float = 45.0
+    view_half_deg: float = 60.0
+    view_dist: float = 110.0
 
 
 @dataclass
@@ -99,6 +118,38 @@ class CameraConfig:
     pitch_deg: float = 8.0            # downward pitch
     max_dist: float = 110.0           # far clipping distance for objects
     supersample: int = 2              # render at N x resolution then downsample
+
+
+# Town styles (TownConfig overrides). "classic" is every suite up to KeiPilot v0.5; "varied" mixes block lengths
+# of 70-200 m inside a town (longer blocks hold longer queues: half the deadlocks of the classic towns).
+TOWN_STYLES = {
+    "classic": {},
+    "varied": {"block_mode": "varied", "spacing_min": 70.0, "spacing_max": 200.0},
+    "twophase": {"block_mode": "varied", "spacing_min": 70.0, "spacing_max": 200.0, "signal_mode": "two_phase"},
+}
+
+
+def town_config(style="classic"):
+    cfg = TownConfig()
+    for k, v in TOWN_STYLES[style].items():
+        setattr(cfg, k, v)
+    return cfg
+
+
+def town_tag(cfg):
+    """'' for the classic towns, else a short hash of the town settings (keeps exported towns apart)."""
+    import hashlib
+    from dataclasses import asdict
+    d = asdict(cfg)
+    if d == asdict(TownConfig()):
+        return ""
+    return hashlib.sha1(repr(sorted(d.items())).encode()).hexdigest()[:8]
+
+
+def town_key(seed, cfg=None):
+    """Name of an exported town: the seed, plus the settings tag for non-classic towns (e.g. '1010-3f2a9c1e')."""
+    tag = town_tag(cfg) if cfg is not None else ""
+    return f"{int(seed)}-{tag}" if tag else str(int(seed))
 
 
 @dataclass
