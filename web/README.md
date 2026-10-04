@@ -80,7 +80,7 @@ KeiPilot の学習データ収集とクローズドループ評価で使いま�
 
 ```bash
 cd web && npm install && cd ..
-uv run scripts/demo.py --agent model --ckpt runs/keipilot.pt --renderer keiview --town 1001 --episode 3 --out runs/demo_kv.mp4   # Release v0.5.0 の重み
+uv run scripts/demo.py --agent model --ckpt runs/keipilot.pt --renderer keiview --town 1001 --episode 3 --out runs/demo_kv.mp4   # Release v0.6.0 の重み
 ```
 
 ## ブラウザで KeiPilot を走らせる（パイロットモード）
@@ -89,8 +89,8 @@ uv run scripts/demo.py --agent model --ckpt runs/keipilot.pt --renderer keiview 
 公開版: <https://southern-star.github.io/keisim/?pilot=1>
 
 ```bash
-uv run --with onnx --with onnxruntime scripts/export_onnx.py runs/keipilot_v5/last.pt web/models/keipilot.onnx
-#   （または Release v0.5.0 の keipilot.onnx を web/models/ に置く）
+uv run --with onnx --with onnxruntime scripts/export_onnx.py runs/keipilot_v6/last.pt web/models/keipilot.onnx
+#   （または Release v0.6.0 の keipilot.onnx を web/models/ に置く）
 cd web && node tools/serve.mjs                    # → http://localhost:5174/?pilot=1&town=1000
 ```
 

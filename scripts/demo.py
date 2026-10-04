@@ -16,7 +16,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from keisim.config import EnvConfig  # noqa: E402
+from keisim.config import EnvConfig, town_config  # noqa: E402
 from keisim.env import KeiEnv  # noqa: E402
 from keisim.viz import VideoWriter, colorize_seg, compose_dashboard, info_lines  # noqa: E402
 
@@ -34,11 +34,16 @@ def main():
     ap.add_argument("--show", action="store_true", help="also show a live OpenCV window")
     ap.add_argument("--renderer", default="keisim", choices=["keisim", "keiview"], help="camera renderer")
     ap.add_argument("--no_safety", action="store_true", help="model: without the BrakeHold / RedHold safety layers")
+    ap.add_argument("--town_style", default="classic", choices=["classic", "varied", "twophase"],
+                    help="twophase: Japan's two-phase signals, right turns wait for gaps in the oncoming traffic")
     args = ap.parse_args()
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
 
     cfg = EnvConfig()
     cfg.renderer = args.renderer
+    cfg.town = town_config(args.town_style)
+    if args.town_style != "classic":       # the long2 / long3 traffic rules (box rule, hidden jam release)
+        cfg.traffic.box_rule = cfg.traffic.release_hidden = True
     env = KeiEnv(cfg)
     obs = env.reset(town_seed=args.town, episode_seed=args.episode, route_length=args.route, weather=args.weather)
     agent = None
