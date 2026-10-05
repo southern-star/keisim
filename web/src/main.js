@@ -19,6 +19,20 @@ const ONLY = params.get('only') ? params.get('only').split(',').map(s => s.trim(
 const SEED = params.get('town') || '1000';
 const EGO = params.has('ego');                    // KeiSim ego-camera mode (src/ego.js)
 const PILOT = params.has('pilot');                // KeiPilot drives in the browser (src/pilot.js)
+if (PILOT) {                                      // the intro board describes the driving demo, not the walk
+  document.body.classList.add('pilot-mode');
+  document.title = 'KeiPilot — ブラウザで自動運転';
+  const set = (sel, html) => { const e = document.querySelector(sel); if (e) e.innerHTML = html; };
+  set('#intro .kana', 'KeiPilot · ブラウザで自動運転');
+  set('#intro .no', 'KeiSim<br>town');
+  set('#townsum', `<p>カメラ画像 1 枚と自車の速度だけを見て運転する E2E モデル <b>KeiPilot</b> が、ブラウザの中で KeiSim の街を走ります。
+    信号を読み、前の車について走り、ナビの指示どおりに交差点を曲がります。</p>
+    <ul><li>推論は onnxruntime-web（WebGPU、なければ WASM）。運転モデル（30 MB）を読み込みます。</li>
+    <li>← ↑ → 次の交差点で曲がる方向　Space 一時停止　R 最初から　T 周りの車（画面のボタンでも操作できます）</li>
+    <li>ピンクはモデルが描いた走行経路、水色はナビのルート。右下はモデルへの入力画像と、モデルの領域分割です。</li>
+    <li>周りの車は「周りの車」ボタン、T キー、<code>?traffic=0</code> で消せます（描画が重いとき。選んだ設定はこのブラウザに残ります）。</li></ul>`);
+  set('#loadlabel', '読み込み中…');
+}
 const TDIR = (params.get('tdir') || 'towns').replace(/[^\w.-]/g, '');
 const $ = (id) => document.getElementById(id);
 
@@ -51,6 +65,7 @@ const pipeline = createRenderPipeline(renderer, quality);
 const audio = { start() {}, update() {}, loop: () => ({ setVolume() {}, setParam() {}, setPosition() {}, stop() {} }), play() {}, muted: true };
 const ctx = createContext({ scene, camera, renderer, audio, quality, sunDir });
 ctx.sky = sky;
+ctx.mergeActors = PILOT;                         // pilot: each car one mesh per material (src/world/actors.js)
 window.__ctx = ctx; window.THREE = THREE;
 // ego mode draws signal heads larger so the lamps stay visible at KeiSim's 320x160 camera resolution
 ctx.signalScale = Number(params.get('sigscale') || (EGO || PILOT ? 2.2 : 1));
@@ -82,6 +97,7 @@ async function loadFonts() {
 const errors = []; window.__errors = errors;
 const stats = { modules: {} }; window.__stats = stats;
 function setProgress(frac, label) {
+  if (PILOT && !setProgress.model) frac *= 0.45;   // pilot: the town takes the first part of the bar, the model the rest
   const bar = $('bar'); if (bar) bar.style.transform = `scaleX(${frac})`;
   const lab = $('loadlabel'); if (lab && label) lab.textContent = label;
 }
@@ -94,9 +110,9 @@ async function build() {
   ctx.town = town; window.__town = town;
   L.configureWorld({ play: town.play, heightAt: town.heightAt, farTown: town.farTown, farSkip: town.farSkip });
   const name = $('townname'); if (name) name.textContent = SEED;
-  const sum = $('townsum'); if (sum) sum.textContent = `${town.junctions.length} junctions · ${town.buildings.length} lots · ${town.trees.length} trees`;
+  const sum = $('townsum'); if (sum && !PILOT) sum.textContent = `${town.junctions.length} junctions · ${town.buildings.length} lots · ${town.trees.length} trees`;
   await loadFonts();
-  const mods = EGO ? MODULES.concat(['actors']) : MODULES;
+  const mods = EGO || PILOT ? MODULES.concat(['actors']) : MODULES;      // pilot: the surrounding traffic
   const list = ONLY ? mods.filter(m => ONLY.includes(m)).concat(ONLY.filter(m => !mods.includes(m))) : mods;
   let i = 0;
   for (const name of list) {
@@ -177,7 +193,7 @@ function frame(now) {
   if (manual) return;
   if (SHOT) dt = 0;
   simT += dt;
-  if (pilot) pilot.update(dt);
+  if (pilot) pilot.update(dt, simT);
   else if (!SHOT) player.update(dt);
   ctx.physics.refreshDynamic();
   stepUpdates(dt, simT);
@@ -221,7 +237,9 @@ async function main() {
       const { installPilot } = await import('./pilot.js');
       // the model frame gets its own pipeline at KeiSim's medium quality, like ego mode (keisim keiview_quality)
       const modelPipeline = () => createRenderPipeline(renderer, QUALITY.medium);
-      pilot = await installPilot({ ctx, scene, renderer, camera, sunDir, modelPipeline, params, status });
+      setProgress.model = true;
+      const progress = (f) => setProgress(0.45 + 0.55 * Math.min(1, f));
+      pilot = await installPilot({ ctx, scene, renderer, camera, sunDir, modelPipeline, params, status, progress });
     } catch (e) {
       console.error(e); errors.push({ module: 'pilot', message: String(e && e.stack || e) });
       status(`運転モデルを読み込めませんでした: ${e.message || e}`);
@@ -236,7 +254,7 @@ async function main() {
       manual = true;
       for (let k = Math.round(sec / dt); k > 0; k--) {
         simT += dt;
-        pilot.update(dt);
+        pilot.update(dt, simT);
         ctx.physics.refreshDynamic();
         stepUpdates(dt, simT);
         sky.update(simT, camera);

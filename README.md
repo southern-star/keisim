@@ -22,7 +22,7 @@
 
 **ブラウザで試す**: <https://southern-star.github.io/keisim/?pilot=1>
 KeiPilot がブラウザの中で KeiView の街を運転します。インストールは不要で、推論は onnxruntime-web（WebGPU、なければ WASM）です。
-次の交差点で曲がる方向は ← ↑ → で指定できます（[web/README.md](web/README.md#ブラウザで-keipilot-を走らせるパイロットモード)）。
+次の交差点で曲がる方向は ← ↑ → で指定できます。周りの車も走ります（重いときは T キーで消せます。[web/README.md](web/README.md#ブラウザで-keipilot-を走らせるパイロットモード)）。
 
 | | CARLA | MetaDrive + 既存モデル | **KeiSim + KeiPilot** |
 |---|---|---|---|
@@ -466,7 +466,8 @@ cd web && node tools/serve.mjs                # http://localhost:5174/?town=1000
 
 `?pilot=1` を付けると、KeiPilot がブラウザの中でこの街を運転します（公開版: <https://southern-star.github.io/keisim/?pilot=1>）。
 KeiSim の閉ループ（モデルの入力の描画、制御器、車両モデル、安全層、ルートと目標点）を JavaScript に移したもので、
-推論は onnxruntime-web です（WebGPU なら 1 回 20〜40 ms、WASM なら 0.2〜0.35 秒）。ほかの車と歩行者はいません。
+推論は onnxruntime-web です（WebGPU なら 1 回 20〜40 ms、WASM なら 0.2〜0.35 秒）。
+周りの車は KeiSim の NPC を軽くしたもの（`web/src/traffic.js`）で、歩行者はいません。
 
 ### KeiView の画像で KeiPilot を学習する
 

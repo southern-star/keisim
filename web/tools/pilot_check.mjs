@@ -1,8 +1,9 @@
 // Headless check of the in-browser KeiPilot demo (index.html?pilot=1): opens the page in Chrome, drives `--sec`
 // seconds of simulated time through window.__pilotRun (every model call awaited, as in KeiSim) and prints the
 // inference backend and time plus one line per `--every` seconds: route position, speed, target speed, light,
-// next turn, lateral deviation from the route and restarts.
+// next turn, lateral deviation from the route, restarts, and the other cars (count / contacts with the ego).
 //   node tools/pilot_check.mjs [--town 1000] [--sec 60] [--every 2] [--ep webgpu|wasm] [--gl hw|soft] [--shot out.png]
+//                              [--traffic 0] [--cars 20]   (no other cars / their number)
 //                              [--url https://southern-star.github.io/keisim/]   (a deployed copy instead of web/)
 // Needs models/keipilot.onnx (scripts/export_onnx.py) and network access to cdn.jsdelivr.net (onnxruntime-web).
 import fs from 'node:fs';
@@ -33,7 +34,8 @@ try {
   const page = await browser.newPage();
   page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warn') console.log(`[${m.type()}] ${m.text().slice(0, 300)}`); });
   page.on('pageerror', (e) => console.log(`[pageerror] ${e.message}`));
-  const q = new URLSearchParams({ pilot: '1', town, ...(args.ep ? { ep: args.ep } : {}) });
+  const q = new URLSearchParams({ pilot: '1', town, ...(args.ep ? { ep: args.ep } : {}),
+    ...(args.traffic ? { traffic: args.traffic } : {}), ...(args.cars ? { cars: args.cars } : {}) });
   const t0 = Date.now();
   await page.goto(`${base}?${q}`, { waitUntil: 'load', timeout: 180000 });
   await page.waitForFunction('window.__pilotRun || /読み込めません/.test(document.getElementById("loadlabel").textContent)', { timeout: 600000, polling: 200 });
@@ -42,15 +44,16 @@ try {
   const info = await page.evaluate(() => ({ backend: window.__pilot.backend, adapter: window.__pilot.adapter,
     gl: (() => { try { const g = document.getElementById('scene').getContext('webgl2'); const d = g.getExtension('WEBGL_debug_renderer_info'); return d ? g.getParameter(d.UNMASKED_RENDERER_WEBGL) : '?'; } catch (e) { return 'n/a'; } })() }));
   console.log(`town ${town}: ready in ${((Date.now() - t0) / 1000).toFixed(1)} s, backend ${info.backend}${info.adapter ? ` (${info.adapter})` : ''}, WebGL ${info.gl}`);
-  console.log('   t     s  km/h  target  light  next turn       dev  restarts  infer');
+  console.log('   t     s  km/h  target  light  next turn       dev  restarts  infer   cars/contacts');
   const names = ['red', 'yellow', 'green', 'none'];
   for (let t = every; t <= sec + 1e-6; t += every) {
     const s = await page.evaluate((d) => window.__pilotRun(d).then((r) => ({
       s: r.s, v: r.car.v, target: r.plan ? r.plan.target : null, tl: r.plan ? r.plan.tl : null,
-      turn: r.inputs.turn || 'straight', dist: r.inputs.dist, dev: r.deviation, resets: r.resets, ms: r.inferMs })), every);
+      turn: r.inputs.turn || 'straight', dist: r.inputs.dist, dev: r.deviation, resets: r.resets, ms: r.inferMs,
+      traffic: r.traffic })), every);
     const k = s.tl ? s.tl.indexOf(Math.max(...s.tl)) : 3;
     console.log(`${t.toFixed(0).padStart(4)} ${s.s.toFixed(0).padStart(5)} ${(s.v * 3.6).toFixed(0).padStart(5)} ${s.target === null ? '     -' : (s.target * 3.6).toFixed(0).padStart(6)}` +
-      `  ${names[k].padEnd(6)} ${s.turn.padEnd(8)} ${s.dist === null ? '' : `${s.dist.toFixed(0)} m`.padStart(6)} ${s.dev.toFixed(2).padStart(6)} ${String(s.resets).padStart(6)} ${s.ms.toFixed(0).padStart(6)} ms`);
+      `  ${names[k].padEnd(6)} ${s.turn.padEnd(8)} ${s.dist === null ? '' : `${s.dist.toFixed(0)} m`.padStart(6)} ${s.dev.toFixed(2).padStart(6)} ${String(s.resets).padStart(6)} ${s.ms.toFixed(0).padStart(6)} ms   ${s.traffic ? `${s.traffic.n}/${s.traffic.contacts}` : '-'}`);
   }
   if (args.shot) { await page.screenshot({ path: args.shot }); console.log(`screenshot: ${args.shot}`); }
 } finally {
