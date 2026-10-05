@@ -4,8 +4,8 @@
 // exit (target point). All coordinates are KeiSim's (x east, y north, yaw counter-clockwise).
 export const CMD = { left: 0, straight: 1, right: 2 };
 
-const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
-const heading = (a, b) => Math.atan2(b[1] - a[1], b[0] - a[0]);
+export const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+export const heading = (a, b) => Math.atan2(b[1] - a[1], b[0] - a[0]);
 
 /** Offset a polyline to the left by d (negative: right), using the averaged tangent at each vertex. */
 function offsetPolyline(pts, d) {
@@ -17,7 +17,7 @@ function offsetPolyline(pts, d) {
 }
 
 /** keisim.geometry.arc_bezier: smooth, near-circular connector from pose (p0, h0) to pose (p1, h1). */
-function arcBezier(p0, h0, p1, h1, n = 24) {
+export function arcBezier(p0, h0, p1, h1, n = 24) {
   const chord = Math.hypot(p1[0] - p0[0], p1[1] - p0[1]);
   const delta = Math.abs(wrap(h1 - h0));
   let d = chord / 3;
@@ -32,10 +32,11 @@ function arcBezier(p0, h0, p1, h1, n = 24) {
   return out;
 }
 
-export function createNavigator(data) {
+/** One lane per road and direction (left-hand traffic: left of the centre line), with the ways out of the
+ *  junction at its end (no U-turns): {id, road, from, to, pts, len, h0, h1, next: [{lane, turn}]}. */
+export function buildLanes(data) {
   const cfg = data.cfg;
   const off = (cfg.left_hand_traffic === false ? -1 : 1) * (cfg.lane_width || 3.5) / 2;
-  const junctions = new Map(data.junctions.map((j) => [j.id, j]));
   const lanes = [];
   for (const r of data.roads) {
     lanes.push({ id: lanes.length, road: r.id, from: r.a, to: r.b, pts: offsetPolyline(r.center, off) });
@@ -54,6 +55,11 @@ export function createNavigator(data) {
       return { lane: o, turn: dh > 0.5 ? 'left' : dh < -0.5 ? 'right' : 'straight' };
     });
   }
+  return lanes;
+}
+
+export function createNavigator(data, lanes = buildLanes(data)) {
+  const junctions = new Map(data.junctions.map((j) => [j.id, j]));
 
   // ---------------------------------------------------------------- the route: a growing polyline of lanes
   let pts, cum, decisions, last, choice, seg;

@@ -3,10 +3,12 @@
 // (scripts/export_onnx.py -> models/keipilot.onnx, run by onnxruntime-web on WebGPU or WASM) plans a path and a
 // target speed from that frame, and the car follows the plan with KeiSim's controllers and vehicle model
 // (keisim/control.py, keisim/vehicle.py) behind the two safety layers of keipilot/agent.py. The route and the
-// model's route inputs (next turn, target point) come from src/nav.js. Signals switch with KeiSim's timing; there
-// is no other traffic. Keys: ← ↑ → turn at the next junction, Space pause, R back to the start (or the buttons).
+// model's route inputs (next turn, target point) come from src/nav.js. Signals switch with KeiSim's timing; other
+// cars (src/traffic.js) drive around the town unless switched off (?traffic=0, the HUD button or T, remembered).
+// Keys: ← ↑ → turn at the next junction, Space pause, R back to the start, T other cars (or the buttons).
 import * as THREE from 'three';
-import { createNavigator } from './nav.js';
+import { buildLanes, createNavigator } from './nav.js';
+import { createTraffic } from './traffic.js';
 
 const ORT_VERSION = '1.20.1';
 const ORT_URL = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VERSION}/dist/`;
@@ -142,9 +144,18 @@ async function gpuAdapter() {
   return null;
 }
 
-export async function installPilot({ ctx, scene, renderer, camera, sunDir, modelPipeline, params, status }) {
+export async function installPilot({ ctx, scene, renderer, camera, sunDir, modelPipeline, params, status, progress = () => {} }) {
   const T = ctx.town;
-  const nav = createNavigator(T.data);
+  const lanes = buildLanes(T.data);
+  const nav = createNavigator(T.data, lanes);
+  // surrounding traffic (src/traffic.js): on by default, off with ?traffic=0 or the HUD button / T (the choice is
+  // remembered in this browser); ?cars=N cars
+  const roadKm = lanes.reduce((a, l) => a + l.len, 0) / 1000;
+  const traffic = createTraffic(T.data, lanes, { count: Number(params.get('cars')) || Math.min(40, Math.round(roadKm * 12)), seed: 7 });
+  const TRAFFIC_KEY = 'keipilot.traffic';
+  let stored = null;
+  try { stored = localStorage.getItem(TRAFFIC_KEY); } catch (e) { /* storage blocked: default on */ }
+  let trafficOn = (params.has('traffic') ? params.get('traffic') : stored) !== '0';
   const want = params.get('ep');                            // force 'wasm' or 'webgpu'
   const adapter = want === 'wasm' ? null : await gpuAdapter();
   const gpu = want === 'webgpu' || !!adapter;
@@ -155,7 +166,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
   if (!gpu) ort.env.wasm.proxy = true;                      // CPU inference in a worker, off the render loop
   const MB = (n) => (n / 1e6).toFixed(0);
   const bytes = await fetchModel(params.get('model') || 'models/keipilot.onnx',
-    (got, total) => status(`運転モデルを読み込み中… ${MB(got)}${total >= got ? ` / ${MB(total)}` : ''} MB`));
+    (got, total) => { status(`運転モデルを読み込み中… ${MB(got)}${total >= got ? ` / ${MB(total)}` : ''} MB`); if (total) progress(0.9 * got / total); });
   status('運転モデルを準備中…');
   let session = null, backend = '';
   for (const ep of gpu ? ['webgpu', 'wasm'] : ['wasm']) {
@@ -174,9 +185,10 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     <div>速度 <b data-k="v">0</b> km/h　目標 <b data-k="t">–</b> km/h</div>
     <div>信号 <b data-k="tl">–</b> <span data-k="tlp"></span></div>
     <div>次の交差点 <b data-k="cmd">–</b> <span data-k="dist"></span></div>
-    <div class="btns"><button data-turn="left">← 左折</button><button data-turn="straight">↑ 直進</button><button data-turn="right">右折 →</button><button data-act="pause">一時停止</button><button data-act="reset">最初から</button></div>
+    <div class="btns"><button data-turn="left">← 左折</button><button data-turn="straight">↑ 直進</button><button data-turn="right">右折 →</button><button data-act="pause">一時停止</button><button data-act="reset">最初から</button><button data-act="traffic">周りの車</button></div>
+    <div class="traffic" data-k="traffic"></div>
     <div class="msg" data-k="msg"></div>
-    <div class="keys">ピンク: モデルが描いた走行経路　水色: ナビの経路<br>キー ← ↑ →: 次の交差点で曲がる方向 · Space: 一時停止 · R: 最初から</div>`;
+    <div class="keys">ピンク: モデルが描いた走行経路　水色: ナビの経路<br>キー ← ↑ →: 次の交差点で曲がる方向 · Space: 一時停止 · R: 最初から · T: 周りの車</div>`;
   document.body.appendChild(hud);
   const el = {};
   for (const e of hud.querySelectorAll('[data-k]')) el[e.dataset.k] = e;
@@ -200,6 +212,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     Object.assign(car, { x: p.x, y: p.y, yaw: p.yaw, v: 0, steer: 0 });
     plan = null; action = [0, 0, 1]; tick = 0; acc = 0; stillT = 0; gen++;
     speedCtl.reset(); safety.reset();
+    if (trafficOn) traffic.reset(car);
     if (why) { resets++; flash(`${why} — 最初から走り直します`); console.warn(`[pilot] ${why}`); }
   }
   function flash(text) { msg = text; msgT = 4; }
@@ -207,12 +220,19 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     if (!nav.request(turn)) flash(`次の交差点は${TURN_JA[turn]}できません`);
   }
   function togglePause() { paused = !paused; }
+  function setTraffic(on) {
+    trafficOn = on;
+    try { localStorage.setItem(TRAFFIC_KEY, on ? '1' : '0'); } catch (e) { /* not remembered */ }
+    if (on) traffic.reset(car);
+    if (ctx.services.actors) ctx.services.actors.update(on ? traffic.drawList(car.x, car.y) : [], []);
+  }
 
   addEventListener('keydown', (e) => {
     const turn = { ArrowLeft: 'left', ArrowUp: 'straight', ArrowRight: 'right' }[e.code];
     if (turn) { ask(turn); e.preventDefault(); }
     else if (e.code === 'Space') { togglePause(); e.preventDefault(); }
     else if (e.code === 'KeyR') reset();
+    else if (e.code === 'KeyT') setTraffic(!trafficOn);
   });
   hud.addEventListener('click', (e) => {
     const b = e.target.closest('button');
@@ -220,6 +240,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     if (b.dataset.turn) ask(b.dataset.turn);
     else if (b.dataset.act === 'pause') togglePause();
     else if (b.dataset.act === 'reset') reset();
+    else if (b.dataset.act === 'traffic') setTraffic(!trafficOn);
     b.blur();
   });
 
@@ -258,6 +279,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
   function physicsStep() {
     if (tick++ % CONTROL_EVERY === 0) controlStep();
     stepVehicle(car, action, DT);
+    if (trafficOn) traffic.step(DT, worldT, car);
     const dev = nav.track(car.x, car.y);
     deviation = dev;
     stillT = car.v < 0.1 ? stillT + DT : 0;
@@ -265,12 +287,16 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     else if (stillT > BLOCKED_TIMEOUT) reset('90 秒動けませんでした');
   }
 
-  /** Before the frame is rendered: advance the car in fixed physics steps and put the camera on it. */
-  function update(dt) {
+  /** Before the frame is rendered: advance the car (and the traffic) in fixed physics steps, pose the other cars
+   *  and put the camera on the ego. t: the town's time (signals). */
+  let worldT = 0;
+  function update(dt, t = worldT + dt) {
+    worldT = t;
     if (!paused) {
       acc += dt;
       while (acc >= DT) { acc -= DT; physicsStep(); }
     }
+    if (trafficOn && ctx.services.actors) ctx.services.actors.update(traffic.drawList(car.x, car.y), []);
     msgT -= dt;
     placeCamera();
   }
@@ -404,6 +430,8 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     el.msg.textContent = paused ? '一時停止中' : msgT > 0 ? msg : '';
     for (const b of hud.querySelectorAll('[data-turn]')) b.classList.toggle('on', !!j && b.dataset.turn === j.turn);
     hud.querySelector('[data-act="pause"]').classList.toggle('on', paused);
+    hud.querySelector('[data-act="traffic"]').classList.toggle('on', trafficOn);
+    el.traffic.textContent = trafficOn ? `周りの車 ${traffic.n} 台${traffic.contacts ? ` · 接触 ${traffic.contacts} 回` : ''}` : '周りの車なし';
   }
 
   /** After the main view is drawn. */
@@ -419,6 +447,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     update, capture, after, backend, reset,
     adapter: backend === 'webgpu' && adapter && adapter.info ? `${adapter.info.vendor} ${adapter.info.architecture}`.trim() : '',
     idle: () => inflight || Promise.resolve(),             // the inference in flight (tests: window.__pilotRun)
-    state: () => ({ car: { ...car }, plan, s: nav.s, inputs: nav.inputs(), inferMs, deviation, resets, t: ctx.time }),
+    state: () => ({ car: { ...car }, plan, s: nav.s, inputs: nav.inputs(), inferMs, deviation, resets, t: ctx.time,
+      traffic: trafficOn ? { n: traffic.n, contacts: traffic.contacts } : null }),
   };
 }

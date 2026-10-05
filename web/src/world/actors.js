@@ -2,7 +2,10 @@
 // the simulator state (ego mode, see src/ego.js). Pool slot i follows KeiSim actor i; a slot is only
 // rebuilt when that actor's kind / size / colour changes (episode start or respawn), so posing a
 // frame is just transforms. Models face local +Z with their origin on the ground at the centre.
+// With ctx.mergeActors (pilot mode) each car is merged into one mesh per material, about a third of the draw calls;
+// ego mode keeps the separate parts, so the frames KeiSim renders through KeiView stay exactly as they were.
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 export const SEM_VEHICLE = 11, SEM_PED = 12;
 
@@ -74,6 +77,30 @@ export function build(ctx) {
     return { g, tails };
   }
 
+  /** One mesh per material for a car built by makeCar (the tail lights stay one mesh of their own: they switch
+   *  material when braking). Paint variation is in world space, so the merged car looks the same. */
+  function mergeCar({ g, tails }) {
+    const parts = new Map();
+    for (const o of g.children) {
+      if (!o.isMesh) continue;
+      const key = tails.includes(o) ? 'tail' : o.material.uuid;
+      if (!parts.has(key)) parts.set(key, { mat: o.material, geos: [] });
+      o.updateMatrix();
+      const geo = o.geometry.index ? o.geometry.toNonIndexed() : o.geometry.clone();
+      for (const name of Object.keys(geo.attributes)) if (!['position', 'normal', 'uv'].includes(name)) geo.deleteAttribute(name);
+      parts.get(key).geos.push(geo.applyMatrix4(o.matrix));
+    }
+    const out = { g: new THREE.Group(), tails: [] };
+    for (const [key, { mat, geos }] of parts) {
+      const mesh = new THREE.Mesh(mergeGeometries(geos, false), mat);
+      for (const x of geos) x.dispose();
+      mesh.castShadow = true; mesh.receiveShadow = true;
+      out.g.add(mesh);
+      if (key === 'tail') out.tails.push(mesh);
+    }
+    return out;
+  }
+
   // ------------------------------------------------------------------ pedestrians
   function makePed(h, shirt, pants, skin, seed) {
     const g = new THREE.Group();
@@ -117,7 +144,8 @@ export function build(ctx) {
       let s = cars.get(id);
       if (!s || s.sig !== sig) {
         if (s) drop(s, carRoot);
-        s = { ...makeCar(kind, L, W, H, [r, gg, b]), sig, brake: -1 };
+        const car = makeCar(kind, L, W, H, [r, gg, b]);
+        s = { ...(ctx.mergeActors ? mergeCar(car) : car), sig, brake: -1 };
         cars.set(id, s);
         carRoot.add(s.g);
       }
