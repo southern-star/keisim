@@ -378,3 +378,32 @@ def test_red_hold_blocks_creeping():
     assert h(0.6, 0.3, np.array([0.3, 0.1, 0.5, 0.1])) == 0.6     # not sure it is red: untouched
     assert h(5.0, 6.0, red) == 5.0                                # moving: untouched
     assert h(8.0, 0.0, red) == 8.0                                # standing far from the light: may pull up
+
+
+def test_load_shards_fills_buffers_in_place(tmp_path):
+    """load_shards preallocates the byte buffers from the shard headers: same frames and offsets as concatenating
+    shard by shard, earlier frames where recorded, and none at all with with_prev=False."""
+    import cv2
+    from keipilot.data import LABEL_KEYS, ShardWriter, load_shards
+    lab = lambda i: {k: (np.zeros(2, np.float32) if k == "tp" else np.zeros((10, 2), np.float32) if k == "path" else i)
+                     for k in LABEL_KEYS}
+    frames = []
+    for d, with_prev in (("a", True), ("b", False)):
+        w = ShardWriter(str(tmp_path / d), "expert", frames_per_shard=3)
+        for i in range(5):
+            rgb = np.full((16, 32, 3), 10 + 22 * len(frames), np.uint8)          # every frame its own grey
+            prev = np.full((16, 32, 3), 5, np.uint8) if with_prev and i % 2 == 0 else None
+            w.add(rgb, np.zeros((16, 32), np.uint8), prev=prev, **lab(i))
+            frames.append((rgb, prev))
+        w.flush()
+    dirs = [str(tmp_path / "a"), str(tmp_path / "b")]
+    data, files = load_shards(dirs)
+    assert len(files) == 4 and len(data["cmd"]) == 10
+    for i, (rgb, prev) in enumerate(frames):
+        img = cv2.imdecode(data["jpg"][data["jpg_off"][i]:data["jpg_off"][i + 1]], cv2.IMREAD_COLOR)
+        assert img.shape == rgb.shape and np.abs(img.astype(int) - rgb).max() <= 2
+        a, b = data["jpg_prev_off"][i], data["jpg_prev_off"][i + 1]
+        assert (b > a) == (prev is not None)
+    no_prev, _ = load_shards(dirs, with_prev=False)
+    assert len(no_prev["jpg_prev"]) == 0 and not np.any(np.diff(no_prev["jpg_prev_off"]))
+    assert np.array_equal(no_prev["jpg"], data["jpg"]) and np.array_equal(no_prev["jpg_off"], data["jpg_off"])

@@ -5,6 +5,7 @@ import glob
 import json
 import math
 import os
+import zipfile
 
 import cv2
 import numpy as np
@@ -93,7 +94,22 @@ def relabel_v1(speed, reason):
     return out
 
 
-def load_shards(dirs):
+def _npy_len(zf, key):
+    """Length of array `key` of an open .npz (zipfile), from its .npy header without reading the data; 0 if absent."""
+    try:
+        info = zf.getinfo(key + ".npy")
+    except KeyError:
+        return 0
+    with zf.open(info) as fp:
+        version = np.lib.format.read_magic(fp)
+        read = np.lib.format.read_array_header_1_0 if version == (1, 0) else np.lib.format.read_array_header_2_0
+        return read(fp)[0][0]
+
+
+def load_shards(dirs, with_prev=True):
+    """All shards of `dirs` in memory. The byte buffers (jpg, seg, jpg_prev; ~45 GB for v0.7's data) are allocated
+    once from the shard headers and filled in place, so loading peaks at about the data size instead of twice that.
+    with_prev=False skips the earlier frames (a quarter of the bytes) for single-frame models."""
     files = []
     dir_version, dir_renderer = {}, {}
     for d in dirs if isinstance(dirs, (list, tuple)) else [dirs]:
@@ -106,26 +122,33 @@ def load_shards(dirs):
             dir_renderer[f] = m.get("renderer", "keisim")
     if not files:
         raise FileNotFoundError(f"no shards in {dirs}")
-    jpg, jo, seg, so, src = [], [], [], [], []
-    pj, po, pbase = [], [], 0
+    sizes = []
+    for f in files:
+        with zipfile.ZipFile(f) as zf:
+            sizes.append((_npy_len(zf, "jpg"), _npy_len(zf, "seg"), _npy_len(zf, "jpg_prev") if with_prev else 0))
+    total = np.sum(np.array(sizes, np.int64), axis=0)
+    buf = {k: np.empty(int(n), np.uint8) for k, n in zip(("jpg", "seg", "jpg_prev"), total)}
+    jo, so, src = [], [], []
+    po, pbase = [], 0
     lab = {k: [] for k in LABEL_KEYS + CF_KEYS}
     cf_ok = []
     jbase = sbase = 0
     for fi, f in enumerate(files):
         z = np.load(f)
+        nj, ns, npv = sizes[fi]
         src.append(np.full(len(z["jpg_off"]) - 1, fi, np.int32))
-        jpg.append(z["jpg"])
-        seg.append(z["seg"])
+        buf["jpg"][jbase:jbase + nj] = z["jpg"]
+        buf["seg"][sbase:sbase + ns] = z["seg"]
         jo.append(z["jpg_off"][:-1] + jbase)
         so.append(z["seg_off"][:-1] + sbase)
-        jbase += len(z["jpg"])
-        sbase += len(z["seg"])
+        jbase += nj
+        sbase += ns
         n_frames = len(z["jpg_off"]) - 1
-        if "jpg_prev" in z:
-            pj.append(z["jpg_prev"])
+        if npv:
+            buf["jpg_prev"][pbase:pbase + npv] = z["jpg_prev"]
             po.append(z["jpg_prev_off"][:-1] + pbase)
-            pbase += len(z["jpg_prev"])
-        else:                                        # no history recorded: zero-length entries
+            pbase += npv
+        else:                                        # no history recorded (or not loaded): zero-length entries
             po.append(np.full(n_frames, pbase, np.int64))
         for k in LABEL_KEYS:
             lab[k].append(z[k])
@@ -135,10 +158,9 @@ def load_shards(dirs):
             lab[k].append(z[k] if has_cf else np.full(n_f, CF_DEFAULTS[k]))
         cf_ok.append(np.full(n_f, has_cf))
     data = {
-        "jpg": np.concatenate(jpg), "jpg_off": np.concatenate(jo + [np.array([jbase])]),
-        "seg": np.concatenate(seg), "seg_off": np.concatenate(so + [np.array([sbase])]),
-        "jpg_prev": np.concatenate(pj) if pj else np.zeros(0, np.uint8),
-        "jpg_prev_off": np.concatenate(po + [np.array([pbase])]),
+        "jpg": buf["jpg"], "jpg_off": np.concatenate(jo + [np.array([jbase])]),
+        "seg": buf["seg"], "seg_off": np.concatenate(so + [np.array([sbase])]),
+        "jpg_prev": buf["jpg_prev"], "jpg_prev_off": np.concatenate(po + [np.array([pbase])]),
     }
     for k in LABEL_KEYS + CF_KEYS:
         data[k] = np.concatenate(lab[k])

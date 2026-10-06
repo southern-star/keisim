@@ -120,7 +120,7 @@ def main():
     torch.backends.cudnn.benchmark = True
     device = "cuda"
 
-    data, files = load_shards(args.data)
+    data, files = load_shards(args.data, with_prev=bool(args.history))      # earlier frames only for history models
     N = len(data["cmd"])
     rng = np.random.default_rng(args.seed)
     eps = np.unique(data["episode"])
