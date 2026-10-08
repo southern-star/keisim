@@ -415,18 +415,25 @@ class Traffic:
 
     def must_yield(self, conn, t, on_lane):
         """True if a car with priority over connector `conn` (Lane) is in its crossing or reaches it within
-        YIELD_GAP seconds. Cars that will stop at a red or yellow light do not count, nor do cars queued behind
-        one that is standing still to go elsewhere (e.g. an oncoming car waiting to turn right itself)."""
+        YIELD_GAP seconds (see min_arrival)."""
+        return self.min_arrival(conn, t, on_lane) < YIELD_GAP
+
+    def min_arrival(self, conn, t, on_lane, moving_only=False):
+        """Earliest time [s] a car with priority over connector `conn` can be in its crossing (0: already in it;
+        inf: none coming). Cars that will stop at a red or yellow light do not count, nor do cars queued behind
+        one that is standing still to go elsewhere (e.g. an oncoming car waiting to turn right itself).
+        moving_only: standing cars (and the ones queued behind them) do not count either: for a turn that is already
+        past its wait point, a standing car with priority is waiting for it."""
         town = self.town
         lanes = town.lanes
+        best = math.inf
         for b, _, s2 in conn.yields:
             vmax = 1.05 * lanes[b].speed_limit
             for s, v, L, ego, _ in on_lane.get(b, ()):
-                if s - L / 2 > s2 + 1.5:
-                    continue                                    # its rear is past the crossing
+                if s - L / 2 > s2 + 1.5 or (moving_only and v < 0.5):
+                    continue                                    # its rear is past the crossing (or it waits)
                 d = s2 - (s + L / 2)
-                if d < 3.0 or self._arrival(d, v, vmax, ego) < YIELD_GAP:
-                    return True
+                best = min(best, 0.0 if d < 3.0 else self._arrival(d, v, vmax, ego))
             pred = lanes[b].pred[0]
             # a car standing at the entry of one of pred's other connectors blocks the whole approach lane
             if any(e[1] < 0.5 and e[0] < 4.0 for c in lanes[pred].succ if c != b for e in on_lane.get(c, ())):
@@ -438,12 +445,13 @@ class Traffic:
                     if v < 0.5:
                         break                                   # standing to go elsewhere: the rest queue behind
                     continue
+                if moving_only and v < 0.5:
+                    break                                       # waits, and the cars behind queue behind it
                 front = s + L / 2
-                if not (st != TL_GREEN and stop_s is not None and self._will_stop(st, stop_s - front, v, ego)) and \
-                        self._arrival(lanes[pred].length - front + s2, v, vmax, ego) < YIELD_GAP:
-                    return True
+                if not (st != TL_GREEN and stop_s is not None and self._will_stop(st, stop_s - front, v, ego)):
+                    best = min(best, self._arrival(lanes[pred].length - front + s2, v, vmax, ego))
                 break                                           # the cars behind it arrive later
-        return False
+        return best
 
     @staticmethod
     def _arrival(d, v, vmax, ego=False):

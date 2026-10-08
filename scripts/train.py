@@ -57,8 +57,13 @@ def evaluate(model, loader, device):
             out = model(img, b["cmd"], b["tp"], speed=b["v"], img_prev=b["img_prev"], has_prev=b["has_prev"])
             if model.speed_input:
                 blind = model(img, b["cmd"], b["tp"], with_seg=False, img_prev=b["img_prev"], has_prev=b["has_prev"])
-        _, logs = compute_loss(model, out, b)
+        _, logs = compute_loss(model, out, b, w_aux=1.0)
         bs = b["img"].shape[0]
+        if "yield_tta" in out:
+            m = torch.isfinite(b["yield_tta"])
+            if m.any():
+                agg["tta_mae"] = agg.get("tta_mae", 0.0) + (out["yield_tta"][m] - b["yield_tta"][m].clamp(0, 8)).abs().sum().item()
+                agg["tta_n"] = agg.get("tta_n", 0.0) + int(m.sum())
         for k, v in logs.items():
             agg[k] = agg.get(k, 0.0) + v * bs
         n += bs
@@ -73,7 +78,10 @@ def evaluate(model, loader, device):
                                               align_corners=False).argmax(1)
         idx = b["seg"].flatten() * N_SEM + seg.flatten()
         conf += torch.bincount(idx.cpu(), minlength=N_SEM * N_SEM).view(N_SEM, N_SEM)
+    tta = (agg.pop("tta_mae") / agg.pop("tta_n")) if agg.get("tta_n") else None
     res = {k: v / n for k, v in agg.items()}
+    if tta is not None:
+        res["yield_tta_MAE"] = tta                      # seconds, frames before right turns that give way
     inter = conf.diag().float()
     union = conf.sum(0).float() + conf.sum(1).float() - inter
     present = conf.sum(1) > 0
@@ -112,6 +120,8 @@ def main():
     ap.add_argument("--history_drop", type=float, default=0.3, help="probability of hiding the previous frame in training")
     ap.add_argument("--history_mode", default="frame", choices=["frame", "diff"], help="feed the earlier frame or the change")
     ap.add_argument("--history_weight", type=float, default=1.0, help="sampling weight of frames with a previous frame")
+    ap.add_argument("--aux_weight", type=float, default=0.0,
+                    help="weight of the auxiliary yield head (earliest oncoming arrival at right turns); 0: off")
     ap.add_argument("--dir_weight", nargs="*", default=[], metavar="DIR=W",
                     help="extra sampling weight for every frame from a data directory, e.g. data/dir_expert=3")
     args = ap.parse_args()
@@ -120,7 +130,7 @@ def main():
     torch.backends.cudnn.benchmark = True
     device = "cuda"
 
-    data, files = load_shards(args.data)
+    data, files = load_shards(args.data, with_prev=bool(args.history))      # earlier frames only for history models
     N = len(data["cmd"])
     rng = np.random.default_rng(args.seed)
     eps = np.unique(data["episode"])
@@ -164,6 +174,8 @@ def main():
         model_cfg["speed_input"] = True
     if args.history:
         model_cfg.update(history=True, history_dt=args.history, history_mode=args.history_mode)
+    if args.aux_weight > 0:
+        model_cfg["aux_yield"] = True
     model = KeiPilot(pretrained=args.init is None, **model_cfg)
     print("backbone init:", model.init_info, "| model_cfg:", model_cfg, flush=True)
     if sd:
@@ -202,7 +214,7 @@ def main():
                 out = model(b["img"].contiguous(memory_format=torch.channels_last), b["cmd"], b["tp"],
                             speed=b["v"], speed_known=b["v_known"] if model.speed_input else None,
                             img_prev=b["img_prev"], has_prev=b["has_prev"])
-            loss, logs = compute_loss(model, out, b)
+            loss, logs = compute_loss(model, out, b, w_aux=args.aux_weight)
             opt.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)

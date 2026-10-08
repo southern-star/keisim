@@ -97,7 +97,9 @@ def record(env, writer, rng, v_prob, weather_id, virtual_prob, offset=False, rgb
                # inputs of the expert's traffic-light decision -> labels for counterfactual ego speeds
                target_nolight=np.float32(plan["target_nolight"]), lt_over=np.bool_(plan["lt_over"]),
                lt_d=np.float32(plan["lt_d"]), lt_st=np.int8(plan["lt_st"]), lt_trem=np.float32(plan["lt_trem"]),
-               lt_blocked=np.bool_(plan["lt_blocked"]))
+               lt_blocked=np.bool_(plan["lt_blocked"]),
+               # auxiliary label: earliest arrival of a car with priority at the next right turn that gives way
+               yield_tta=np.float32(plan.get("yield_tta", np.nan)))
 
 
 def worker(wid, args, quota, out_dir, counter):
@@ -153,21 +155,29 @@ def worker(wid, args, quota, out_dir, counter):
         frames, seg_off, seg_left = {}, None, 0
         while not done and n < quota:
             a_exp = env.expert_action()
+            v_model = None                                  # the driving model's target speed this step (dagger)
             if agent is None:
                 a = pert(a_exp, dt)
             else:
                 rgb, _ = env.render_camera(want_seg=False)
-                a, _ = agent.act(rgb, env.command(), env.target_point(), env.world.ego.v, dt)
+                a, p_model = agent.act(rgb, env.command(), env.target_point(), env.world.ego.v, dt)
+                v_model = p_model["target_speed"]
                 # beta-mixture: short expert takeovers keep episodes progressing
                 if not beta_on and rng.random() < args.beta_rate * dt:
                     beta_on, beta_t = True, rng.uniform(1.0, 3.0)
                 if beta_on:
                     a = a_exp
+                    v_model = None
                     beta_t -= dt
                     beta_on = beta_t > 0
             if env._step % args.every == 0:
                 stopped = env.world.ego.v < 0.2 and env.plan["target_speed"] == 0.0
                 keep = not stopped or rng.random() < args.stopped_keep
+                if args.focus_yield < 1.0:          # mostly frames around junction decisions, and model mistakes
+                    focus = np.isfinite(env.plan.get("yield_tta", np.nan)) or \
+                        env.plan["reason"] in args.focus_reasons or \
+                        (v_model is not None and abs(v_model - env.plan["target_speed"]) > args.focus_disagree)
+                    keep = keep and (focus or rng.random() < args.focus_yield)
                 if hist:
                     if seg_left <= 0:                               # new camera segment: history restarts
                         seg_off, seg_left, frames = random_offset(rng, args.virtual_prob), int(args.segment / dt), {}
@@ -215,6 +225,12 @@ def main():
     ap.add_argument("--ego_cross_rate", type=float, default=None, help="pedestrian crossing trigger rate ahead of ego")
     ap.add_argument("--ped_spacing", type=float, nargs=2, default=None)
     ap.add_argument("--vehicle_spacing", type=float, nargs=2, default=None, help="m of lane per NPC vehicle (default 32 75)")
+    ap.add_argument("--focus_yield", type=float, default=1.0,
+                    help="keep only this fraction of the frames that are not in focus: before a right turn that gives "
+                         "way, an expert reason in --focus_reasons, or (dagger mode) the driving model's target speed "
+                         "more than --focus_disagree m/s off the expert's")
+    ap.add_argument("--focus_reasons", nargs="*", default=["yield", "junction_blocked"])
+    ap.add_argument("--focus_disagree", type=float, default=1.5)
     ap.add_argument("--renderer", default="keisim", choices=["keisim", "keiview"], help="camera renderer")
     ap.add_argument("--episodes_per_town", type=int, default=1, help="episodes before switching town")
     ap.add_argument("--town_style", default="classic", choices=["classic", "varied", "twophase"],
@@ -225,7 +241,7 @@ def main():
     args = ap.parse_args()
     quota = [args.frames // args.workers + (1 if i < args.frames % args.workers else 0) for i in range(args.workers)]
     write_meta(args.out, label_version=LABEL_VERSION, mode=args.mode, ckpt=args.ckpt, frames=args.frames, history=args.history,
-               renderer=args.renderer, town_style=args.town_style, jam_fixes=args.jam_fixes)
+               renderer=args.renderer, town_style=args.town_style, jam_fixes=args.jam_fixes, late_yield=True)
     ctx = mp.get_context("spawn" if args.mode == "dagger" else "fork")
     counter = ctx.Value("i", 0)
     t0 = time.time()
