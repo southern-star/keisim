@@ -55,7 +55,7 @@ def _resnet18_from_local_r34():
 
 class KeiPilot(nn.Module):
     def __init__(self, n_sem=13, d=256, n_layers=3, n_heads=8, pretrained=True, img_hw=(160, 320), speed_input=False,
-                 history=False, history_dt=0.4, history_mode="frame"):
+                 history=False, history_dt=0.4, history_mode="frame", aux_yield=False):
         super().__init__()
         if pretrained:
             r, self.init_info = _resnet18_from_local_r34()
@@ -102,6 +102,11 @@ class KeiPilot(nn.Module):
         self.path_head = nn.Sequential(nn.LayerNorm(d), nn.Linear(d, 2))
         self.speed_head = nn.Sequential(nn.LayerNorm(d), nn.Linear(d, 128), nn.GELU(), nn.Linear(128, len(SPEED_BINS)))
         self.tl_head = nn.Sequential(nn.LayerNorm(d), nn.Linear(d, N_TL))
+        # optional auxiliary head on the speed token: earliest arrival [s] of a car with priority at the next right
+        # turn that gives way (the quantity the expert's wait / go decision is made from; needs the oncoming speed)
+        self.aux_yield = aux_yield
+        if aux_yield:
+            self.aux_tta_head = nn.Sequential(nn.LayerNorm(d), nn.Linear(d, 64), nn.GELU(), nn.Linear(64, 1))
         prior = torch.stack([torch.arange(1, N_PATH + 1) * PATH_STEP, torch.zeros(N_PATH)], -1)
         self.register_buffer("path_prior", prior)
         self.register_buffer("speed_bins", SPEED_BINS.clone())
@@ -168,6 +173,8 @@ class KeiPilot(nn.Module):
         out["path"] = self.path_prior[None] + self.path_head(h[:, :N_PATH]).float() * 2.0
         out["speed_logits"] = self.speed_head(h[:, N_PATH]).float()
         out["tl_logits"] = self.tl_head(h[:, N_PATH + 1]).float()
+        if self.aux_yield:
+            out["yield_tta"] = self.aux_tta_head(h[:, N_PATH]).float().squeeze(-1)
         return out
 
     def load_compatible(self, sd):
@@ -181,7 +188,7 @@ class KeiPilot(nn.Module):
             pad[:, :w.shape[1]] = w
             sd["stem.0.weight"] = pad
         missing, unexpected = self.load_state_dict(sd, strict=False)
-        assert not unexpected and all(k.startswith("speed_") for k in missing), (missing, unexpected)
+        assert not unexpected and all(k.startswith(("speed_", "aux_")) for k in missing), (missing, unexpected)
         return missing
 
     def decode_speed(self, logits):
@@ -205,13 +212,23 @@ def two_hot(v, bins):
 TL_WEIGHTS = torch.tensor([2.0, 3.0, 1.5, 0.5])
 
 
-def compute_loss(model, out, batch, w_seg=0.5, w_tl=0.5):
+YIELD_TTA_MAX = 8.0
+
+
+def compute_loss(model, out, batch, w_seg=0.5, w_tl=0.5, w_aux=0.0):
     path_l = F.l1_loss(out["path"], batch["path"])
     tgt = two_hot(batch["speed"], model.speed_bins)
     speed_l = -(tgt * out["speed_logits"].log_softmax(-1)).sum(-1).mean()
     tl_l = F.cross_entropy(out["tl_logits"], batch["tl"].long(), weight=TL_WEIGHTS.to(out["tl_logits"].device))
     loss = path_l + speed_l + w_tl * tl_l
     logs = {"path": path_l.item(), "speed": speed_l.item(), "tl": tl_l.item()}
+    if w_aux > 0 and "yield_tta" in out and "yield_tta" in batch:
+        lab = batch["yield_tta"]
+        m = torch.isfinite(lab)
+        if m.any():
+            aux_l = F.smooth_l1_loss(out["yield_tta"][m], lab[m].clamp(0.0, YIELD_TTA_MAX))
+            loss = loss + w_aux * aux_l
+            logs["aux"] = aux_l.item()
     if "seg" in out and "seg" in batch:
         seg = F.interpolate(out["seg"].float(), size=batch["seg"].shape[-2:], mode="bilinear", align_corners=False)
         seg_l = F.cross_entropy(seg, batch["seg"].long())

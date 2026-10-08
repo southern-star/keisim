@@ -13,12 +13,22 @@ import numpy as np
 
 from .config import TL_GREEN, TL_NONE, TL_RED, TL_YELLOW
 from .geometry import world_to_local
-from .traffic import corridor_gaps, vehicle_circles
+from .traffic import YIELD_GAP, Traffic, corridor_gaps, vehicle_circles
 
 PATH_S = np.arange(1, 11) * 2.0          # label waypoints every 2 m up to 20 m
 LABEL_VERSION = 5                        # 3: yellow per traffic law; 4: at yellow, stop whenever the ego still can;
                                          # 5: and always when creeping (< 1 m/s) with the bumper at the line
 TL_MARGIN = 2.5                          # stop this far before the stop line (keeps it in view)
+YIELD_TTA_MAX = 8.0                      # yield_tta labels are clipped here (8 s or more: nobody coming)
+LATE_COMMIT = 1.0                        # m: past its wait point, a right turn still stops for oncoming traffic until
+                                         # its front bumper is this close to the first crossing (centre lines)
+LATE_MARGIN = 1.0                        # s: ... if a moving car with priority arrives sooner than it clears + this
+
+
+def clear_time(d_cross, v, length):
+    """Time for a car whose front bumper is `d_cross` m before a crossing (centre lines), at speed `v`, to have its
+    rear past the crossing lane (about half a lane width beyond the centre line), at 2 m/s^2 up to 5 m/s."""
+    return Traffic._reach(max(d_cross, 0.0) + 2.3 + length, v, 5.0, 2.0)
 
 
 def stop_profile(x, b=2.5):
@@ -145,6 +155,11 @@ class Expert:
         # --- give way (two-phase signals): a right turn waits at its connector's wait point, inside the
         # junction, while oncoming traffic would reach the crossing within YIELD_GAP s. Independent of the ego
         # speed, so it is part of target_nolight (the counterfactual labels keep it as it is).
+        # Past the wait point (a driving model that came in too fast, or the expert just after setting off) it still
+        # stops short of the oncoming lane when a moving car with priority would arrive before the ego has cleared
+        # the crossing (plus LATE_MARGIN): earlier labels said "go on" there, which taught models to keep rolling
+        # into the oncoming lane after an overshoot. This late check uses the ego speed (rare, on-policy frames).
+        yield_tta = math.nan          # label for the model's auxiliary head: earliest arrival of a car with priority
         if tr.has_yields:
             s_front = s + hl
             for jn in route.junctions:
@@ -155,10 +170,19 @@ class Expert:
                 conn = w.town.lanes[jn["lane"]]
                 if conn.yields:
                     d_wait = jn["s_in"] + conn.wait_s - s_front
-                    if d_wait >= -0.5 and tr.must_yield(conn, w.t, tr.yield_tables()):
-                        v_y = stop_profile(max(d_wait, 0.0), self.B_COMF)
-                        if v_y < target:
-                            target, reason = v_y, "yield"
+                    d_cross = jn["s_in"] + conn.yields[0][1] - s_front
+                    if d_wait >= -0.5:
+                        tta = tr.min_arrival(conn, w.t, tr.yield_tables())
+                        yield_tta = min(tta, YIELD_TTA_MAX)
+                        if tta < YIELD_GAP:
+                            v_y = stop_profile(max(d_wait, 0.0), self.B_COMF)
+                            if v_y < target:
+                                target, reason = v_y, "yield"
+                    elif d_cross > LATE_COMMIT:
+                        tta = tr.min_arrival(conn, w.t, tr.yield_tables(), moving_only=True)
+                        yield_tta = min(tta, YIELD_TTA_MAX)
+                        if tta < clear_time(d_cross, v, ego.LENGTH) + LATE_MARGIN:
+                            target, reason = 0.0, "yield"
                 break
 
         # --- traffic light. The speed-independent inputs of the decision are returned too (lt_*), so recorded
@@ -204,7 +228,7 @@ class Expert:
         if target < 0.3:
             target = 0.0
         return {"path": path, "target_speed": float(target), "tl_state": int(tl), "reason": reason,
-                "gap": g, "target_nolight": float(target_nolight), **lt}
+                "gap": g, "target_nolight": float(target_nolight), "yield_tta": float(yield_tta), **lt}
 
     def act(self, plan=None):
         env = self.env

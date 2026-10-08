@@ -258,6 +258,10 @@ def test_right_turn_gap_acceptance():
     # arrival estimates: a standing NPC reacts for 1 s, then accelerates; the ego could go at once
     assert 4.8 < tr._arrival(15.5, 0.0, 10.5) < 5.1 and tr._arrival(15.5, 0.0, 10.5, ego=True) < 3.1
     assert 3.8 < tr._arrival(40.0, 8.0, 10.5) < 4.1
+    # moving_only (the late check past the wait point): a standing car with priority waits for the ego
+    assert np.isfinite(tr.min_arrival(conn, t_green, tables(L - 8.0, 0.0)))
+    assert np.isinf(tr.min_arrival(conn, t_green, tables(L - 8.0, 0.0), moving_only=True))
+    assert tr.min_arrival(conn, t_green, tables(L - 10.0, 8.0), moving_only=True) < 2.5
 
 
 def test_release_hidden_stuck_vehicles():
@@ -380,6 +384,44 @@ def test_red_hold_blocks_creeping():
     assert h(8.0, 0.0, red) == 8.0                                # standing far from the light: may pull up
 
 
+def test_aux_yield_head_and_labels():
+    """The auxiliary yield head starts from an older checkpoint, its loss ignores frames without a label, and the
+    expert reports the earliest oncoming arrival before right turns that give way (NaN elsewhere)."""
+    import torch
+
+    from keipilot.model import KeiPilot, compute_loss
+    from keisim.config import town_config
+
+    torch.manual_seed(0)
+    base = KeiPilot(pretrained=False, speed_input=True)
+    aux = KeiPilot(pretrained=False, speed_input=True, aux_yield=True)
+    missing = aux.load_compatible(base.state_dict())
+    assert missing and all(k.startswith("aux_") for k in missing)
+    img = torch.randint(0, 256, (2, 3, 160, 320), dtype=torch.uint8)
+    out = aux(img, torch.tensor([2, 1]), torch.tensor([[14.0, -14.0], [20.0, 0.0]]), speed=torch.tensor([3.0, 5.0]))
+    assert out["yield_tta"].shape == (2,)
+    batch = {"path": torch.zeros(2, 10, 2), "speed": torch.zeros(2), "tl": torch.zeros(2, dtype=torch.long),
+             "yield_tta": torch.tensor([2.5, float("nan")])}
+    _, logs = compute_loss(aux, out, batch, w_aux=1.0)
+    assert "aux" in logs and np.isfinite(logs["aux"])
+    cfg = EnvConfig()
+    cfg.render_rgb = cfg.render_seg = False
+    cfg.town = town_config("twophase")
+    cfg.traffic.box_rule = True
+    env = KeiEnv(cfg)
+    seen = []
+    for ep in range(12):                        # until a route has passed a right turn that gives way
+        env.reset(town_seed=1012, episode_seed=ep, route_length=600.0)
+        done = False
+        while not done:
+            seen.append(env.plan["yield_tta"])
+            _, _, done, _ = env.step(env.expert_action())
+        if np.isfinite(seen).any():
+            break
+    seen = np.array(seen)
+    assert np.isnan(seen).any() and np.isfinite(seen).any() and np.nanmax(seen) <= 8.0
+
+
 def test_load_shards_fills_buffers_in_place(tmp_path):
     """load_shards preallocates the byte buffers from the shard headers: same frames and offsets as concatenating
     shard by shard, earlier frames where recorded, and none at all with with_prev=False."""
@@ -407,3 +449,44 @@ def test_load_shards_fills_buffers_in_place(tmp_path):
     no_prev, _ = load_shards(dirs, with_prev=False)
     assert len(no_prev["jpg_prev"]) == 0 and not np.any(np.diff(no_prev["jpg_prev_off"]))
     assert np.array_equal(no_prev["jpg"], data["jpg"]) and np.array_equal(no_prev["jpg_off"], data["jpg_off"])
+
+
+def test_late_yield_after_overshoot():
+    """A right turn past its wait point (a driving model came in too fast) still stops short of the oncoming lane
+    when a moving car with priority would arrive before it clears the crossing; closer than LATE_COMMIT to the
+    crossing it goes on. Standing cars with priority do not count there (they wait for the ego)."""
+    from keisim.config import town_config
+    from keisim.expert import LATE_COMMIT
+
+    cfg = EnvConfig()
+    cfg.render_rgb = cfg.render_seg = False
+    cfg.town = town_config("twophase")
+    cfg.traffic.max_vehicles = cfg.traffic.max_peds = 0
+    env = KeiEnv(cfg)
+    for ep in range(40):                        # a route through a right turn that gives way
+        env.reset(town_seed=1012, episode_seed=ep, route_length=600.0)
+        jn = next((j for j in env.route.junctions if env.world.town.lanes[j["lane"]].yields), None)
+        if jn is not None:
+            break
+    conn = env.world.town.lanes[jn["lane"]]
+    tr, ego, hl = env.world.traffic, env.world.ego, env.world.ego.LENGTH / 2
+    calls = []
+
+    def plan_at(s_front, tta, v=1.0):
+        tr.min_arrival = lambda c, t, on_lane, moving_only=False: calls.append(moving_only) or tta
+        ego.v = v
+        s = s_front - hl
+        p0, p1 = env.route.poly.interp(np.array([s, s + 0.5]))
+        ego.x, ego.y, ego.yaw = float(p0[0]), float(p0[1]), float(np.arctan2(p1[1] - p0[1], p1[0] - p0[0]))
+        return env.expert.plan(pose=(ego.x, ego.y, ego.yaw), s=s)
+
+    s_wait, s_cross = jn["s_in"] + conn.wait_s, jn["s_in"] + conn.yields[0][1]
+    assert s_cross - s_wait > LATE_COMMIT + 1.0
+    p = plan_at(s_wait + 0.2, 3.0)                          # at the wait point: the usual 5 s rule
+    assert p["reason"] == "yield" and p["target_speed"] == 0.0 and calls[-1] is False
+    p = plan_at(s_wait + 1.0, 1.5)                          # overshot by 1 m, a car 1.5 s away: stop now
+    assert p["reason"] == "yield" and p["target_speed"] == 0.0 and calls[-1] is True and p["yield_tta"] == 1.5
+    p = plan_at(s_wait + 1.0, 9.0)                          # nobody coming soon: go on
+    assert p["reason"] != "yield" and p["target_speed"] > 1.0
+    p = plan_at(s_cross - LATE_COMMIT + 0.3, 1.5)          # almost at the crossing: clear it rather than stop in it
+    assert p["reason"] != "yield" and p["target_speed"] > 1.0

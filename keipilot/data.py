@@ -18,6 +18,9 @@ LABEL_KEYS = ("cmd", "tp", "path", "speed", "tl", "v", "reason", "town", "episod
 # inputs of the expert's traffic-light decision (keisim.expert.target_for_speed); shards recorded before
 # these existed load with cf_ok = False and are never relabelled
 CF_KEYS = ("target_nolight", "lt_over", "lt_d", "lt_st", "lt_trem", "lt_blocked")
+# auxiliary labels (recorded since 2026-10, NaN where missing or not applicable)
+AUX_KEYS = ("yield_tta",)        # earliest arrival [s] of a car with priority at the next right turn that gives way
+AUX_DEFAULTS = {"yield_tta": np.float32(np.nan)}
 CF_DEFAULTS = {"target_nolight": np.float32(np.nan), "lt_over": False, "lt_d": np.float32(np.nan), "lt_st": np.int8(3),
                "lt_trem": np.float32(np.nan), "lt_blocked": False}
 
@@ -49,7 +52,7 @@ class ShardWriter:
         self.prev.append(np.zeros(0, np.uint8) if prev is None else prev)
         for k in LABEL_KEYS:
             self.lab[k].append(labels[k])
-        for k in CF_KEYS:
+        for k in CF_KEYS + AUX_KEYS:
             if k in labels:
                 self.lab.setdefault(k, []).append(labels[k])
         if len(self.jpg) >= self.fps:
@@ -130,7 +133,7 @@ def load_shards(dirs, with_prev=True):
     buf = {k: np.empty(int(n), np.uint8) for k, n in zip(("jpg", "seg", "jpg_prev"), total)}
     jo, so, src = [], [], []
     po, pbase = [], 0
-    lab = {k: [] for k in LABEL_KEYS + CF_KEYS}
+    lab = {k: [] for k in LABEL_KEYS + CF_KEYS + AUX_KEYS}
     cf_ok = []
     jbase = sbase = 0
     for fi, f in enumerate(files):
@@ -156,13 +159,15 @@ def load_shards(dirs, with_prev=True):
         has_cf = all(k in z for k in CF_KEYS)
         for k in CF_KEYS:
             lab[k].append(z[k] if has_cf else np.full(n_f, CF_DEFAULTS[k]))
+        for k in AUX_KEYS:
+            lab[k].append(z[k] if k in z else np.full(n_f, AUX_DEFAULTS[k]))
         cf_ok.append(np.full(n_f, has_cf))
     data = {
         "jpg": buf["jpg"], "jpg_off": np.concatenate(jo + [np.array([jbase])]),
         "seg": buf["seg"], "seg_off": np.concatenate(so + [np.array([sbase])]),
         "jpg_prev": buf["jpg_prev"], "jpg_prev_off": np.concatenate(po + [np.array([pbase])]),
     }
-    for k in LABEL_KEYS + CF_KEYS:
+    for k in LABEL_KEYS + CF_KEYS + AUX_KEYS:
         data[k] = np.concatenate(lab[k])
     data["cf_ok"] = np.concatenate(cf_ok)
     data["src"] = np.concatenate(src)
@@ -249,4 +254,5 @@ class DrivingDataset(Dataset):
             "v_known": torch.tensor(known),
             "img_prev": torch.from_numpy(prev),                            # frame `history` s earlier (or zeros)
             "has_prev": torch.tensor(has_prev),
+            "yield_tta": torch.tensor(float(d["yield_tta"][i]), dtype=torch.float32),   # NaN: no label
         }

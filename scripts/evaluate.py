@@ -35,6 +35,8 @@ SUITES = {
     "long2": [(t, 9200 + e) for t in range(1010, 1020) for e in range(2)],
     # the same seeds again, now with two-phase signals: right turns wait inside the junction for oncoming gaps
     "long3": [(t, 9200 + e) for t in range(1010, 1020) for e in range(2)],
+    # long3's towns with other episodes (new routes and traffic): twice the routes, as rare failures are noisy
+    "long3b": [(t, 9300 + e) for t in range(1010, 1020) for e in range(2)],
 }
 CAP_SCALE = {"classic": 1, "varied": 2, "twophase": 2}      # NPC count caps per town style
 # per-suite defaults for arguments left unset on the command line
@@ -44,6 +46,8 @@ SUITE_DEFAULTS = {
     # counts as blocked after 180 s without progress (about 4 cycles) instead of 90 s
     "long2": {"route_length": 2500.0, "max_steps": 20000, "town_style": "varied", "jam_fixes": True,
               "blocked_timeout": 180.0},
+    "long3b": {"route_length": 2500.0, "max_steps": 20000, "town_style": "twophase", "jam_fixes": True,
+               "blocked_timeout": 180.0},
     "long3": {"route_length": 2500.0, "max_steps": 20000, "town_style": "twophase", "jam_fixes": True,
               "blocked_timeout": 180.0},
 }
