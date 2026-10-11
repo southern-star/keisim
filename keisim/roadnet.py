@@ -607,8 +607,14 @@ class Town:
         Each yielding connector gets yields = [(other connector, s here, s there)], the closest points of the
         two centre lines, and wait_s: where its front bumper waits, short of the first crossing. In mixed towns
         the bends (unsignalised) whose two turns pass too closely are taken one at a time the same way: the outer
-        turn waits clear of the inner one (_narrow_wait), possibly before the bend."""
+        turn waits clear of the inner one (_narrow_wait), possibly before the bend; and two equal movements that
+        cross (the right turns at a skewed junction) are resolved too: if one of them already gives way to the other's
+        approach, that one (cars queue behind each other in the single lane: the other order could deadlock), else
+        the one from the minor road (main > street > residential > alley), between equal roads the one that reaches
+        the crossing later."""
         rank = {"right": 0, "left": 1, "straight": 2}
+        road_rank = {"alley": 0, "residential": 1, "street": 2, "main": 3}
+        mixed = self.cfg.road_types == "mixed"
         for lane in self.lanes:
             lane.yields, lane.wait_s = [], None
         for J in self.junctions:
@@ -616,6 +622,7 @@ class Town:
             if not J.signalized and not narrow:
                 continue
             conns = [self.lanes[c] for c in J.connectors]
+            equals = []
             for a in conns:
                 ga = self.lanes[a.pred[0]].signal
                 for b in conns:
@@ -624,15 +631,35 @@ class Town:
                         continue
                     if not narrow and (ga is None or gb is None or ga[1] != gb[1]):
                         continue
-                    if rank[a.turn] >= rank[b.turn]:
+                    equal = rank[a.turn] == rank[b.turn]
+                    if rank[a.turn] > rank[b.turn] or (equal and (narrow or not mixed or a.id > b.id)):
                         continue
                     pa, pb = a.poly.pts, b.poly.pts
                     d = np.hypot(*(pa[:, None, :] - pb[None, :, :]).transpose(2, 0, 1))
                     i, j = np.unravel_index(int(np.argmin(d)), d.shape)
                     # signalised: the two cars would touch (a crossing or a merge). Unsignalised bends of a mixed
                     # town: the turns pass too closely (narrow lanes; the body of a turning car swings out)
-                    if d[i, j] < (NARROW_PASS if narrow else 2.2):
-                        a.yields.append((b.id, float(a.poly.s[i]), float(b.poly.s[j])))
+                    if d[i, j] >= (NARROW_PASS if narrow else 2.2):
+                        continue
+                    if equal:                                # mixed towns: decided below, after the ranked ones
+                        equals.append((a, b, float(a.poly.s[i]), float(b.poly.s[j])))
+                        continue
+                    a.yields.append((b.id, float(a.poly.s[i]), float(b.poly.s[j])))
+            for a, b, sa, sb in equals:
+                ya = {self.lanes[y[0]].pred[0] for y in a.yields}     # approaches each one already gives way to
+                yb = {self.lanes[y[0]].pred[0] for y in b.yields}
+                if a.pred[0] in yb and b.pred[0] not in ya:
+                    a_gives = False
+                elif b.pred[0] in ya and a.pred[0] not in yb:
+                    a_gives = True
+                else:
+                    ka = road_rank[self.roads[self.lanes[a.pred[0]].road].kind]
+                    kb = road_rank[self.roads[self.lanes[b.pred[0]].road].kind]
+                    a_gives = (ka, -sa) <= (kb, -sb)
+                if a_gives:
+                    a.yields.append((b.id, sa, sb))
+                else:
+                    b.yields.append((a.id, sb, sa))
             for a in conns:
                 if not a.yields:
                     continue

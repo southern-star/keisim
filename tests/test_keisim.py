@@ -530,6 +530,21 @@ def test_road_types_town_style():
             assert all(T.lanes[l].width >= NARROW_LANE for l in T.truck_lanes)
             assert all(any(T.lanes[c].succ[0] in T.truck_lanes for c in T.lanes[l].succ) for l in T.truck_lanes)
     assert kinds == {"main", "street", "residential", "alley"}
+    # equal movements that cross (right turns at a skewed T-junction): exactly one of the two gives way
+    T = Town(1310, town_config("roadtypes"))
+    n = 0
+    for J in (J for J in T.junctions if J.signalized):
+        conns = [T.lanes[c] for c in J.connectors]
+        for i, a in enumerate(conns):
+            for b in conns[i + 1:]:
+                if a.pred[0] == b.pred[0] or a.turn != b.turn or \
+                        T.lanes[a.pred[0]].signal[1] != T.lanes[b.pred[0]].signal[1]:
+                    continue
+                d = np.hypot(*(a.poly.pts[:, None, :] - b.poly.pts[None, :, :]).transpose(2, 0, 1)).min()
+                if d < 2.2:
+                    n += 1
+                    assert (b.id in [y[0] for y in a.yields]) != (a.id in [y[0] for y in b.yields])
+    assert n >= 1
 
 
 def test_road_types_narrow_bends_and_expert():
