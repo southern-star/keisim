@@ -733,6 +733,7 @@ class Pedestrians:
         self.speed = rng.uniform(1.0, 1.6, n)
         self.lat_scale = np.array([w.get("lat", 1.0) for w in ww])   # 路側帯 walkways: a narrower spread
         self.in_road = np.array([bool(w.get("in_road", False)) for w in ww])
+        self.ww_len = lens
         self.lat = rng.uniform(-0.6, 0.6, n) * self.lat_scale[self.w]
         self.mode = np.zeros(n, int)
         self.c0 = np.zeros((n, 2))
@@ -838,5 +839,6 @@ class Pedestrians:
         return np.stack([np.cos(self.yaw), np.sin(self.yaw)], -1) * self.vel[:, None]
 
     def walking_in_road(self):
-        """Pedestrians walking along a 路側帯 (on the road surface, beside the lane; not crossing)."""
-        return (self.mode == self.WALK) & self.in_road[self.w]
+        """Pedestrians walking along a 路側帯 (on the road surface, beside the lane; not crossing), away from the ends of
+        their walkway: at a junction mouth turning cars sweep across the 路側帯, so there they count like anyone else."""
+        return (self.mode == self.WALK) & self.in_road[self.w] & (self.s > 6.0) & (self.s < self.ww_len[self.w] - 6.0)

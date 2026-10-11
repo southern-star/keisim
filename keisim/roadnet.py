@@ -642,7 +642,9 @@ class Town:
                 # radius + 0.35 m, about 2.25 m): waiting there blocks nobody
                 others = np.concatenate([self.lanes[b].poly.pts for b, _, _ in a.yields])
                 if not J.signalized:
-                    a.wait_s = self._narrow_wait(a, others)
+                    # the inner car is still straightening out over the first metres of its next lane
+                    tails = [self.lanes[self.lanes[b].succ[0]].pts[:13] for b, _, _ in a.yields]
+                    a.wait_s = self._narrow_wait(a, np.concatenate([others] + tails))
                     continue
                 wait = 0.0
                 for sb in np.arange(a.yields[0][1], -0.01, -0.25):
@@ -656,8 +658,8 @@ class Town:
     @staticmethod
     def _narrow_wait(a, others):
         """Narrow bend: the furthest front-bumper position of connector `a` (down to 12 m before it, on the approach
-        lane) where the waiting car's front corners and sides keep NARROW_CLEAR from the centre lines of the turns it
-        gives way to, so the inner turn sweeps past it."""
+        lane) where the waiting car's front corners and sides keep NARROW_CLEAR from `others`, the centre lines of the
+        turns it gives way to (and the first metres after them), so the inner turn sweeps past it."""
         p0, u0 = a.poly.pts[0], a.poly.seg_dir[0]
         h0 = math.atan2(u0[1], u0[0])
         for sb in np.arange(a.yields[0][1], -12.01, -0.25):
