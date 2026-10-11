@@ -81,7 +81,8 @@ class KeiEnv:
         """Lazily started KeiView renderer (one headless Chrome per env)."""
         if self._keiview is None:
             from .render.keiview import KeiViewRenderer
-            self._keiview = KeiViewRenderer(self.cfg.camera, quality=self.cfg.keiview_quality, gl=self.cfg.keiview_gl)
+            self._keiview = KeiViewRenderer(self.cfg.camera, quality=self.cfg.keiview_quality, gl=self.cfg.keiview_gl,
+                                            roads=self.cfg.keiview_roads)
         return self._keiview
 
     def close(self):
@@ -243,7 +244,7 @@ class KeiEnv:
                 self.last_progress = self.progress
                 self.last_progress_t = self.world.t
             # lane / road keeping
-            if abs(self.lat) > self.world.town.cfg.lane_width / 2 + 0.3:
+            if abs(self.lat) > self.world.town.lanes[self.route.lane_at(self.s_ego)].width / 2 + 0.3:
                 self.off_lane_dist += e.v * cfg.dt
             on_road = bool(self.world.town.is_drivable(e.xy[None])[0])
             if not on_road and not self._off_road:

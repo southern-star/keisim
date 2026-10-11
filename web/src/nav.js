@@ -36,9 +36,9 @@ export function arcBezier(p0, h0, p1, h1, n = 24) {
  *  junction at its end (no U-turns): {id, road, from, to, pts, len, h0, h1, next: [{lane, turn}]}. */
 export function buildLanes(data) {
   const cfg = data.cfg;
-  const off = (cfg.left_hand_traffic === false ? -1 : 1) * (cfg.lane_width || 3.5) / 2;
   const lanes = [];
   for (const r of data.roads) {
+    const off = (cfg.left_hand_traffic === false ? -1 : 1) * (r.lane_width || cfg.lane_width || 3.5) / 2;   // road types: per road
     lanes.push({ id: lanes.length, road: r.id, from: r.a, to: r.b, pts: offsetPolyline(r.center, off) });
     lanes.push({ id: lanes.length, road: r.id, from: r.b, to: r.a, pts: offsetPolyline(r.center, -off).reverse() });
   }

@@ -322,8 +322,18 @@ data/                    収集データ (リポジトリ外, 約 3 GB。scripts
 * **交通**: NPC は IDM + カーブ減速 + 信号遵守 + 前方コリドー (歩行者・自車も考慮) + 「出口が詰まっていたら交差点に入らない」。
   long2 では、さらに「交差点の中に別の方向の車がいたら入らない」と、カメラに映らない所で詰まった車の移動が加わります。
   前方コリドーの探索は格子で近くの車だけに絞るので、NPC 500 台の街でも実時間の 2.4 倍で動きます。
-* **街のタイプ**: classic (区画 70〜100 m、今までのすべてのスイート)、varied (区画 70〜200 m を混ぜる、long2)、twophase (varied + 2 現示の信号と右折待ち、long3)。
+* **街のタイプ**: classic (区画 70〜100 m、今までのすべてのスイート)、varied (区画 70〜200 m を混ぜる、long2)、twophase (varied + 2 現示の信号と右折待ち、long3)、roadtypes (twophase + 道路の種類、下)。
   KeiView には `town_<seed>-<設定のハッシュ>.json` として別々に書き出します。
+* **道路の種類** (roadtypes の街、`TownConfig.road_types = "mixed"`): 道路ごとに幅・歩道・制限速度・白線が違います (`config.ROAD_KINDS`)。
+  - 幹線道路: 格子の内側の 1 行と 1 列で、まっすぐです。車線 3.5 m、歩道 3.5 m、40 km/h、黄色のセンターライン (はみ出し禁止)。沿道は背の高い建物が多めです。
+  - 通常の道路: 今までの道路と同じです (36 km/h)。
+  - 生活道路: 歩道がありません。車線 3.0 m、路側帯 0.75 m、30 km/h、センターラインなし。沿道は低い家が多めです。
+    歩行者は路側帯を歩き、車はその横を 3 m/s (約 11 km/h) まで落として追い抜きます。
+  - 路地: 歩道も白線もありません。車線 2.75 m (道幅 6 m)、20 km/h。トラックは入りません。
+  - どの道路をどの種類にするかは別の乱数系列で決めるので、街の形 (格子・交差点の位置・道路のつながり) は同じシードの twophase の街と同じです。
+  - 細い道のカーブは 1 台ずつ曲がります。外回り (右折) の車は、内回りの車が来ていたら、その車の通り道から離れたカーブの手前で待ちます。
+  - エキスパートと NPC は道路ごとの制限速度を守り、遅い道に入る前に減速します。
+  - classic / varied / twophase の街は変わりません。街・地図テクスチャ・KeiView への書き出し・エキスパートのエピソードが、変更の前後で 1 ビットも変わらないことを確かめました。
   歩行者は歩道を歩き、安全を確認してから乱横断する (自車の前方でも横断イベントが起きる)。密度はエピソードごとにランダム。
 * **レンダラ**: 地面は 1 枚の上面テクスチャを **厳密なホモグラフィ** で透視投影する（距離帯ごとにミップレベルを選択）。
   物体は低ポリゴンの凸パーツを、背面カリング + 近平面クリップ + ランバート陰影 + 距離フォグで描画する。
@@ -397,6 +407,7 @@ uv run scripts/bench_speed.py runs/keipilot.pt
 uv run scripts/demo.py --agent model --ckpt runs/keipilot.pt --town 1001 --episode 3 --out runs/demo_model.mp4 --show
 uv run scripts/demo.py --agent expert --town 1000 --episode 3 --out runs/demo_expert.mp4
 uv run scripts/demo.py --agent model --ckpt runs/keipilot.pt --town_style twophase --town 1012 --episode 9200 --show   # 右折待ちのある街
+uv run scripts/demo.py --agent expert --town_style roadtypes --town 1105 --episode 55 --show   # 幹線道路・生活道路・路地のある街
 
 # ベンチマーク (v0.5 の数字は安全層つき: --brake_hold --red_hold)
 uv run scripts/evaluate.py --agent model --ckpt runs/keipilot.pt --suite test --brake_hold --red_hold --videos 3
@@ -547,6 +558,18 @@ cd web && node tools/serve.mjs                # http://localhost:5174/?town=1000
 ```
 
 詳しくは [web/README.md](web/README.md)。
+
+![路面の作り込みと道路の種類](docs/keiview_roads.jpg)
+
+**路面の作り込み** (`?roads=detail`、画面右上のメニュー「路面」) では、路面標示 (横断歩道の手前の◇、黄色の最高速度、自転車の青い矢羽根)、
+交差点のカラー舗装、マンホール・消火栓・仕切弁のふた、グレーチング、舗装の補修跡、点字ブロック、ガードパイプ、カーブミラー、
+道路標識 (最高速度・横断歩道・駐車禁止) が加わります。道路の形と KeiSim の動きはそのままです。
+既定は今までの見た目 (`plain`) です。これまでの KeiView の学習データと評価 (kv3 など) はすべてこの見た目なので、学習済みモデルへの入力は変わりません。
+学習や評価で使うときは `--renderer keiview --keiview_roads detail` を付けます (Python では `EnvConfig.keiview_roads = "detail"`)。
+
+**道路の種類** (roadtypes の街、3 章) も KeiView で描けます。メニューの「town 1000 · 道路の種類」が見本です。
+上の図はどれも路面の作り込みありで、左上が classic の街の交差点 (点字ブロック・ガードパイプ・標識)、右上が幹線道路 (黄色のセンターライン・青い矢羽根)、
+左下が緑の路側帯のある生活道路、右下が路地です。
 
 `?pilot=1` を付けると、KeiPilot がブラウザの中でこの街を運転します（公開版: <https://southern-star.github.io/keisim/?pilot=1>）。
 KeiSim の閉ループ（モデルの入力の描画、制御器、車両モデル、安全層、ルートと目標点）を JavaScript に移したもので、

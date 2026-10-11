@@ -13,7 +13,7 @@ import numpy as np
 
 from .config import TL_GREEN, TL_NONE, TL_RED, TL_YELLOW
 from .geometry import world_to_local
-from .traffic import YIELD_GAP, Traffic, corridor_gaps, vehicle_circles
+from .traffic import PASS_SPEED, YIELD_GAP, Traffic, corridor_gaps, vehicle_circles
 
 PATH_S = np.arange(1, 11) * 2.0          # label waypoints every 2 m up to 20 m
 LABEL_VERSION = 5                        # 3: yellow per traffic law; 4: at yellow, stop whenever the ego still can;
@@ -103,7 +103,10 @@ class Expert:
         hl = ego.LENGTH / 2
         path = self.path_local(route, s, pose)
         reason = "cruise"
-        v_lim = w.town.cfg.speed_limit
+        if w.town.speed_varies:          # road types: the route's own limits
+            v_lim = route.speed_limit_ahead(s + hl)
+        else:
+            v_lim = w.town.cfg.speed_limit
         target = v_lim
 
         # --- curvature envelope
@@ -140,7 +143,10 @@ class Expert:
             cow = np.concatenate([cow, np.tile(-2 - np.arange(peds.n), m)])
             csp = np.concatenate([csp, np.zeros(len(pxy))])
             cyw = np.concatenate([cyw, np.zeros(len(pxy))])
-            cmg = np.concatenate([cmg, np.full(len(pxy), 1.0)])
+            if w.town.in_road_walkways:      # people walking in a 路側帯: passed closely (slowly, see below)
+                cmg = np.concatenate([cmg, np.tile(np.where(peds.walking_in_road(), 0.25, 1.0), m)])
+            else:
+                cmg = np.concatenate([cmg, np.full(len(pxy), 1.0)])
         gap, lead_v, lead_o = corridor_gaps(pts[None], cum[None], np.ones((1, len(pts)), bool),
                                             np.array([[ego.x, ego.y]]), np.array([ego.yaw]), np.array([hl]),
                                             np.array([ego.WIDTH / 2]), cxy, cr, cow, csp, cyw,
@@ -151,6 +157,20 @@ class Expert:
             v_obs = stop_profile(g - g0, self.B_COMF)
             if v_obs < target:
                 target, reason = v_obs, ("pedestrian" if lead_o[0] <= -2 else "vehicle")
+        if w.town.in_road_walkways and peds.n:
+            # pass people walking beside the lane at PASS_SPEED (they are within the usual 1 m margin)
+            walk = peds.walking_in_road()
+            if walk.any():
+                wxy = peds.xy[walk]
+                k = len(wxy)
+                g_pass, _, _ = corridor_gaps(pts[None], cum[None], np.ones((1, len(pts)), bool),
+                                             np.array([[ego.x, ego.y]]), np.array([ego.yaw]), np.array([hl]),
+                                             np.array([ego.WIDTH / 2]), wxy, np.full(k, 0.35), -2 - np.arange(k),
+                                             np.zeros(k), np.zeros(k), np.array([-1]), 1.0)
+                if np.isfinite(g_pass[0]):
+                    v_pass = math.sqrt(PASS_SPEED ** 2 + 2 * 1.6 * max(float(g_pass[0]), 0.0))
+                    if v_pass < target:
+                        target, reason = v_pass, "pedestrian"
 
         # --- give way (two-phase signals): a right turn waits at its connector's wait point, inside the
         # junction, while oncoming traffic would reach the crossing within YIELD_GAP s. Independent of the ego

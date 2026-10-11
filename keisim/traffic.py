@@ -79,6 +79,7 @@ def vehicle_circles(xy, yaw, length, width):
 
 GRID_MIN_PAIRS = 40000      # corridor_gaps: below this many (path, circle) pairs the dense test is faster
 YIELD_GAP = 5.0             # s: a yielding turn goes only if no car with priority reaches the crossing sooner
+PASS_SPEED = 3.0            # m/s: passing someone who walks in the 路側帯 beside the lane (road types)
 
 
 def near_pairs(origin, radius, cxy):
@@ -260,6 +261,9 @@ class Traffic:
 
     def _add(self, lid, s, p, yaw):
         dims, kind = self._sample_dims()
+        tl = self.town.truck_lanes
+        while kind == 1 and tl and lid not in tl:                           # no trucks in alleys
+            dims, kind = self._sample_dims()
         col = CAR_COLORS[self.rng.integers(len(CAR_COLORS))] * self.rng.uniform(0.9, 1.08) + self.rng.uniform(-8, 8, 3)
         self.route.append([lid])
         self.ri = np.append(self.ri, 0)
@@ -288,7 +292,10 @@ class Traffic:
             last = town.lanes[r[-1]]
             if not last.succ:
                 break
-            nxt = last.succ[rng.integers(len(last.succ))]
+            succ = last.succ
+            if self.kind[i] == 1 and last.kind == "road" and town.truck_lanes:      # trucks keep out of alleys
+                succ = [c for c in succ if town.lanes[c].succ[0] in town.truck_lanes] or succ
+            nxt = succ[rng.integers(len(succ))]
             r.append(nxt)
             rem += town.lanes[nxt].length
         # drop consumed lanes
@@ -305,6 +312,8 @@ class Traffic:
             s = rng.uniform(4.0, max(4.5, self._spawn_end(lane)))
             p = lane.poly.interp(s)
             if np.min(np.hypot(*(avoid_xy - p).T)) < 60.0:
+                continue
+            if self.kind[i] == 1 and town.truck_lanes and lid not in town.truck_lanes:
                 continue
             others = np.delete(self.xy, i, 0)
             if len(others) and np.min(np.hypot(*(others - p).T)) < 12.0:
@@ -532,8 +541,9 @@ class Traffic:
         return False
 
     def step(self, dt, t, ext_xy, ext_r, ext_owner, ext_speed, ext_yaw, ego_xy, ego_v=0.0, ego_yaw=None,
-             ego_info=None):
-        """ext_*: external obstacles (ego circles with owner -1, pedestrians owner -2-k)."""
+             ego_info=None, ped_margin=None, pass_xy=None):
+        """ext_*: external obstacles (ego circles with owner -1, pedestrians owner -2-k). ped_margin: optional lateral
+        margin per pedestrian (default 0.9 m); pass_xy: pedestrians walking in a 路側帯, passed at PASS_SPEED."""
         n = self.n
         if n == 0:
             return
@@ -559,7 +569,10 @@ class Traffic:
         # curve speed envelope
         vc = np.sqrt(cfg.lat_acc / np.maximum(np.abs(curv), 1e-4))
         env = np.where(valid, np.sqrt(vc ** 2 + 4.0 * np.maximum(relc, 0.0)), np.inf)
-        vmax = np.minimum(town.cfg.speed_limit * self.vf, env.min(1))
+        if town.speed_varies:                       # road types: each lane's own limit
+            vmax = np.minimum(self._speed_limits() * self.vf, env.min(1))
+        else:
+            vmax = np.minimum(town.cfg.speed_limit * self.vf, env.min(1))
         # traffic lights: first stop line ahead
         hl = self.dims[:, 0] / 2
         d_stop = self.c_stop - off[:, None] - hl[:, None]
@@ -602,9 +615,19 @@ class Traffic:
             cow = np.concatenate([cow, ext_owner])
             csp = np.concatenate([csp, ext_speed])
             cyw = np.concatenate([cyw, ext_yaw])
-        margin = np.where(cow < -1, 0.9, 0.35)[None, :]
+        margin = np.where(cow < -1, 0.9, 0.35)
+        if ped_margin is not None:
+            pm = cow < -1
+            margin[pm] = ped_margin[-2 - cow[pm]]
+        margin = margin[None, :]
         gap, lead_v, _ = corridor_gaps(paths, relc, valid, self.xy, self.yaw, hl, self.dims[:, 1] / 2,
                                        cxy, cr, cow, csp, cyw, np.arange(n), margin)
+        if pass_xy is not None and len(pass_xy):    # slow down to pass people walking beside the lane
+            m = len(pass_xy)
+            g_pass, _, _ = corridor_gaps(paths, relc, valid, self.xy, self.yaw, hl, self.dims[:, 1] / 2, pass_xy,
+                                         np.full(m, 0.35), -2 - np.arange(m), np.zeros(m), np.zeros(m), np.arange(n),
+                                         0.9)
+            vmax = np.minimum(vmax, np.sqrt(PASS_SPEED ** 2 + 3.0 * np.maximum(g_pass, 0.0)))   # inf: nobody there
         # IDM
         a_max, b, T, s0 = cfg.idm_a, cfg.idm_b, cfg.idm_T, cfg.idm_s0
         v0 = np.maximum(vmax, 0.5)
@@ -649,6 +672,25 @@ class Traffic:
         self.stuck = np.where(self.v < 0.1, self.stuck + dt, 0.0)
         self.release_stuck(ego_xy, ego_yaw)
 
+    def _speed_limits(self):
+        """Speed limit of each NPC's lane, eased down at 1.5 m/s^2 toward lower limits up to 40 m ahead (front
+        bumper), so that it enters a slower road at that road's limit."""
+        lanes = self.town.lanes
+        out = np.empty(self.n)
+        for i in range(self.n):
+            r, k = self.route[i], self.ri[i]
+            v = lanes[r[k]].speed_limit
+            d = lanes[r[k]].length - self.s[i] - self.dims[i, 0] / 2
+            for j in range(k + 1, len(r)):
+                if d > 40.0:
+                    break
+                vj = lanes[r[j]].speed_limit
+                if vj < v:
+                    v = min(v, math.sqrt(vj * vj + 3.0 * max(d, 0.0)))
+                d += lanes[r[j]].length
+            out[i] = v
+        return out
+
     def release_stuck(self, ego_xy, ego_yaw=None):
         """Teleport vehicles that have been stopped for ages far from the ego and, with cfg.release_hidden, those
         the ego camera cannot see: deadlocks around the ego then clear up without anything vanishing in view."""
@@ -689,7 +731,9 @@ class Pedestrians:
         self.s = np.array([rng.uniform(1.0, ww[k]["poly"].length - 1.0) for k in self.w])
         self.dir = rng.choice([-1.0, 1.0], size=n)
         self.speed = rng.uniform(1.0, 1.6, n)
-        self.lat = rng.uniform(-0.6, 0.6, n)
+        self.lat_scale = np.array([w.get("lat", 1.0) for w in ww])   # 路側帯 walkways: a narrower spread
+        self.in_road = np.array([bool(w.get("in_road", False)) for w in ww])
+        self.lat = rng.uniform(-0.6, 0.6, n) * self.lat_scale[self.w]
         self.mode = np.zeros(n, int)
         self.c0 = np.zeros((n, 2))
         self.c1 = np.zeros((n, 2))
@@ -759,7 +803,7 @@ class Pedestrians:
                         s2, _ = other.project(self.xy[i])
                         p2 = np.array(other.interp1(s2))
                         h2 = other.heading1(s2)
-                        lat2 = rng.uniform(-0.5, 0.5)
+                        lat2 = rng.uniform(-0.5, 0.5) * self.lat_scale[j]
                         p2 = p2 + np.array([-math.sin(h2), math.cos(h2)]) * lat2
                         self.mode[i] = self.CROSS
                         self.c0[i] = self.xy[i]
@@ -792,3 +836,7 @@ class Pedestrians:
 
     def velocity_vectors(self):
         return np.stack([np.cos(self.yaw), np.sin(self.yaw)], -1) * self.vel[:, None]
+
+    def walking_in_road(self):
+        """Pedestrians walking along a 路側帯 (on the road surface, beside the lane; not crossing)."""
+        return (self.mode == self.WALK) & self.in_road[self.w]

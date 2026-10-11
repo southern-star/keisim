@@ -18,6 +18,8 @@ const SHOT = params.has('shot');
 const ONLY = params.get('only') ? params.get('only').split(',').map(s => s.trim()).filter(Boolean) : null;
 const SEED = params.get('town') || '1000';
 const EGO = params.has('ego');                    // KeiSim ego-camera mode (src/ego.js)
+// road surface detailing (src/world/roaddeco.js): opt-in, the default "plain" is the look the KeiView-trained models know
+const ROADS = params.get('roads') === 'detail' ? 'detail' : 'plain';
 const PILOT = params.has('pilot');                // KeiPilot drives in the browser (src/pilot.js)
 if (PILOT) {                                      // the intro board describes the driving demo, not the walk
   document.body.classList.add('pilot-mode');
@@ -101,7 +103,8 @@ function setProgress(frac, label) {
   const bar = $('bar'); if (bar) bar.style.transform = `scaleX(${frac})`;
   const lab = $('loadlabel'); if (lab && label) lab.textContent = label;
 }
-const LABELS = { ground: '地面', roads: '道路と歩道', houses: '家並み', trees: '桜並木', signals: '信号機', poles: '電柱と電線' };
+const LABELS = { ground: '地面', roads: '道路と歩道', houses: '家並み', trees: '桜並木', signals: '信号機', poles: '電柱と電線',
+  roaddeco: '路面標示と道路の付属物' };
 
 let town = null;
 async function build() {
@@ -112,7 +115,8 @@ async function build() {
   const name = $('townname'); if (name) name.textContent = SEED;
   const sum = $('townsum'); if (sum && !PILOT) sum.textContent = `${town.junctions.length} junctions · ${town.buildings.length} lots · ${town.trees.length} trees`;
   await loadFonts();
-  const mods = EGO || PILOT ? MODULES.concat(['actors']) : MODULES;      // pilot: the surrounding traffic
+  const base = ROADS === 'detail' ? MODULES.concat(['roaddeco']) : MODULES;
+  const mods = EGO || PILOT ? base.concat(['actors']) : base;            // pilot: the surrounding traffic
   const list = ONLY ? mods.filter(m => ONLY.includes(m)).concat(ONLY.filter(m => !mods.includes(m))) : mods;
   let i = 0;
   for (const name of list) {
@@ -308,7 +312,14 @@ function wireMenus() {
       location.reload();
     });
   }
+  const rsel = $('roadsel');
+  if (rsel) {
+    rsel.value = ROADS;
+    rsel.addEventListener('change', () => { const u = new URL(location.href); u.searchParams.set('roads', rsel.value); location.href = u.toString(); });
+  }
   const tsel = $('townsel');
+  // pilot: only the classic towns (the in-browser traffic has split signals; town styles: keisim/config.py)
+  if (tsel && PILOT) for (const o of [...tsel.options]) if (o.value.includes('-')) o.remove();
   if (tsel) { tsel.value = SEED; tsel.addEventListener('change', () => { const u = new URL(location.href); u.searchParams.set('town', tsel.value); location.href = u.toString(); }); }
 }
 main();

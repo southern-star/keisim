@@ -37,7 +37,6 @@ class MapTexture:
         self.raster = R
         H, W = R.H, R.W
         rng = np.random.default_rng(town.seed * 7 + 11 if appearance_seed is None else appearance_seed)
-        cfg = town.cfg
 
         # --- palette (BGR) with per-town variation
         grass = np.array([70, 125, 95]) * rng.uniform(0.8, 1.15, 3)
@@ -50,16 +49,15 @@ class MapTexture:
         self.palette = {"grass": grass, "asphalt": asphalt, "walk": walk, "paint": paint}
 
         sem = np.full((H, W), SEM["terrain"], np.uint8)
-        wo, hw = cfg.walk_outer, cfg.road_half_width
         for road in town.roads:
-            R.fill(sem, town.road_polygon(road, wo), SEM["sidewalk"])
+            R.fill(sem, town.road_polygon(road, road.walk_outer), SEM["sidewalk"])
         for J in town.junctions:
             R.fill(sem, J.walk_poly, SEM["sidewalk"])
         for poly in town.conn_walk_polys:
             R.fill(sem, poly, SEM["sidewalk"])
         curbmask = np.zeros((H, W), np.uint8)
         for road in town.roads:
-            R.fill(curbmask, town.road_polygon(road, hw + 0.2), 1)
+            R.fill(curbmask, town.road_polygon(road, road.half_width + 0.2), 1)
         for J in town.junctions:
             c = J.pos
             R.fill(curbmask, (J.road_poly - c) * ((np.linalg.norm(J.road_poly - c, axis=1, keepdims=True) + 0.2)
@@ -67,7 +65,7 @@ class MapTexture:
         for poly in town.conn_curb_polys:
             R.fill(curbmask, poly, 1)
         for road in town.roads:
-            R.fill(sem, town.road_polygon(road, hw), SEM["road"])
+            R.fill(sem, town.road_polygon(road, road.half_width), SEM["road"])
         for J in town.junctions:
             R.fill(sem, J.road_poly, SEM["road"])
         for poly in town.conn_road_polys:
@@ -79,6 +77,13 @@ class MapTexture:
         for poly in town.crosswalks:
             R.fill(paintmask, poly, 1)
         paintmask = paintmask > 0
+        yellowmask = None
+        if town.markings_yellow:                 # main roads' centre lines (same class, yellow paint)
+            yellowmask = np.zeros((H, W), np.uint8)
+            for poly in town.markings_yellow:
+                R.fill(yellowmask, poly, 1)
+            yellowmask = yellowmask > 0
+            paintmask |= yellowmask
         sem[paintmask] = SEM["marking"]
 
         # --- colour texture (processed in row stripes to keep memory low)
@@ -106,6 +111,10 @@ class MapTexture:
             out[(cls == SEM["sidewalk"]) & grid] *= 0.88
             cm = curbmask[r0:r1]
             out[cm] = curb.astype(np.float32)[None, :] * (1.0 + 0.03 * nz[cm])[:, None]
+            if yellowmask is not None:
+                ym = yellowmask[r0:r1]
+                yellow = np.array([40.0, 185.0, 240.0], np.float32) * float(self.palette["paint"].mean() / 230.0)
+                out[ym] = yellow[None, :] * (1.0 + 0.04 * nz[ym] + 0.10 * fz[ym])[:, None]
             img[r0:r1] = np.clip(out, 0, 255).astype(np.uint8)
         self.color = [img]
         self.sem = [sem]

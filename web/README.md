@@ -41,14 +41,42 @@ cd web && node tools/serve.mjs                               # → http://localh
 | 1〜5 | 視点プリセット（通り・交差点・俯瞰・街区・遠くの交差点） |
 | R / H | 最初の視点に戻る / UI を隠す |
 
-URL パラメータ: `?town=1001`、`?view=3`、`?t=20`（シミュレーション時刻 → 信号の現示）、`?q=medium`、`?only=roads,houses`、`?stats`、`?fly`
+URL パラメータ: `?town=1001`、`?view=3`、`?t=20`（シミュレーション時刻 → 信号の現示）、`?q=medium`、`?roads=detail`（路面の作り込み、下）、`?only=roads,houses`、`?stats`、`?fly`、`?tdir=.towns`（KeiSim が書き出した街のフォルダ）
+
+## 路面の作り込み（`?roads=detail`）
+
+`src/world/roaddeco.js` が、`roads.js` の路面の上に次のものを足します。画面右上のメニュー「路面: 作り込み」でも切り替えられます。
+
+- 路面標示: 信号のある交差点の停止線の 30 m と 50 m 手前の◇（横断歩道あり）、道路の始まりの黄色の最高速度（規制標示、道路の制限速度を 10 km/h 単位に丸めたもの）、歩道のある道路の青い矢羽根（自転車の通行位置）
+- 舗装: 信号のある交差点の 35 % を赤茶色のカラー舗装に。生活道路（道路の種類）の半分は路側帯を緑に（通学路）
+- 路面のふた: 道路の中央付近のマンホール（亀甲模様・桜のデザイン・同心円の 3 種）、消火栓（黄色の縁取り）、仕切弁とガスの小さなふた、側溝のグレーチング
+- 補修跡: 打ち換えた舗装・横断する掘削跡・ひび割れのシール
+- 歩道: 横断歩道の端の点状ブロックと、そこから歩道に沿う線状ブロック、縁石沿いのガードパイプ
+- 道路の付属物: カーブ（2 本の道路だけがつながる角）の外側のカーブミラー、最高速度・横断歩道・駐車禁止の標識
+
+配置はすべて街のデータから決まり、乱数はシード付きです（同じ街なら毎回同じ）。道路の形は変えず、車線の上に立つものも置きません。
+既定（`plain`）ではこのモジュールを読み込まないので、今までの見た目と 1 ピクセルも変わりません。
+これまでの KeiView の学習データと評価画像はすべて `plain` です。学習済みのモデルを `detail` で走らせると、モデルにとっては初めて見る絵になります。
+
+エゴモードのセマンティックラベルは、路面標示が marking、ふた・補修跡・カラー舗装が road、点字ブロックが sidewalk、ガードパイプ・標識・カーブミラーが pole です。
+
+## 道路の種類
+
+KeiSim の roadtypes の街（`--town_style roadtypes`、[../README.md](../README.md) の 3 章）では、道路ごとに幅・歩道・白線が違います。
+エクスポートは道路ごとの断面（`kind`、車線幅、路側帯、歩道の幅、制限速度）と黄色のセンターライン（`markings_yellow`）を足します。
+ビューアは、歩道のない道路では電柱を道路のすぐ外に、視点プリセットを路側帯に置きます。
+
+```bash
+uv run scripts/export_town.py --town 1000 --style roadtypes     # web/towns/town_1000-<設定のハッシュ>.json（1000 は同梱）
+```
 
 ## 開発ツール
 
 ```bash
 cd web && npm install                         # three + puppeteer-core（ツール用のみ）
 node tools/check.mjs --town 1000              # GPU なしのビルド検査（モジュールごとのエラー・ポリゴン数・時間）
-node tools/shot.mjs --town 1000 --views 1,2,3 --out shots/t1000     # 実レンダラでスクリーンショット
+node tools/check.mjs --town 1000 ground roads houses trees signals poles roaddeco   # 路面の作り込みも
+node tools/shot.mjs --town 1000 --views 1,2,3 --out shots/t1000     # 実レンダラでスクリーンショット（--roads detail、--tdir .towns も可）
 ```
 
 `shot.mjs` は Linux では SwiftShader（CPU 描画）を使うので、GPU のないクラウドコンテナでも動きます（4 コアで準備に約 30 秒、`--q medium` で 1 枚あたり約 20〜30 秒）。
@@ -67,6 +95,7 @@ KeiPilot の学習データ収集とクローズドループ評価で使いま�
   - RTX 3060 では、ラベル込みで 1 フレーム約 17 ms、RGB のみで約 12 ms です。
   - 街の読み込みは約 8 秒です。
   - `--gl auto`（既定）は、GPU で WebGL2 が使えなければ SwiftShader（CPU 描画）に自動で切り替えます。`--gl hw` / `--gl soft` で固定もできます（Python 側は `EnvConfig.keiview_gl`）。
+  - `--roads detail` で路面の作り込みを足して描きます（Python 側は `EnvConfig.keiview_roads`、スクリプトは `--keiview_roads detail`）。既定は `plain` です。
   - SwiftShader では 1 フレーム約 2 秒です（4 vCPU のクラウド VM で計測。並列にしてもほぼ伸びません）。動作確認やデモ動画 1 本向けです。
 - エゴモードでは信号の灯器を 2.2 倍で描きます（`?sigscale=` で変更可）。
   - 実寸（灯火 30 cm）だと、320×160 の画像では 30 m 先の灯火が 1〜2 ピクセルになり、見えないフレームが多いためです。
@@ -144,6 +173,7 @@ src/world/plots.js          畑・月極駐車場・空き地・公園
 src/world/trees.js          街路樹 → 桜
 src/world/signals.js        信号機（灯火は KeiSim の現示どおり）
 src/world/poles.js          電柱・電線・引込線・支線
+src/world/roaddeco.js       路面の作り込み（?roads=detail）: 路面標示・カラー舗装・ふた・点字ブロック・ガードパイプ・標識
 src/world/actors.js         KeiSim の車と歩行者（エゴモード）
 src/ego.js                  エゴモード（1 フレーム描画・セマンティックラベル・ライティングのランダム化）
 src/pilot.js                パイロットモード（モデルの入力の描画、onnxruntime-web、制御器と車両モデル、安全層、表示）

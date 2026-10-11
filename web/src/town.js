@@ -28,6 +28,12 @@ export function prepareTown(data) {
   const bounds = { x0: bx0 - ox, x1: bx1 - ox, z0: oy - by1, z1: oy - by0 };
 
   // ------------------------------------------------------------------ roads (centre lines)
+  // cross-section: road-type towns export it per road ("kind", widths); uniform towns have cfg's for every road
+  const section = (r) => ({
+    kind: r.kind || 'street', laneW: r.lane_width ?? cfg.lane_width, shoulder: r.shoulder ?? cfg.shoulder,
+    sidewalk: r.sidewalk ?? cfg.sidewalk_width, hw: r.half_width ?? cfg.road_half_width, wo: r.walk_outer ?? cfg.walk_outer,
+    speed: r.speed_limit ?? cfg.speed_limit,
+  });
   const roads = data.roads.map((r) => {
     const pts = r.center.map(P);
     const cum = [0];
@@ -41,7 +47,7 @@ export function prepareTown(data) {
       const tx = (b[0] - a[0]) / seg, tz = (b[1] - a[1]) / seg;
       return { x: a[0] + (b[0] - a[0]) * t, z: a[1] + (b[1] - a[1]) * t, tx, tz, nx: tz, nz: -tx };
     };
-    return { ...r, pts, cum, len, at };
+    return { ...r, ...section(r), pts, cum, len, at };
   });
 
   const junctions = data.junctions.map((j) => ({ ...j, p: P(j.pos) }));
@@ -150,8 +156,8 @@ export const yawOf = (dx, dz) => Math.atan2(-dx, -dz) * 180 / Math.PI;
 export const poleSide = (road) => (road.id % 2 === 0 ? 1 : -1);
 
 function makeViews(T) {
-  const { cfg } = T;
-  const walkOff = cfg.road_half_width + 0.85;          // on the sidewalk, kerb side (trees stand at the back edge)
+  // on the sidewalk, kerb side (trees stand at the back edge); roads without one: in the 路側帯
+  const walkOff = (road) => (road.sidewalk > 0 ? road.hw + 0.85 : road.hw - 0.4);
   const byDeg = (j) => T.roads.filter((r) => r.a === j.id || r.b === j.id);
   const obstacles = [...T.trees.map((t) => t.p), ...T.signals.map((s) => s.poleP)];
   // hero: on the sidewalk ~34 m before the signalised junction nearest to the town centre, facing it
@@ -170,7 +176,7 @@ function makeViews(T) {
       const f = road.at(atA ? d : road.len - d);
       const tx = f.tx * sgn, tz = f.tz * sgn;
       const nx = tz * side, nz = -tx * side;
-      const x = f.x + nx * walkOff, z = f.z + nz * walkOff;
+      const x = f.x + nx * walkOff(road), z = f.z + nz * walkOff(road);
       if (obstacles.every((o) => Math.hypot(o[0] - x, o[1] - z) > 2.4) || dd === 12) return { x, z, yaw: yawOf(tx, tz), pitch: 1.5, label };
     }
     return null;

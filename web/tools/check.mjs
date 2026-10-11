@@ -1,7 +1,7 @@
 // Headless (node) build check for KeiView modules — no GPU, no browser. Adapted from Sakuragaoka
 // Station tools/check.mjs (MIT): stubbed DOM/canvas, builds the modules for a town, runs update()
 // for a while and prints errors, triangles, meshes, materials and build time per module.
-//   node tools/check.mjs [--town 1000] [module ...]        (default: every module in src/main.js order)
+//   node tools/check.mjs [--town 1000] [--tdir .towns] [module ...]   (default: every module in src/main.js order)
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
@@ -9,7 +9,8 @@ import { pathToFileURL, fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const argv = process.argv.slice(2);
 const ti = argv.indexOf('--town'); const seed = ti >= 0 ? argv[ti + 1] : '1000';
-const names = argv.filter((a, i) => !a.startsWith('--') && argv[i - 1] !== '--town');
+const di = argv.indexOf('--tdir'); const tdir = di >= 0 ? argv[di + 1].replace(/[^\w.-]/g, '') : 'towns';
+const names = argv.filter((a, i) => !a.startsWith('--') && argv[i - 1] !== '--town' && argv[i - 1] !== '--tdir');
 
 // ---------------------------------------------------------------- DOM stubs (as upstream)
 class Ctx2D {
@@ -57,7 +58,7 @@ const { prepareTown } = await imp('src/town.js');
 // module order as in src/main.js (not imported: main.js needs a real browser)
 const MODULES = JSON.parse(/export const MODULES = (\[[^\]]*\])/.exec(fs.readFileSync(path.join(root, 'src/main.js'), 'utf8'))[1].replace(/'/g, '"'));
 
-const town = prepareTown(JSON.parse(fs.readFileSync(path.join(root, `towns/town_${seed}.json`), 'utf8')));
+const town = prepareTown(JSON.parse(fs.readFileSync(path.join(root, `${tdir}/town_${seed}.json`), 'utf8')));
 L.configureWorld({ play: town.play, heightAt: town.heightAt, farTown: town.farTown, farSkip: town.farSkip });
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(58, 16 / 9, 0.1, 2500);

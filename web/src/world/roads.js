@@ -52,6 +52,7 @@ export function build(ctx) {
   const mPave = ctx.mat.toon('#d5d0c5', { map: paveTex, paint: 0.05 });
   const mCurb = ctx.mat.toon('#c7c5bd', { paint: 0.04 });
   const mPaint = ctx.mat.decal('#f2f0ea', { paint: 0.03 });
+  const mYellow = ctx.mat.decal('#f0b52e', { paint: 0.03 });            // centre lines of main roads (road types)
 
   // ------------------------------------------------------------------ road surface + gutters
   add(merge(flatShapes(roadShapes, 0, 8)), mAsphalt, 'road');
@@ -67,6 +68,10 @@ export function build(ctx) {
   const polys = [...T.data.markings, ...T.data.crosswalks].map(p => ({ outer: p.map(T.P), holes: [] }));
   const paint = add(merge(flatShapes(polys, 0.008, 1)), mPaint, 'paint', { receive: true });
   ctx.noOutline(paint);
+  if (T.data.markings_yellow && T.data.markings_yellow.length) {
+    const ys = T.data.markings_yellow.map(p => ({ outer: p.map(T.P), holes: [] }));
+    ctx.noOutline(add(merge(flatShapes(ys, 0.008, 1)), mYellow, 'paint-yellow', { receive: true }));
+  }
 
   ctx.services.roads = { roadShapes, walkShapes };
 }

@@ -85,10 +85,9 @@ def surface_masks(town: Town):
     R = Raster(town.bbox, REGION_RES)
     walk = np.zeros((R.H, R.W), np.uint8)
     road = np.zeros((R.H, R.W), np.uint8)
-    wo, hw = town.cfg.walk_outer, town.cfg.road_half_width
     for rd in town.roads:
-        R.fill(walk, town.road_polygon(rd, wo), 1)
-        R.fill(road, town.road_polygon(rd, hw), 1)
+        R.fill(walk, town.road_polygon(rd, rd.walk_outer), 1)
+        R.fill(road, town.road_polygon(rd, rd.half_width), 1)
     for J in town.junctions:
         R.fill(walk, J.walk_poly, 1)
         R.fill(road, J.road_poly, 1)
@@ -116,9 +115,10 @@ def building_frontage(town: Town, b, samples):
     c = np.array([b["x"], b["y"]])
     u = np.array([math.cos(b["yaw"]), math.sin(b["yaw"])])
     v = np.array([-u[1], u[0]])
-    wo, half_d = town.cfg.walk_outer, b["w"] / 2
+    half_d = b["w"] / 2
     best = None
     for rd, pts, hs, ss in samples:
+        wo = rd.walk_outer
         rel = c - pts
         along = rel @ u                                 # 0 where the normal line hits the building centre
         lat = rel @ v
@@ -143,9 +143,8 @@ class FreeSpace:
         R = Raster(town.bbox, PARCEL_RES)
         self.R, self.town = R, town
         self.blocked = np.zeros((R.H, R.W), np.uint8)
-        cfg = town.cfg
         for rd in town.roads:
-            R.fill(self.blocked, town.road_polygon(rd, cfg.walk_outer + 0.35), 1)
+            R.fill(self.blocked, town.road_polygon(rd, rd.walk_outer + 0.35), 1)
         for J in town.junctions:
             c = J.pos
             R.fill(self.blocked, (J.walk_poly - c) * 1.12 + c, 1)
@@ -193,8 +192,6 @@ def make_parcels(town: Town, buildings):
     row 3: whatever block interior is left (fields, vacant lots, small parks). Each parcel is a
     lot {fx, fy (frontage centre), face (heading toward its road), w (width), d (depth), kind}.
     """
-    cfg = town.cfg
-    wo = cfg.walk_outer
     rng = np.random.default_rng(town.seed * 7919 + 17)
     fs = FreeSpace(town)
     for b in buildings:                      # KeiSim lots: from the sidewalk edge to the back of the box
@@ -225,6 +222,7 @@ def make_parcels(town: Town, buildings):
     # rows 1 and 2 along every road side (same walk as KeiSim's own building placement)
     for row, (off0, off1) in ((1, (0.4, 0.4)), (2, (14.5, 17.5))):
         for rd in town.roads:
+            wo = rd.walk_outer
             for sgn in (1.0, -1.0):
                 s = float(rng.uniform(0.5, 3.0))
                 while s < rd.length - 3.0:
@@ -276,6 +274,13 @@ def export(seed: int, town_cfg=None) -> dict:
 
     roads = [{"id": rd.id, "a": rd.a, "b": rd.b, "length": round(rd.length, 2),
               "center": r2(simplify(rd.center, LINE_EPS, False))} for rd in town.roads]
+    mixed = cfg.road_types != "uniform"
+    if mixed:                    # road types: each road's cross-section (uniform towns: "cfg" below)
+        for d, rd in zip(roads, town.roads):
+            rs = rd.spec
+            d.update({"kind": rs.kind, "lane_width": rs.lane_width, "shoulder": rs.shoulder, "sidewalk": rs.sidewalk,
+                      "half_width": rs.half_width, "walk_outer": rs.walk_outer,
+                      "speed_limit": round(rs.speed_limit, 4), "center_line": rs.center, "edge_line": rs.edge})
     junctions = [{"id": J.id, "pos": r2(J.pos), "radius": round(J.radius, 2), "arms": len(J.arms),
                   "signalized": bool(J.signalized), "phases": J.phases, "green": round(J.green, 9),
                   "yellow": J.yellow, "allred": J.allred, "offset": round(J.offset, 9)}
@@ -303,6 +308,7 @@ def export(seed: int, town_cfg=None) -> dict:
         "roads": roads, "junctions": junctions, "signals": signals,
         "buildings": buildings, "trees": trees,
         "parcels": make_parcels(town, buildings),
+        **({"markings_yellow": [r2(simplify(p, LINE_EPS, True)) for p in town.markings_yellow]} if mixed else {}),
     }
 
 

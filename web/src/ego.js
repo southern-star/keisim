@@ -11,7 +11,8 @@ export const SEM = {
 };
 
 // roads.js materials (sRGB hex) -> class. Anything else in that module counts as road.
-const ROAD_COLORS = { '6f7176': SEM.road, 'b9b8b1': SEM.road, 'd5d0c5': SEM.sidewalk, 'c7c5bd': SEM.sidewalk, 'f2f0ea': SEM.marking };
+const ROAD_COLORS = { '6f7176': SEM.road, 'b9b8b1': SEM.road, 'd5d0c5': SEM.sidewalk, 'c7c5bd': SEM.sidewalk, 'f2f0ea': SEM.marking,
+  'f0b52e': SEM.marking };
 const MODULE_SEM = { ground: SEM.terrain, roads: SEM.road, houses: SEM.building, trees: SEM.vegetation,
   signals: SEM.pole, poles: SEM.pole };
 
@@ -23,6 +24,7 @@ export function tagSemantics(ctx) {
   const moduleOf = (o) => { for (let p = o; p; p = p.parent) if (p.userData.module) return p.userData.module; return null; };
   ctx.staticRoot.traverse((o) => {
     if (!o.isMesh) return;
+    if (o.userData.semClass !== undefined) { o.userData.sem = o.userData.semClass; return; }   // set by the module
     const mod = moduleOf(o);
     let sem = MODULE_SEM[mod] ?? SEM.building;
     const m = Array.isArray(o.material) ? o.material[0] : o.material;
