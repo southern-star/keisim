@@ -3,8 +3,9 @@
 // (scripts/export_onnx.py -> models/keipilot.onnx, run by onnxruntime-web on WebGPU or WASM) plans a path and a
 // target speed from that frame, and the car follows the plan with KeiSim's controllers and vehicle model
 // (keisim/control.py, keisim/vehicle.py) behind the two safety layers of keipilot/agent.py. The route and the
-// model's route inputs (next turn, target point) come from src/nav.js. Signals switch with KeiSim's timing; other
-// cars (src/traffic.js) drive around the town unless switched off (?traffic=0, the HUD button or T, remembered).
+// model's route inputs (next turn, target point) come from src/nav.js. Signals switch with KeiSim's timing (split
+// phases, or two-phase signals with right turns that wait for oncoming gaps in the two-phase towns); other cars
+// (src/traffic.js) drive around the town unless switched off (?traffic=0, the HUD button or T, remembered).
 // Keys: ← ↑ → turn at the next junction, Space pause, R back to the start, T other cars (or the buttons).
 import * as THREE from 'three';
 import { buildLanes, createNavigator } from './nav.js';
@@ -279,7 +280,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
   function physicsStep() {
     if (tick++ % CONTROL_EVERY === 0) controlStep();
     stepVehicle(car, action, DT);
-    if (trafficOn) traffic.step(DT, worldT, car);
+    if (trafficOn) traffic.step(DT, worldT, car, { s: nav.s, decision: nav.nextDecision() });
     const dev = nav.track(car.x, car.y);
     deviation = dev;
     stillT = car.v < 0.1 ? stillT + DT : 0;
@@ -447,7 +448,8 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     update, capture, after, backend, reset,
     adapter: backend === 'webgpu' && adapter && adapter.info ? `${adapter.info.vendor} ${adapter.info.architecture}`.trim() : '',
     idle: () => inflight || Promise.resolve(),             // the inference in flight (tests: window.__pilotRun)
+    traffic, lanes,                                         // for tests (tools/pilot_check.mjs --yields)
     state: () => ({ car: { ...car }, plan, s: nav.s, inputs: nav.inputs(), inferMs, deviation, resets, t: ctx.time,
-      traffic: trafficOn ? { n: traffic.n, contacts: traffic.contacts } : null }),
+      traffic: trafficOn ? { n: traffic.n, contacts: traffic.contacts, npcContacts: traffic.npcContacts, twoPhase: traffic.twoPhase } : null }),
   };
 }
