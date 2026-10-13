@@ -490,3 +490,96 @@ def test_late_yield_after_overshoot():
     assert p["reason"] != "yield" and p["target_speed"] > 1.0
     p = plan_at(s_cross - LATE_COMMIT + 0.3, 1.5)          # almost at the crossing: clear it rather than stop in it
     assert p["reason"] != "yield" and p["target_speed"] > 1.0
+
+
+def test_road_types_town_style():
+    """'roadtypes' towns: main roads, streets, residential roads without sidewalks and narrow alleys on the
+    twophase layout. The existing styles keep their settings and exported town names."""
+    from keisim.config import ROAD_KINDS, town_config, town_tag
+    from keisim.roadnet import NARROW_LANE
+
+    assert town_tag(town_config("classic")) == ""
+    assert town_tag(town_config("varied")) == "645f29b1" and town_tag(town_config("twophase")) == "98782ab7"
+    kinds = set()
+    for seed in (1000, 1010, 1012):
+        T = Town(seed, town_config("roadtypes"))
+        ref = Town(seed, town_config("twophase"))
+        assert np.allclose([J.pos for J in T.junctions], [J.pos for J in ref.junctions])   # same layout
+        assert [(r.a, r.b) for r in T.roads] == [(r.a, r.b) for r in ref.roads]
+        kinds |= {r.kind for r in T.roads}
+        for r in T.roads:
+            spec = ROAD_KINDS.get(r.kind)
+            if spec:
+                assert r.spec.lane_width == spec["lane_width"] and r.spec.sidewalk == spec["sidewalk"]
+            for lid in (r.lane_ab, r.lane_ba):
+                L = T.lanes[lid]
+                assert L.width == r.spec.lane_width and L.speed_limit == r.spec.speed_limit
+                n = normals_of(L.pts)
+                pts = np.concatenate([L.pts, L.pts + n * 0.9, L.pts - n * 0.9])
+                assert (T.surface(pts) == 1).all(), f"lane {lid} leaves the road in town {seed}"
+            if r.spec.sidewalk == 0:      # no street trees without a sidewalk
+                d = [np.min(np.hypot(*(r.center - [t["x"], t["y"]]).T)) for t in T.trees]
+                assert not d or min(d) > r.half_width + 0.5
+        for w in T.walkways:              # sidewalk, or the 路側帯 of residential roads; alleys have none
+            r = T.roads[w["road"]]
+            assert r.kind != "alley" and w["in_road"] == (r.spec.sidewalk == 0)
+        assert T.markings_yellow and T.speed_varies and T.in_road_walkways
+        for c in (l for l in T.lanes if l.kind == "conn"):
+            assert c.speed_limit == min(T.lanes[c.pred[0]].speed_limit, T.lanes[c.succ[0]].speed_limit)
+        if T.truck_lanes:                 # trucks keep to wide lanes they can always drive on from
+            assert all(T.lanes[l].width >= NARROW_LANE for l in T.truck_lanes)
+            assert all(any(T.lanes[c].succ[0] in T.truck_lanes for c in T.lanes[l].succ) for l in T.truck_lanes)
+    assert kinds == {"main", "street", "residential", "alley"}
+    # equal movements that cross (right turns at a skewed T-junction): exactly one of the two gives way
+    T = Town(1310, town_config("roadtypes"))
+    n = 0
+    for J in (J for J in T.junctions if J.signalized):
+        conns = [T.lanes[c] for c in J.connectors]
+        for i, a in enumerate(conns):
+            for b in conns[i + 1:]:
+                if a.pred[0] == b.pred[0] or a.turn != b.turn or \
+                        T.lanes[a.pred[0]].signal[1] != T.lanes[b.pred[0]].signal[1]:
+                    continue
+                d = np.hypot(*(a.poly.pts[:, None, :] - b.poly.pts[None, :, :]).transpose(2, 0, 1)).min()
+                if d < 2.2:
+                    n += 1
+                    assert (b.id in [y[0] for y in a.yields]) != (a.id in [y[0] for y in b.yields])
+    assert n >= 1
+
+
+def test_road_types_narrow_bends_and_expert():
+    """Narrow bends are taken one at a time (the outer turn waits clear of the inner one); the expert completes a
+    route through residential roads and alleys, keeping each road's speed limit."""
+    from keisim.config import town_config
+    from keisim.roadnet import NARROW_CLEAR
+
+    T = Town(1105, town_config("roadtypes"))
+    n = 0
+    for J in T.junctions:
+        if J.signalized:
+            continue
+        for c in J.connectors:
+            L = T.lanes[c]
+            if not L.yields:
+                continue
+            n += 1
+            assert L.turn == "right" and -12.0 <= L.wait_s <= L.yields[0][1]
+            sp = L.wait_s
+            front = L.poly.interp1(sp) if sp >= 0 else L.poly.pts[0] + sp * L.poly.seg_dir[0]
+            others = np.concatenate([T.lanes[b].poly.pts for b, _, _ in L.yields])
+            assert np.min(np.hypot(*(others - np.asarray(front)).T)) >= NARROW_CLEAR
+    assert n >= 2
+    cfg = EnvConfig()
+    cfg.town = town_config("roadtypes")
+    cfg.traffic.box_rule = cfg.traffic.release_hidden = True
+    env = KeiEnv(cfg)
+    env.reset(town_seed=1105, episode_seed=55, render=False)
+    done, over, kinds = False, 0, set()
+    while not done:
+        _, _, done, info = env.step(env.expert_action())
+        lane = env.world.town.lanes[env.route.lane_at(env.s_ego)]
+        over += env.world.ego.v > lane.speed_limit + 0.5
+        if lane.kind == "road":
+            kinds.add(env.world.town.roads[lane.road].kind)
+    assert info["status"] == "success", info
+    assert over == 0 and {"residential", "alley"} <= kinds

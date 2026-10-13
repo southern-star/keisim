@@ -4,7 +4,9 @@ A town is a jittered grid of junctions connected by (optionally curved) two-lane
 roads. Every junction with three or more arms is signalised with a conflict-free
 split-phase controller (one approach green at a time). Lanes form a directed
 graph (road lanes -> junction connector lanes -> road lanes) which is used for
-routing, traffic and the privileged expert.
+routing, traffic and the privileged expert. With TownConfig.road_types="mixed"
+the roads differ in cross-section (main roads, streets, residential roads
+without sidewalks, alleys; see RoadSpec and config.ROAD_KINDS).
 """
 from __future__ import annotations
 
@@ -14,15 +16,19 @@ from collections import deque
 import cv2
 import numpy as np
 
-from .config import TL_GREEN, TL_RED, TL_YELLOW, TownConfig
+from .config import ROAD_KINDS, TL_GREEN, TL_RED, TL_YELLOW, TownConfig
 from .geometry import (Polyline, arc_bezier, box_corners, cubic_bezier, curvature_of,
                        headings_of, offset_polyline, resample, unit, wrap)
 
 LANE_DS = 0.5
+NARROW_LANE = 3.0        # m: lanes narrower than this keep trucks out, and their bends are taken one at a time
+NARROW_PASS = 2.9        # m: two turns in an unsignalised bend whose centre lines come closer than this give way
+NARROW_CLEAR = 1.9       # m: ... and the outer one waits with its front corners and sides this far from the inner
+                         # one's centre line (its half width + the swing of its body in the turn + a margin)
 
 
 class Lane:
-    def __init__(self, lid, pts, kind, speed_limit):
+    def __init__(self, lid, pts, kind, speed_limit, width=3.5):
         pts = resample(pts, LANE_DS)
         self.id = lid
         self.pts = pts
@@ -43,6 +49,7 @@ class Lane:
         self.succ: list[int] = []
         self.pred: list[int] = []
         self.speed_limit = speed_limit
+        self.width = width                # lane width (connectors: the wider of the two roads' lanes)
         self.stop_s = None                # arc length of the stop line
         self.signal = None                # (junction id, phase index)
 
@@ -50,14 +57,49 @@ class Lane:
         return f"Lane({self.id},{self.kind},L={self.length:.1f},turn={self.turn})"
 
 
+class RoadSpec:
+    """Cross-section of a road. kind: street | main | residential | alley. shoulder: from the lane's outer edge to
+    the edge of the road surface (the 路側帯 where people walk on roads without a sidewalk); sidewalk: width of the
+    raised sidewalk on each side (0: none). center / edge: paint (see config.ROAD_KINDS)."""
+
+    def __init__(self, kind, lane_width, shoulder, sidewalk, speed_limit, center="dashed", edge="classic"):
+        self.kind = kind
+        self.lane_width, self.shoulder, self.sidewalk = lane_width, shoulder, sidewalk
+        self.speed_limit = speed_limit
+        self.center, self.edge = center, edge
+        self.half_width = lane_width + shoulder       # road surface, centre line to edge
+        self.walk_outer = self.half_width + sidewalk  # outer edge of the sidewalk (= half_width without one)
+
+    @classmethod
+    def street(cls, cfg):
+        """TownConfig's own road: every road of a uniform town, the streets of a mixed one."""
+        return cls("street", cfg.lane_width, cfg.shoulder, cfg.sidewalk_width, cfg.speed_limit)
+
+    @classmethod
+    def of_kind(cls, kind, cfg):
+        return cls.street(cfg) if kind == "street" else cls(kind, **ROAD_KINDS[kind])
+
+    def walkway(self):
+        """Where pedestrians walk along this road: (offset from the centre line, lateral spread factor, on the road
+        surface) or None. On the sidewalk's middle; on roads without one in the 路側帯 (if it is >= 0.75 m wide)."""
+        if self.sidewalk > 0:
+            return self.half_width + self.sidewalk / 2, 1.0, False
+        if self.shoulder >= 0.75:
+            return self.half_width - 0.4, 0.25, True
+        return None
+
+
 class Road:
-    def __init__(self, rid, a, b, center, half_width):
+    def __init__(self, rid, a, b, center, spec: RoadSpec):
         self.id = rid
         self.a, self.b = a, b
         self.center = resample(center, LANE_DS)
         self.poly = Polyline(self.center)
         self.length = self.poly.length
-        self.half_width = half_width
+        self.spec = spec
+        self.kind = spec.kind
+        self.half_width = spec.half_width
+        self.walk_outer = spec.walk_outer
         self.lane_ab = -1
         self.lane_ba = -1
 
@@ -215,6 +257,7 @@ class Town:
         self.trees: list[dict] = []
         self.signal_heads: list[dict] = []
         self.markings: list[np.ndarray] = []      # white paint polygons
+        self.markings_yellow: list[np.ndarray] = []   # yellow paint (centre lines of main roads)
         self.crosswalks: list[np.ndarray] = []
         self._build()
 
@@ -264,8 +307,9 @@ class Town:
             self.junctions.append(Junction(index[k], nodes[k]))
 
         # ---- road end directions (with optional curvature)
+        road_specs = self._road_specs(kept, nx, ny)
         specs = []
-        for (ka, kb) in kept:
+        for (ka, kb), rs in zip(kept, road_specs):
             a, b = index[ka], index[kb]
             pa, pb = self.junctions[a].pos, self.junctions[b].pos
             th = math.atan2(pb[1] - pa[1], pb[0] - pa[0])
@@ -276,14 +320,17 @@ class Town:
                     phi_a, phi_b = phi, -phi      # arc
                 else:
                     phi_a, phi_b = phi, phi       # S-curve
+                if rs.kind == "main":
+                    phi_a = phi_b = 0.0           # main roads run straight (the draws stay, for the same layout)
             specs.append((a, b, th, phi_a, phi_b))
             self.junctions[a].arms.append({"spec": len(specs) - 1, "end": "a", "angle": wrap(th + phi_a)})
             self.junctions[b].arms.append({"spec": len(specs) - 1, "end": "b", "angle": wrap(th + phi_b + math.pi)})
 
-        # ---- junction radius from the tightest angle between neighbouring arms
-        hw = cfg.road_half_width
-        wo = cfg.walk_outer
+        # ---- junction radius from the tightest angle between neighbouring arms (and the widest arm)
         for J in self.junctions:
+            wo = max(road_specs[a["spec"]].walk_outer for a in J.arms)
+            if cfg.road_types != "uniform" and len(J.arms) < 3:
+                wo = max(wo, cfg.walk_outer)      # bends of narrow roads as wide as a street's: room to swing out
             J.arms.sort(key=lambda a: a["angle"])
             angs = np.array([a["angle"] for a in J.arms])
             gaps = np.diff(np.concatenate([angs, [angs[0] + 2 * math.pi]]))
@@ -301,17 +348,19 @@ class Town:
             p3 = Jb.pos + Jb.radius * unit(th + phi_b + math.pi)
             d = np.linalg.norm(p3 - p0) / 3.0
             pts = cubic_bezier(p0, p0 + d * unit(th + phi_a), p3 - d * unit(th + phi_b), p3, 200)
-            road = Road(sid, a, b, pts, hw)
+            road = Road(sid, a, b, pts, road_specs[sid])
             self.roads.append(road)
 
         # ---- lanes on roads
         side = 1.0 if cfg.left_hand_traffic else -1.0
-        off = side * cfg.lane_width / 2.0
         for road in self.roads:
-            ab = Lane(len(self.lanes), offset_polyline(road.center, off), "road", cfg.speed_limit)
+            rs = road.spec
+            off = side * rs.lane_width / 2.0
+            ab = Lane(len(self.lanes), offset_polyline(road.center, off), "road", rs.speed_limit, rs.lane_width)
             ab.road, ab.start_junction, ab.end_junction = road.id, road.a, road.b
             self.lanes.append(ab)
-            ba = Lane(len(self.lanes), offset_polyline(road.center, -off)[::-1].copy(), "road", cfg.speed_limit)
+            ba = Lane(len(self.lanes), offset_polyline(road.center, -off)[::-1].copy(), "road", rs.speed_limit,
+                      rs.lane_width)
             ba.road, ba.start_junction, ba.end_junction = road.id, road.b, road.a
             self.lanes.append(ba)
             road.lane_ab, road.lane_ba = ab.id, ba.id
@@ -340,7 +389,8 @@ class Town:
                     lout = self.lanes[arm_out["out"]]
                     h0, h1 = lin.heading[-1], lout.heading[0]
                     pts = arc_bezier(lin.pts[-1], h0, lout.pts[0], h1, 64)
-                    c = Lane(len(self.lanes), pts, "conn", cfg.speed_limit)
+                    c = Lane(len(self.lanes), pts, "conn", min(lin.speed_limit, lout.speed_limit),
+                             max(lin.width, lout.width))
                     c.junction = J.id
                     c.start_junction = c.end_junction = J.id
                     dh = float(wrap(h1 - h0))
@@ -353,8 +403,9 @@ class Town:
             corners_r, corners_w = [], []
             for arm in J.arms:
                 n = np.array([-arm["dir"][1], arm["dir"][0]])
-                corners_r += [arm["pt"] + n * hw, arm["pt"] - n * hw]
-                corners_w += [arm["pt"] + n * wo, arm["pt"] - n * wo]
+                rs = self.roads[arm["road"]].spec
+                corners_r += [arm["pt"] + n * rs.half_width, arm["pt"] - n * rs.half_width]
+                corners_w += [arm["pt"] + n * rs.walk_outer, arm["pt"] - n * rs.walk_outer]
             J.road_poly = _hull(corners_r)
             J.walk_poly = _hull(corners_w)
             if J.signalized:
@@ -378,14 +429,17 @@ class Town:
         self._make_yields()
 
         # swept strips of junction connectors (bends / skewed junctions bulge past the hull)
+        # (lane + shoulder of the wider road; sidewalk only as wide as the narrower one: none if either has none)
         self.conn_road_polys, self.conn_walk_polys, self.conn_curb_polys = [], [], []
-        hl = cfg.lane_width / 2 + cfg.shoulder
         for lane in self.lanes:
             if lane.kind != "conn":
                 continue
+            ra = self.roads[self.lanes[lane.pred[0]].road].spec
+            rb = self.roads[self.lanes[lane.succ[0]].road].spec
+            hl = max(ra.lane_width / 2 + ra.shoulder, rb.lane_width / 2 + rb.shoulder)
             self.conn_road_polys.append(self.strip(lane.pts, hl))
             self.conn_curb_polys.append(self.strip(lane.pts, hl + 0.2))
-            self.conn_walk_polys.append(self.strip(lane.pts, hl + cfg.sidewalk_width))
+            self.conn_walk_polys.append(self.strip(lane.pts, hl + min(ra.sidewalk, rb.sidewalk)))
         self._make_bbox()
         self._make_raster()
         self._make_markings()
@@ -394,6 +448,36 @@ class Town:
         self._finalize_static()
 
     # ------------------------------------------------------------------ helpers
+    def _road_specs(self, edges, nx, ny):
+        """RoadSpec of every kept grid edge ((i, j), (i', j')). uniform: all TownConfig streets. mixed: the edges
+        of `main_roads` interior grid lines (a row and a column first) are main roads; the others are streets,
+        residential roads or alleys (road_mix). Own random stream: the layout draws stay those of the uniform
+        town with the same seed."""
+        cfg = self.cfg
+        if cfg.road_types == "uniform":
+            street = RoadSpec.street(cfg)
+            return [street] * len(edges)
+        if cfg.road_types != "mixed":
+            raise ValueError(f"road_types must be uniform or mixed (got {cfg.road_types!r})")
+        rng = np.random.default_rng([self.seed, 0x726F6164])
+        rows = [("row", j) for j in range(1, ny - 1)]
+        cols = [("col", i) for i in range(1, nx - 1)]
+        lines = []
+        for group in (rows, cols):
+            if group and len(lines) < cfg.main_roads:
+                lines.append(group[int(rng.integers(len(group)))])
+        rest = [g for g in rows + cols if g not in lines]
+        for k in rng.permutation(len(rest))[:max(0, cfg.main_roads - len(lines))]:
+            lines.append(rest[k])
+        mix = np.asarray(cfg.road_mix, float)
+        kinds = ["street", "residential", "alley"]
+        out = []
+        for (i0, j0), (i1, j1) in edges:
+            on_main = any((t == "row" and j0 == j1 == v) or (t == "col" and i0 == i1 == v) for t, v in lines)
+            kind = "main" if on_main else kinds[int(rng.choice(3, p=mix / mix.sum()))]
+            out.append(RoadSpec.of_kind(kind, cfg))
+        return out
+
     def _make_bbox(self):
         pts = np.concatenate([r.center for r in self.roads])
         m = 45.0
@@ -414,15 +498,14 @@ class Town:
         """Coarse drivable raster: 0 off-road, 1 road, 2 sidewalk."""
         R = Raster(self.bbox, 0.2)
         img = np.zeros((R.H, R.W), np.uint8)
-        wo, hw = self.cfg.walk_outer, self.cfg.road_half_width
         for road in self.roads:
-            R.fill(img, self.road_polygon(road, wo), 2)
+            R.fill(img, self.road_polygon(road, road.walk_outer), 2)
         for J in self.junctions:
             R.fill(img, J.walk_poly, 2)
         for poly in self.conn_walk_polys:
             R.fill(img, poly, 2)
         for road in self.roads:
-            R.fill(img, self.road_polygon(road, hw), 1)
+            R.fill(img, self.road_polygon(road, road.half_width), 1)
         for J in self.junctions:
             R.fill(img, J.road_poly, 1)
         for poly in self.conn_road_polys:
@@ -438,7 +521,6 @@ class Town:
 
     def _make_markings(self):
         cfg = self.cfg
-        hw = cfg.road_half_width
         side = 1.0 if cfg.left_hand_traffic else -1.0
         mw = 0.15
 
@@ -448,13 +530,21 @@ class Town:
             return np.concatenate([a, b[::-1]])
 
         for road in self.roads:
+            rs = road.spec
+            hw = rs.half_width
             c = road.center
             L = road.length
             s = road.poly.s
             # edge lines (solid)
-            for sgn in (1, -1):
-                self.markings.append(strip(c, sgn * (hw - 0.35), mw))
-            # centre line: solid near junctions, dashed elsewhere
+            if rs.edge == "classic":
+                for sgn in (1, -1):
+                    self.markings.append(strip(c, sgn * (hw - 0.35), mw))
+            elif rs.edge == "lane":                 # just outside the lane (the 路側帯 line on residential roads)
+                for sgn in (1, -1):
+                    self.markings.append(strip(c, sgn * (rs.lane_width + mw / 2 + 0.05), mw))
+            # centre line: solid near junctions, dashed elsewhere (main roads: solid yellow, no overtaking)
+            if rs.center == "yellow":
+                self.markings_yellow.append(strip(c, 0.0, mw))
             sig_a = self.junctions[road.a].signalized
             sig_b = self.junctions[road.b].signalized
             solid_a = 18.0 if sig_a else 0.0
@@ -468,7 +558,7 @@ class Town:
                 t += 10.0
             if solid_b > 0:
                 seg.append((max(0.0, L - solid_b), L))
-            for s0, s1 in seg:
+            for s0, s1 in seg if rs.center == "dashed" else ():
                 m = (s >= s0) & (s <= s1)
                 if m.sum() >= 2:
                     self.markings.append(strip(c[m], 0.0, mw))
@@ -489,8 +579,11 @@ class Town:
                 p = lane.poly.interp(sl_s)
                 h = float(lane.poly.heading(sl_s))
                 u, n = unit(h), unit(h + math.pi / 2)
-                inner = -side * (cfg.lane_width / 2.0)   # towards road centre
-                outer = side * (cfg.lane_width / 2.0 + cfg.shoulder - 0.35)
+                inner = -side * (rs.lane_width / 2.0)   # towards road centre
+                if rs.edge == "classic":
+                    outer = side * (rs.lane_width / 2.0 + rs.shoulder - 0.35)
+                else:                                    # up to the edge line
+                    outer = side * (rs.lane_width / 2.0 + 0.2)
                 a0 = p + n * inner
                 a1 = p + n * outer
                 w = 0.45
@@ -512,27 +605,61 @@ class Town:
         """Who gives way inside a junction. Connectors of approaches that are green at the same time (opposite
         approaches with two-phase signals) may cross; the lower-ranked movement (right < left < straight) yields.
         Each yielding connector gets yields = [(other connector, s here, s there)], the closest points of the
-        two centre lines, and wait_s: where its front bumper waits, short of the first crossing."""
+        two centre lines, and wait_s: where its front bumper waits, short of the first crossing. In mixed towns
+        the bends (unsignalised) whose two turns pass too closely are taken one at a time the same way: the outer
+        turn waits clear of the inner one (_narrow_wait), possibly before the bend; and two equal movements that
+        cross (the right turns at a skewed junction) are resolved too: if one of them already gives way to the other's
+        approach, that one (cars queue behind each other in the single lane: the other order could deadlock), else
+        the one from the minor road (main > street > residential > alley), between equal roads the one that reaches
+        the crossing later."""
         rank = {"right": 0, "left": 1, "straight": 2}
+        road_rank = {"alley": 0, "residential": 1, "street": 2, "main": 3}
+        mixed = self.cfg.road_types == "mixed"
         for lane in self.lanes:
             lane.yields, lane.wait_s = [], None
         for J in self.junctions:
-            if not J.signalized:
+            narrow = not J.signalized and self.cfg.road_types == "mixed"
+            if not J.signalized and not narrow:
                 continue
             conns = [self.lanes[c] for c in J.connectors]
+            equals = []
             for a in conns:
                 ga = self.lanes[a.pred[0]].signal
                 for b in conns:
                     gb = self.lanes[b.pred[0]].signal
-                    if b.pred[0] == a.pred[0] or ga is None or gb is None or ga[1] != gb[1]:
+                    if b.pred[0] == a.pred[0]:
                         continue
-                    if rank[a.turn] >= rank[b.turn]:
+                    if not narrow and (ga is None or gb is None or ga[1] != gb[1]):
+                        continue
+                    equal = rank[a.turn] == rank[b.turn]
+                    if rank[a.turn] > rank[b.turn] or (equal and (narrow or not mixed or a.id > b.id)):
                         continue
                     pa, pb = a.poly.pts, b.poly.pts
                     d = np.hypot(*(pa[:, None, :] - pb[None, :, :]).transpose(2, 0, 1))
                     i, j = np.unravel_index(int(np.argmin(d)), d.shape)
-                    if d[i, j] < 2.2:                       # the two cars would touch: a crossing or a merge
-                        a.yields.append((b.id, float(a.poly.s[i]), float(b.poly.s[j])))
+                    # signalised: the two cars would touch (a crossing or a merge). Unsignalised bends of a mixed
+                    # town: the turns pass too closely (narrow lanes; the body of a turning car swings out)
+                    if d[i, j] >= (NARROW_PASS if narrow else 2.2):
+                        continue
+                    if equal:                                # mixed towns: decided below, after the ranked ones
+                        equals.append((a, b, float(a.poly.s[i]), float(b.poly.s[j])))
+                        continue
+                    a.yields.append((b.id, float(a.poly.s[i]), float(b.poly.s[j])))
+            for a, b, sa, sb in equals:
+                ya = {self.lanes[y[0]].pred[0] for y in a.yields}     # approaches each one already gives way to
+                yb = {self.lanes[y[0]].pred[0] for y in b.yields}
+                if a.pred[0] in yb and b.pred[0] not in ya:
+                    a_gives = False
+                elif b.pred[0] in ya and a.pred[0] not in yb:
+                    a_gives = True
+                else:
+                    ka = road_rank[self.roads[self.lanes[a.pred[0]].road].kind]
+                    kb = road_rank[self.roads[self.lanes[b.pred[0]].road].kind]
+                    a_gives = (ka, -sa) <= (kb, -sb)
+                if a_gives:
+                    a.yields.append((b.id, sa, sb))
+                else:
+                    b.yields.append((a.id, sb, sa))
             for a in conns:
                 if not a.yields:
                     continue
@@ -541,6 +668,11 @@ class Town:
                 # out of the corridor that every car it yields to checks along its path (NPCs: half width + circle
                 # radius + 0.35 m, about 2.25 m): waiting there blocks nobody
                 others = np.concatenate([self.lanes[b].poly.pts for b, _, _ in a.yields])
+                if not J.signalized:
+                    # the inner car is still straightening out over the first metres of its next lane
+                    tails = [self.lanes[self.lanes[b].succ[0]].pts[:13] for b, _, _ in a.yields]
+                    a.wait_s = self._narrow_wait(a, np.concatenate([others] + tails))
+                    continue
                 wait = 0.0
                 for sb in np.arange(a.yields[0][1], -0.01, -0.25):
                     sc = sb - 0.9
@@ -549,6 +681,25 @@ class Town:
                         wait = float(sb)
                         break
                 a.wait_s = wait
+
+    @staticmethod
+    def _narrow_wait(a, others):
+        """Narrow bend: the furthest front-bumper position of connector `a` (down to 12 m before it, on the approach
+        lane) where the waiting car's front corners and sides keep NARROW_CLEAR from `others`, the centre lines of the
+        turns it gives way to (and the first metres after them), so the inner turn sweeps past it."""
+        p0, u0 = a.poly.pts[0], a.poly.seg_dir[0]
+        h0 = math.atan2(u0[1], u0[0])
+        for sb in np.arange(a.yields[0][1], -12.01, -0.25):
+            pts = []
+            for back in (0.0, 0.9, 2.2):           # front bumper, front circle, middle of the car
+                sp = sb - back
+                c = np.asarray(a.poly.interp1(sp)) if sp >= 0 else p0 + sp * u0
+                h = a.poly.heading1(sp) if sp >= 0 else h0
+                n = np.array([-math.sin(h), math.cos(h)]) * 0.95
+                pts += [c + n, c - n]
+            if min(float(np.min(np.hypot(*(others - q).T))) for q in pts) >= NARROW_CLEAR:
+                return float(sb)
+        return -12.0
 
     def _make_signal_heads(self):
         """Far-side overhead signal (Japanese style) for every signalised approach.
@@ -572,7 +723,8 @@ class Town:
                     head = out.poly.interp(s_h)
                     h_out = float(out.poly.heading(s_h))
                     n = unit(h_out + math.pi / 2) * side
-                    base, dirn, d0 = head, n, cfg.lane_width / 2 + cfg.shoulder + 1.1
+                    ro = self.roads[out.road].spec
+                    base, dirn, d0 = head, n, ro.lane_width / 2 + ro.shoulder + 1.1
                 else:
                     u = unit(h_in)
                     p_end = lane.pts[-1]
@@ -604,9 +756,8 @@ class Town:
         cfg, rng = self.cfg, self.rng
         R = Raster(self.bbox, 0.5)
         blocked = np.zeros((R.H, R.W), np.uint8)
-        wo = cfg.walk_outer
         for road in self.roads:
-            R.fill(blocked, self.road_polygon(road, wo + 0.8), 1)
+            R.fill(blocked, self.road_polygon(road, road.walk_outer + 0.8), 1)
         for J in self.junctions:
             R.fill(blocked, J.walk_poly, 1)
             # enlarge junction area a bit
@@ -623,7 +774,12 @@ class Town:
             [185, 200, 215], [150, 150, 150], [110, 120, 130], [200, 190, 170], [160, 120, 100],
             [215, 225, 230], [100, 100, 115],
         ], dtype=float)  # BGR-ish, muted
+        # building heights: (low, mid) cumulative probabilities; main roads are lined with taller buildings,
+        # residential roads and alleys with houses
+        tall = {"main": (0.35, 0.85), "residential": (0.85, 0.98), "alley": (0.9, 0.99)}
         for road in self.roads:
+            wo = road.walk_outer
+            p_low, p_mid = tall.get(road.kind, (0.68, 0.94))
             for sgn in (1.0, -1.0):
                 s = float(rng.uniform(1.0, 6.0))
                 while s < road.length - 4.0:
@@ -642,9 +798,9 @@ class Town:
                         R.fill(test, corners, 1)
                         if not np.any(test & blocked):
                             r = rng.random()
-                            if r < 0.68:
+                            if r < p_low:
                                 height = rng.uniform(5.0, 13.0)
-                            elif r < 0.94:
+                            elif r < p_mid:
                                 height = rng.uniform(13.0, 26.0)
                             else:
                                 height = rng.uniform(26.0, 42.0)
@@ -657,6 +813,9 @@ class Town:
                     s += w + gap
         # trees along the outer edge of sidewalks
         for road in self.roads:
+            if road.spec.sidewalk <= 0:
+                continue
+            wo = road.walk_outer
             for sgn in (1.0, -1.0):
                 s = float(rng.uniform(6.0, 14.0))
                 while s < road.length - 6.0:
@@ -688,13 +847,33 @@ class Town:
         self.static_corners = box_corners(self.static_boxes[:, 0], self.static_boxes[:, 1], self.static_boxes[:, 2],
                                           self.static_boxes[:, 3], self.static_boxes[:, 4])
         self.road_lanes = [l.id for l in self.lanes if l.kind == "road"]
-        # sidewalk paths for pedestrians: (road id, side) -> polyline
+        # paths for pedestrians: (road id, side) -> polyline, on the sidewalk or in the 路側帯 (in_road; lat: scale
+        # of the lateral spread around it). Alleys have none.
         self.walkways = []
-        off = self.cfg.road_half_width + self.cfg.sidewalk_width / 2
         for road in self.roads:
+            ww = road.spec.walkway()
+            if ww is None:
+                continue
+            off, lat, in_road = ww
             for sgn in (1.0, -1.0):
                 pts = offset_polyline(road.center, sgn * off)
-                self.walkways.append({"road": road.id, "side": sgn, "poly": Polyline(pts)})
+                self.walkways.append({"road": road.id, "side": sgn, "poly": Polyline(pts), "lat": lat,
+                                      "in_road": in_road})
+        self.in_road_walkways = any(w["in_road"] for w in self.walkways)
+        self.narrow_lanes = any(self.lanes[l].width < NARROW_LANE for l in self.road_lanes)
+        # road lanes trucks may use: wide lanes from which wide lanes go on (prune dead ends of the wide network)
+        self.truck_lanes = None
+        if self.narrow_lanes:
+            ok = {l for l in self.road_lanes if self.lanes[l].width >= NARROW_LANE}
+            changed = True
+            while changed:
+                changed = False
+                for l in sorted(ok):
+                    if not any(self.lanes[c].succ[0] in ok for c in self.lanes[l].succ):
+                        ok.discard(l)
+                        changed = True
+            self.truck_lanes = ok or None
+        self.speed_varies = len({l.speed_limit for l in self.lanes}) > 1
 
     # ------------------------------------------------------------------ queries
     def signal_state_for_lane(self, lane_id, t):

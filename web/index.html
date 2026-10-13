@@ -35,7 +35,7 @@
   #pilot-hud button.on { background: #c23aa6; border-color: #ff4fd8; }
   body.pilot #help, body.pilot #cross { display: none; }
   /* ?pilot=1 intro: the driving demo instead of the walk (no walk keys, no start button: it drives by itself) */
-  body.pilot-mode #intro .keys, body.pilot-mode #go { display: none; }
+  body.pilot-mode #intro .keys, body.pilot-mode #go, body.pilot-mode #roadsel { display: none; }   /* the model knows the plain roads */
   .pilot-about, #townsum.roma:has(p) { text-align: left; letter-spacing: 0; color: var(--ink); font: 500 clamp(12px, 1.7vw, 14px)/1.75 var(--sans); }
   #townsum p { margin: 0 0 6px; } #townsum p.tp { color: #b0306f; font-weight: 600; } #townsum ul { margin: 0; padding-left: 1.2em; color: var(--muted); }
   #townsum code { font: 600 12px var(--sans); background: rgba(51,48,74,.08); padding: 1px 4px; border-radius: 4px; }
@@ -79,7 +79,8 @@
   .hud { position: fixed; z-index: 3; pointer-events: none; opacity: 0; transition: opacity .6s; }
   body.playing .hud { opacity: 1; }
   body.noui .hud, body.shot .hud, body.shot #intro { display: none !important; }
-  #corner { top: calc(16px + env(safe-area-inset-top, 0px)); right: 16px; display: flex; gap: 8px; align-items: center; pointer-events: auto; }
+  #corner { top: calc(16px + env(safe-area-inset-top, 0px)); right: 16px; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px;
+    align-items: center; max-width: calc(100vw - 32px); pointer-events: auto; }
   #clock { font: 700 15px/1 var(--round); color: var(--navy); background: var(--glass); border-radius: 999px; padding: 8px 12px; font-variant-numeric: tabular-nums; }
   .chip, select { font: 500 12px/1 var(--sans); color: var(--ink); background: var(--glass); border: 0; border-radius: 999px; padding: 8px 11px; cursor: pointer; }
   #help { bottom: calc(16px + env(safe-area-inset-bottom, 0px)); left: 16px; font: 500 12px/1.7 var(--sans); color: var(--ink);
@@ -120,7 +121,8 @@
 
 <div class="hud" id="corner">
   <span id="clock">16:02</span>
-  <select id="townsel" aria-label="KeiSim town"><option value="1000">town 1000</option><option value="1001">town 1001</option><option value="1002">town 1002</option><option value="1003">town 1003</option><option value="1015-98782ab7">town 1015 · 二段階信号</option><option value="1018-98782ab7">town 1018 · 二段階信号</option></select>
+  <select id="townsel" aria-label="KeiSim town"><option value="1000">town 1000</option><option value="1001">town 1001</option><option value="1002">town 1002</option><option value="1003">town 1003</option><option value="1015-98782ab7">town 1015 · 二段階信号</option><option value="1018-98782ab7">town 1018 · 二段階信号</option><option value="1000-dae67d73" data-nopilot>town 1000 · 道路の種類</option></select>
+  <select id="roadsel" aria-label="Road detail"><option value="plain">路面: 標準</option><option value="detail">路面: 作り込み</option></select>
   <select id="quality" aria-label="Graphics quality"><option value="high">Quality: High</option><option value="medium">Quality: Medium</option><option value="low">Quality: Low</option></select>
 </div>
 <div class="hud" id="help">

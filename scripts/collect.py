@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from keisim.config import EnvConfig  # noqa: E402
 from keisim.env import KeiEnv  # noqa: E402
 from keipilot.data import ShardWriter, write_meta  # noqa: E402
-from keisim.config import town_config  # noqa: E402
+from keisim.config import TOWN_STYLES, town_config  # noqa: E402
 from keisim.expert import LABEL_VERSION  # noqa: E402
 
 REASONS = {"cruise": 0, "curve": 1, "vehicle": 2, "pedestrian": 3, "red_light": 4, "junction_blocked": 5, "yield": 6}
@@ -116,6 +116,7 @@ def worker(wid, args, quota, out_dir, counter):
     cfg.route_deviation = 4.0 if args.mode == "dagger" else cfg.route_deviation
     cfg.render_rgb = cfg.render_seg = False
     cfg.renderer = args.renderer
+    cfg.keiview_roads = args.keiview_roads
     if args.ego_cross_rate is not None:
         cfg.traffic.ego_cross_rate = args.ego_cross_rate
     if args.ped_spacing is not None:
@@ -232,16 +233,20 @@ def main():
     ap.add_argument("--focus_reasons", nargs="*", default=["yield", "junction_blocked"])
     ap.add_argument("--focus_disagree", type=float, default=1.5)
     ap.add_argument("--renderer", default="keisim", choices=["keisim", "keiview"], help="camera renderer")
+    ap.add_argument("--keiview_roads", default="plain", choices=["plain", "detail"],
+                    help="KeiView road surface: plain (every KeiView dataset so far) or detail (markings, signs, ...)")
     ap.add_argument("--episodes_per_town", type=int, default=1, help="episodes before switching town")
-    ap.add_argument("--town_style", default="classic", choices=["classic", "varied", "twophase"],
-                    help="town style (keisim/config.py); twophase: right turns wait for gaps in the oncoming traffic")
+    ap.add_argument("--town_style", default="classic", choices=list(TOWN_STYLES),
+                    help="town style (keisim/config.py); twophase: right turns wait for gaps in the oncoming traffic; "
+                         "roadtypes: twophase with main roads, residential roads without sidewalks and alleys")
     ap.add_argument("--jam_fixes", type=int, default=0, choices=[0, 1], help="box rule + hidden jam release (long2/3)")
     ap.add_argument("--history", type=float, default=0.0, help="also store the frame this many s earlier (multi-frame)")
     ap.add_argument("--segment", type=float, default=3.0, help="with --history: seconds a virtual camera is kept")
     args = ap.parse_args()
     quota = [args.frames // args.workers + (1 if i < args.frames % args.workers else 0) for i in range(args.workers)]
     write_meta(args.out, label_version=LABEL_VERSION, mode=args.mode, ckpt=args.ckpt, frames=args.frames, history=args.history,
-               renderer=args.renderer, town_style=args.town_style, jam_fixes=args.jam_fixes, late_yield=True)
+               renderer=args.renderer, town_style=args.town_style, jam_fixes=args.jam_fixes, late_yield=True,
+               **({"keiview_roads": args.keiview_roads} if args.keiview_roads != "plain" else {}))
     ctx = mp.get_context("spawn" if args.mode == "dagger" else "fork")
     counter = ctx.Value("i", 0)
     t0 = time.time()

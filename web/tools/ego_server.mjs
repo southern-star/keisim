@@ -1,5 +1,5 @@
 // KeiView ego-camera render server for KeiSim: headless Chrome (GPU) driven over stdin/stdout.
-//   node tools/ego_server.mjs [--w 320 --h 160] [--q medium] [--gl auto|hw|soft] [--tdir .towns]
+//   node tools/ego_server.mjs [--w 320 --h 160] [--q medium] [--gl auto|hw|soft] [--tdir .towns] [--roads plain|detail]
 // --gl auto (default) uses the GPU when Chrome has WebGL2 there and falls back to SwiftShader otherwise.
 // One JSON request per line on stdin, one JSON reply per line on stdout (logs go to stderr):
 //   {"id":1,"op":"town","town":1000}                        -> {"id":1,"ok":true,"ms":8800,"errors":[]}
@@ -83,7 +83,7 @@ let current = null;
 async function loadTown(town) {
   const t0 = Date.now();
   const q = new URLSearchParams({ shot: '1', ego: '1', town: String(town), w: String(W), h: String(H), q: Q, tdir: TDIR,
-    ...(args.sigscale ? { sigscale: args.sigscale } : {}) });
+    ...(args.sigscale ? { sigscale: args.sigscale } : {}), ...(args.roads === 'detail' ? { roads: 'detail' } : {}) });
   await page.goto(`http://127.0.0.1:${port}/index.html?${q}`, { waitUntil: 'load', timeout: 180000 });
   await page.waitForFunction('window.__ready === true', { timeout: 900000, polling: 100 });
   const info = await page.evaluate(() => ({ errors: window.__errors || [], stats: window.__stats,

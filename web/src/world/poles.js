@@ -80,13 +80,13 @@ const DISTRICTS = ['中央', '若葉', '緑町', '東町', '本町', '西町', '
 /** Poles on one side of every KeiSim road (sidewalk's outer edge, ~32 m apart, clear of trees and
  *  signal masts), chained along the road, plus spans between the end poles meeting at a junction. */
 function planPoles(T, R) {
-  const cfg = T.cfg, off = cfg.walk_outer - 0.3;
   const MAIN = ['hv', 'gw', 'lv', 'tel'], ALLEY = ['hv', 'lv', 'tel'];
   const avoid = [...T.trees.map(t => t.p), ...T.signals.map(s => s.poleP)];
   const poles = [], spans = [], ends = new Map();
   let serial = 0;
   for (const r of T.roads) {
     if (r.len < 12) continue;
+    const off = r.sidewalk > 0 ? r.wo - 0.3 : r.hw + 0.35;   // sidewalk's outer edge, or just off the road
     const side = poleSide(r);
     const cls = r.len > 55 ? 'main' : 'alley';
     const n = Math.max(2, Math.round((r.len - 10) / 32) + 1);

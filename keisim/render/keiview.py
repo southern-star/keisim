@@ -51,7 +51,7 @@ def export_town(seed: int, town_cfg=None, out_dir: str | None = None) -> str:
 
 
 class KeiViewRenderer:
-    def __init__(self, cam_cfg, quality="medium", gl="auto", node="node", max_dist=160.0, log_path=None):
+    def __init__(self, cam_cfg, quality="medium", gl="auto", node="node", max_dist=160.0, log_path=None, roads="plain"):
         self.cfg = cam_cfg
         self.W, self.H = cam_cfg.width, cam_cfg.height
         hfov = math.radians(cam_cfg.fov_deg)
@@ -67,6 +67,10 @@ class KeiViewRenderer:
                "--tdir", TOWN_DIR]
         if os.environ.get("KEIVIEW_SIGSCALE"):         # experiments: signal-head scale in ego mode (default 1.6)
             cmd += ["--sigscale", os.environ["KEIVIEW_SIGSCALE"]]
+        if roads not in ("plain", "detail"):
+            raise ValueError(f"roads must be plain or detail (got {roads!r})")
+        if roads == "detail":                           # road surface detailing (web/src/world/roaddeco.js)
+            cmd += ["--roads", "detail"]
         self.proc = subprocess.Popen(cmd, cwd=WEB_DIR, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self._log)
         hello = self._read()
         if not hello.get("ok"):

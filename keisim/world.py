@@ -79,7 +79,13 @@ class World:
             lanes = self.route.lanes
             ego_info = (lanes[k], self.ego_s - self.route.offsets[k], lanes[k + 1] if k + 1 < len(lanes) else None,
                         e.v, e.LENGTH)
-        self.traffic.step(dt, self.t, ext_xy, ext_r, ext_o, ext_v, ext_yaw, e.xy, e.v, e.yaw, ego_info)
+        ped_margin = pass_xy = None
+        if self.town.in_road_walkways and pd.n:     # people walking in a 路側帯 are passed closely, but slowly
+            walk = pd.walking_in_road()
+            ped_margin = np.where(walk, 0.2, 0.9)
+            pass_xy = pd.xy[walk]
+        self.traffic.step(dt, self.t, ext_xy, ext_r, ext_o, ext_v, ext_yaw, e.xy, e.v, e.yaw, ego_info,
+                          ped_margin=ped_margin, pass_xy=pass_xy)
         # pedestrians (crossing is triggered more often just ahead of the ego)
         tr = self.traffic
         veh_xy = np.vstack([tr.xy, e.xy[None]])

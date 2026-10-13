@@ -19,6 +19,7 @@ import time
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from keisim.config import TOWN_STYLES  # noqa: E402
 
 SUITES = {
     # seen town layouts (towns used for data collection), new routes/traffic
@@ -38,7 +39,7 @@ SUITES = {
     # long3's towns with other episodes (new routes and traffic): twice the routes, as rare failures are noisy
     "long3b": [(t, 9300 + e) for t in range(1010, 1020) for e in range(2)],
 }
-CAP_SCALE = {"classic": 1, "varied": 2, "twophase": 2}      # NPC count caps per town style
+CAP_SCALE = {"classic": 1, "varied": 2, "twophase": 2, "roadtypes": 2}      # NPC count caps per town style
 # per-suite defaults for arguments left unset on the command line
 SUITE_DEFAULTS = {
     "long": {"route_length": 2500.0, "max_steps": 20000},
@@ -70,6 +71,7 @@ def run_route(job):
     cfg.render_seg = False
     cfg.render_rgb = args["agent"] == "model"
     cfg.renderer = args.get("renderer", "keisim")
+    cfg.keiview_roads = args.get("keiview_roads", "plain")
     if args.get("dense"):
         cfg.traffic.vehicle_spacing = (20.0, 28.0)
         cfg.traffic.ped_spacing = (14.0, 20.0)
@@ -234,10 +236,12 @@ def main():
     ap.add_argument("--tag", default=None)
     ap.add_argument("--dense", action="store_true", help="stress test: dense traffic and many crossing pedestrians")
     ap.add_argument("--renderer", default="keisim", choices=["keisim", "keiview"], help="camera renderer")
+    ap.add_argument("--keiview_roads", default="plain", choices=["plain", "detail"],
+                    help="KeiView road surface: plain (as trained) or detail (markings, signs, ...)")
     ap.add_argument("--out", default=None)
     ap.add_argument("--brake_hold", action="store_true", help="safety layer: no throttle burst right after firm braking")
     ap.add_argument("--red_hold", action="store_true", help="safety layer: no creeping while the model sees red/yellow")
-    ap.add_argument("--town_style", default=None, choices=["classic", "varied", "twophase"],
+    ap.add_argument("--town_style", default=None, choices=list(TOWN_STYLES),
                     help="default: classic (long2: varied, long3: twophase)")
     ap.add_argument("--blocked_timeout", type=float, default=None, help="s without progress (default 90, long2 180)")
     ap.add_argument("--jam_fixes", type=int, default=None, choices=[0, 1],
@@ -264,13 +268,15 @@ def main():
     jobs = SUITES[args.suite]
     suffix = ("_dense" if args.dense else "") + ("" if args.weather == "random" else f"_{args.weather}") + \
         ("_keiview" if args.renderer == "keiview" else "") + \
+        ("_kvdetail" if args.renderer == "keiview" and args.keiview_roads == "detail" else "") + \
         ("" if args.town_style == suite_style else f"_{args.town_style}") + \
         ("" if int(args.jam_fixes) == suite_fixes else ("_jamfix" if args.jam_fixes else "_nojamfix")) + \
         ("" if args.blocked_timeout == suite_timeout else f"_wait{args.blocked_timeout:.0f}")
     fail_dir = os.path.join("runs", "failures", f"{tag}_{args.suite}{suffix}")
     a = {"agent": args.agent, "ckpt": args.ckpt, "route_length": args.route_length, "weather": args.weather,
          "max_steps": args.max_steps, "videos": args.videos, "video_dir": args.video_dir, "tag": tag,
-         "dense": args.dense, "renderer": args.renderer, "fail_dir": fail_dir, "brake_hold": args.brake_hold,
+         "dense": args.dense, "renderer": args.renderer, "keiview_roads": args.keiview_roads, "fail_dir": fail_dir,
+         "brake_hold": args.brake_hold,
          "red_hold": args.red_hold, "town_style": args.town_style, "jam_fixes": bool(args.jam_fixes),
          "blocked_timeout": args.blocked_timeout}
     t0 = time.time()

@@ -54,9 +54,9 @@ export function pointOn(pl, s) {
  *  shared by every route that takes it; yields / wait are filled in for two-phase signals (src/traffic.js). */
 export function buildLanes(data) {
   const cfg = data.cfg;
-  const off = (cfg.left_hand_traffic === false ? -1 : 1) * (cfg.lane_width || 3.5) / 2;
   const lanes = [];
   for (const r of data.roads) {
+    const off = (cfg.left_hand_traffic === false ? -1 : 1) * (r.lane_width || cfg.lane_width || 3.5) / 2;   // road types: per road
     lanes.push({ id: lanes.length, road: r.id, from: r.a, to: r.b, pts: offsetPolyline(r.center, off) });
     lanes.push({ id: lanes.length, road: r.id, from: r.b, to: r.a, pts: offsetPolyline(r.center, -off).reverse() });
   }

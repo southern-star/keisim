@@ -68,6 +68,13 @@ class TownConfig:
     two_phase_green: tuple = (12.0, 18.0)
     two_phase_yellow: float = 3.0
     two_phase_allred: float = 2.0
+    # Road types. uniform: every road is the two-lane street above (lane_width, shoulder, sidewalk_width,
+    # speed_limit). mixed: `main_roads` interior grid lines become main roads and every other road is a street,
+    # a residential road or an alley with the probabilities `road_mix` (ROAD_KINDS; drawn from a separate random
+    # stream, so the layout is that of the uniform town with the same seed).
+    road_types: str = "uniform"
+    main_roads: int = 2
+    road_mix: tuple = (0.3, 0.45, 0.25)
     building_prob: float = 0.85
     tree_prob: float = 0.55
     tex_res: float = 0.1              # metres per texel of the ground texture
@@ -79,6 +86,22 @@ class TownConfig:
     @property
     def walk_outer(self):
         return self.road_half_width + self.sidewalk_width
+
+
+# Road kinds of road_types="mixed" besides "street" (TownConfig's own lane / shoulder / sidewalk / speed limit).
+# shoulder: from the lane's outer edge to the edge of the road surface; on roads without a sidewalk it is the
+# 路側帯 where people walk. center: centre line (dashed: white, solid near signals; yellow: solid, no overtaking;
+# none). edge: edge lines (classic: KeiSim's original, 0.35 m inside the road edge; lane: just outside the lane;
+# none). Speed limits in m/s.
+ROAD_KINDS = {
+    "main": {"lane_width": 3.5, "shoulder": 0.75, "sidewalk": 3.5, "speed_limit": 40 / 3.6, "center": "yellow",
+             "edge": "lane"},
+    "residential": {"lane_width": 3.0, "shoulder": 0.75, "sidewalk": 0.0, "speed_limit": 30 / 3.6, "center": "none",
+                    "edge": "lane"},
+    # narrow (lanes under roadnet.NARROW_LANE): no trucks, and the outer turn of a bend waits for an oncoming car
+    "alley": {"lane_width": 2.75, "shoulder": 0.25, "sidewalk": 0.0, "speed_limit": 20 / 3.6, "center": "none",
+              "edge": "none"},
+}
 
 
 @dataclass
@@ -126,7 +149,15 @@ TOWN_STYLES = {
     "classic": {},
     "varied": {"block_mode": "varied", "spacing_min": 70.0, "spacing_max": 200.0},
     "twophase": {"block_mode": "varied", "spacing_min": 70.0, "spacing_max": 200.0, "signal_mode": "two_phase"},
+    # twophase + road types: main roads (40 km/h, wide sidewalks, yellow centre line), streets, residential roads
+    # without sidewalks (30 km/h, people walk in the 路側帯) and narrow alleys (20 km/h)
+    "roadtypes": {"block_mode": "varied", "spacing_min": 70.0, "spacing_max": 200.0, "signal_mode": "two_phase",
+                  "road_types": "mixed"},
 }
+
+# TownConfig fields added after town_tag() was introduced: part of the tag only when they differ from the
+# default, so the tags (and exported town names) of the existing styles stay the same.
+_TAG_LATER = ("road_types", "main_roads", "road_mix")
 
 
 def town_config(style="classic"):
@@ -141,8 +172,14 @@ def town_tag(cfg):
     import hashlib
     from dataclasses import asdict
     d = asdict(cfg)
-    if d == asdict(TownConfig()):
+    base = asdict(TownConfig())
+    if d == base:
         return ""
+    for k in _TAG_LATER:
+        if d[k] == base[k]:
+            del d[k]
+    if cfg.road_types != "uniform":          # the road kinds are settings of these towns too
+        d["road_kinds"] = repr(sorted(ROAD_KINDS.items()))
     return hashlib.sha1(repr(sorted(d.items())).encode()).hexdigest()[:8]
 
 
@@ -170,3 +207,4 @@ class EnvConfig:
     renderer: str = "keisim"          # keisim (CPU, numpy + OpenCV) | keiview (web/, three.js on the GPU)
     keiview_quality: str = "medium"
     keiview_gl: str = "auto"          # auto (GPU, else SwiftShader on the CPU) | hw | soft
+    keiview_roads: str = "plain"      # plain (the look of every KeiView dataset so far) | detail (markings, signs, ...)

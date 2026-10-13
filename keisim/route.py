@@ -1,6 +1,8 @@
 """Ego routes: a lane sequence flattened into one arc-length parametrised path."""
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 from .config import CMD_LEFT, CMD_RIGHT, CMD_STRAIGHT
@@ -71,6 +73,21 @@ class Route:
 
     def curvature_at(self, s):
         return np.interp(s, self.poly.s, self.curv)
+
+    def speed_limit_ahead(self, s_front, look=45.0, b=1.6):
+        """Speed limit of the lane at `s_front` (front bumper), eased down at b m/s^2 toward lower limits up to
+        `look` m ahead, so that the car enters a slower road at that road's limit."""
+        lanes = self.town.lanes
+        k = self.lane_index_at(s_front)
+        v = lanes[self.lanes[k]].speed_limit
+        for j in range(k + 1, len(self.lanes)):
+            d = self.offsets[j] - s_front
+            if d > look:
+                break
+            vj = lanes[self.lanes[j]].speed_limit
+            if vj < v:
+                v = min(v, math.sqrt(vj * vj + 2.0 * b * d))
+        return v
 
 
 def random_route(town, rng, length, start_lane=None, s_start=None, turn_weights=None):
