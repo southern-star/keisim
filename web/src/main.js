@@ -67,6 +67,8 @@ const audio = { start() {}, update() {}, loop: () => ({ setVolume() {}, setParam
 const ctx = createContext({ scene, camera, renderer, audio, quality, sunDir });
 ctx.sky = sky;
 ctx.mergeActors = PILOT;                         // pilot: each car one mesh per material (src/world/actors.js)
+ctx.carDetail = PILOT ? params.get('cardetail') !== '0' : params.get('cardetail') === '1';   // detailed cars near the camera
+                                                 // (src/world/cars.js): pilot by default, ego mode only on request (tests)
 window.__ctx = ctx; window.THREE = THREE;
 // ego mode draws signal heads larger so the lamps stay visible at KeiSim's 320x160 camera resolution
 ctx.signalScale = Number(params.get('sigscale') || (EGO || PILOT ? 2.2 : 1));

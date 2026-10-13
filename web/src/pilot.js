@@ -318,8 +318,11 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     renderer.getViewport(vp);
     const pr = renderer.getPixelRatio();
     renderer.setViewport(0, 0, CAM.W / pr, CAM.H / pr);
+    const actors = ctx.services.actors;
+    if (actors && actors.view) actors.view('model');             // the model sees the plain cars it was trained on
     modelPipe.render(scene, camera, sunDir, t);
     gl.readPixels(0, 0, CAM.W, CAM.H, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+    if (actors && actors.view) actors.view('main');
     renderer.setViewport(vp);
     const n = CAM.W * CAM.H;
     for (let y = 0; y < CAM.H; y++) {                       // GL rows are bottom-up
