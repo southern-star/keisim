@@ -553,6 +553,7 @@ cd web && node tools/serve.mjs                # http://localhost:5174/?town=1000
 KeiSim の閉ループ（モデルの入力の描画、制御器、車両モデル、安全層、ルートと目標点）を JavaScript に移したもので、
 推論は onnxruntime-web です（WebGPU なら 1 回 20〜40 ms、WASM なら 0.2〜0.35 秒）。
 周りの車は KeiSim の NPC を軽くしたもの（`web/src/traffic.js`）で、歩行者はいません。
+カメラの近くの車は、軽トラや SUV など 8 車種の詳しい形で描きます（モデルの入力は学習のときと同じ簡易な形の車のままなので、再学習は要りません）。
 二段階の信号の町（town 1015, 1018）では、周りの車も KeiSim と同じ右折待ちのルールで走ります。
 
 ### KeiView の画像で KeiPilot を学習する
