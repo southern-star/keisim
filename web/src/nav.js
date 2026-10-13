@@ -32,8 +32,26 @@ export function arcBezier(p0, h0, p1, h1, n = 24) {
   return out;
 }
 
+/** Polyline with arc lengths: {pts, cum, len}. */
+export function polyline(pts) {
+  const cum = [0];
+  for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+  return { pts, cum, len: cum[cum.length - 1] };
+}
+
+/** Point at arc length s of a polyline from polyline() (clamped to its ends). */
+export function pointOn(pl, s) {
+  const { pts, cum } = pl;
+  let i = 1;
+  while (i < cum.length - 1 && cum[i] < s) i++;
+  const t = Math.max(0, Math.min(1, (s - cum[i - 1]) / ((cum[i] - cum[i - 1]) || 1e-9)));
+  return [pts[i - 1][0] + (pts[i][0] - pts[i - 1][0]) * t, pts[i - 1][1] + (pts[i][1] - pts[i - 1][1]) * t];
+}
+
 /** One lane per road and direction (left-hand traffic: left of the centre line), with the ways out of the
- *  junction at its end (no U-turns): {id, road, from, to, pts, len, h0, h1, next: [{lane, turn}]}. */
+ *  junction at its end (no U-turns): {id, road, from, to, pts, len, h0, h1, next: [{lane, turn, conn}]}.
+ *  conn is the junction connector (keisim/roadnet.py): {from, to, junction, turn, pts, cum, len, yields, wait},
+ *  shared by every route that takes it; yields / wait are filled in for two-phase signals (src/traffic.js). */
 export function buildLanes(data) {
   const cfg = data.cfg;
   const lanes = [];
@@ -52,7 +70,10 @@ export function buildLanes(data) {
   for (const L of lanes) {
     L.next = lanes.filter((o) => o.from === L.to && o.road !== L.road).map((o) => {
       const dh = wrap(o.h0 - L.h1);
-      return { lane: o, turn: dh > 0.5 ? 'left' : dh < -0.5 ? 'right' : 'straight' };
+      const turn = dh > 0.5 ? 'left' : dh < -0.5 ? 'right' : 'straight';
+      const conn = { from: L, to: o, junction: L.to, turn, yields: [], wait: null,
+        ...polyline(arcBezier(L.pts[L.pts.length - 1], L.h1, o.pts[0], o.h0)) };
+      return { lane: o, turn, conn };
     });
   }
   return lanes;
@@ -95,11 +116,10 @@ export function createNavigator(data, lanes = buildLanes(data)) {
       const c = pick(last);
       if (!c) break;
       const J = junctions.get(last.to);
-      const conn = arcBezier(last.pts[last.pts.length - 1], last.h1, c.lane.pts[0], c.lane.h0);
       const sIn = cum[cum.length - 1];
-      append(conn);
+      append(c.conn.pts);
       const sOut = cum[cum.length - 1];
-      if (J && J.signalized) decisions.push({ junction: J.id, turn: c.turn, sIn, sOut, lane: last });
+      if (J && J.signalized) decisions.push({ junction: J.id, turn: c.turn, sIn, sOut, lane: last, conn: c.conn });
       append(c.lane.pts);
       last = c.lane;
     }

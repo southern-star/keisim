@@ -4,8 +4,13 @@
 // frame is just transforms. Models face local +Z with their origin on the ground at the centre.
 // With ctx.mergeActors (pilot mode) each car is merged into one mesh per material, about a third of the draw calls;
 // ego mode keeps the separate parts, so the frames KeiSim renders through KeiView stay exactly as they were.
+// With ctx.carDetail (pilot mode) a car also gets a detailed model (src/world/cars.js), shown in the main view when
+// it is within DETAIL_DIST of the camera; view('model') shows the plain cars everywhere, for the KeiPilot frame.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { buildCar, carGlass } from './cars.js';
+
+const DETAIL_DIST = 70;           // m: detailed cars closer than this to the camera (main view)
 
 export const SEM_VEHICLE = 11, SEM_PED = 12;
 
@@ -101,6 +106,35 @@ export function build(ctx) {
     return out;
   }
 
+  // detailed cars (cars.js): parts by material key, merged into one mesh per material
+  const detailMats = {
+    glass: carGlass(M), interior: M.toon('#1d2027', { paint: 0.01 }),
+    trim: M.toon('#2a2c33', { paint: 0.02 }), tire: mTire, hub: M.toon('#a9afb8', { paint: 0.02 }), head: mHead,
+    plateW: mPlateW, plateY: mPlateY, cargo: mCargo,
+  };
+  const plain = (g) => {
+    const x = g.index ? g.toNonIndexed() : g;
+    for (const name of Object.keys(x.attributes)) if (!['position', 'normal', 'uv'].includes(name)) x.deleteAttribute(name);
+    if (!x.attributes.uv) x.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(x.attributes.position.count * 2), 2));
+    return x;
+  };
+  function makeDetail(kind, L, W, H, rgb) {
+    const { parts, tails } = buildCar(kind, L, W, H, rgb);
+    const byKey = new Map();
+    for (const [geo, key] of parts) { if (!byKey.has(key)) byKey.set(key, []); byKey.get(key).push(plain(geo)); }
+    const g = new THREE.Group(), out = { g, tails: [] };
+    for (const [key, geos] of byKey) {
+      const mesh = new THREE.Mesh(mergeGeometries(geos, false), key === 'body' ? colorMat(rgb, 0.03) : detailMats[key]);
+      mesh.castShadow = key !== 'glass'; mesh.receiveShadow = true;
+      g.add(mesh);
+    }
+    if (tails.length) {
+      const mesh = new THREE.Mesh(mergeGeometries(tails.map(plain), false), mTail);
+      mesh.castShadow = true; g.add(mesh); out.tails.push(mesh);
+    }
+    return out;
+  }
+
   // ------------------------------------------------------------------ pedestrians
   function makePed(h, shirt, pants, skin, seed) {
     const g = new THREE.Group();
@@ -146,6 +180,11 @@ export function build(ctx) {
         if (s) drop(s, carRoot);
         const car = makeCar(kind, L, W, H, [r, gg, b]);
         s = { ...(ctx.mergeActors ? mergeCar(car) : car), sig, brake: -1 };
+        if (ctx.carDetail) {                       // plain and detailed models side by side in one group
+          const plainG = s.g, det = makeDetail(kind, L, W, H, [r, gg, b]);
+          s.g = new THREE.Group(); s.g.add(plainG, det.g);
+          s.plain = plainG; s.detail = det.g; s.tails = s.tails.concat(det.tails);
+        }
         cars.set(id, s);
         carRoot.add(s.g);
       }
@@ -156,6 +195,7 @@ export function build(ctx) {
       const bk = brake ? 1 : 0;
       if (bk !== s.brake) { s.brake = bk; for (const m of s.tails) m.material = bk ? mTailOn : mTail; }
     }
+    if (ctx.carDetail) view(viewMode);
     for (const p of ped) {
       const [id, x, y, yaw, h] = p;
       const sig = `${h.toFixed(2)}|${p.slice(5, 14).map(q8).join(',')}`;
@@ -176,6 +216,21 @@ export function build(ctx) {
     }
   }
 
+  /** Which car models are shown: 'main' (detailed within DETAIL_DIST of the camera, plain beyond) or 'model' (plain
+   *  everywhere: the KeiPilot frame, as in training). */
+  let viewMode = 'main';
+  const camPos = new THREE.Vector3();
+  function view(mode) {
+    viewMode = mode;
+    if (!ctx.carDetail) return;
+    if (ctx.camera) ctx.camera.getWorldPosition(camPos);
+    for (const s of cars.values()) {
+      if (!s.detail) continue;
+      const near = mode === 'main' && s.g.position.distanceTo(camPos) < DETAIL_DIST;
+      s.detail.visible = near; s.plain.visible = !near;
+    }
+  }
+
   /** Forget every actor (new episode). */
   function reset() {
     for (const s of cars.values()) drop(s, carRoot);
@@ -184,5 +239,5 @@ export function build(ctx) {
   }
 
   ctx.add(root);
-  ctx.services.actors = { update, reset, cars, peds };
+  ctx.services.actors = { update, reset, view, cars, peds };
 }

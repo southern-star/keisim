@@ -32,7 +32,8 @@ if (PILOT) {                                      // the intro board describes t
     <ul><li>推論は onnxruntime-web（WebGPU、なければ WASM）。運転モデル（30 MB）を読み込みます。</li>
     <li>← ↑ → 次の交差点で曲がる方向　Space 一時停止　R 最初から　T 周りの車（画面のボタンでも操作できます）</li>
     <li>ピンクはモデルが描いた走行経路、水色はナビのルート。右下はモデルへの入力画像と、モデルの領域分割です。</li>
-    <li>周りの車は「周りの車」ボタン、T キー、<code>?traffic=0</code> で消せます（描画が重いとき。選んだ設定はこのブラウザに残ります）。</li></ul>`);
+    <li>周りの車は「周りの車」ボタン、T キー、<code>?traffic=0</code> で消せます（描画が重いとき。選んだ設定はこのブラウザに残ります）。</li>
+    <li>町は右上のメニューで選べます。town 1015 と 1018 は日本でふつうの二段階の信号で、右折は交差点の中で対向車の切れ目を待ちます。</li></ul>`);
   set('#loadlabel', '読み込み中…');
 }
 const TDIR = (params.get('tdir') || 'towns').replace(/[^\w.-]/g, '');
@@ -68,6 +69,8 @@ const audio = { start() {}, update() {}, loop: () => ({ setVolume() {}, setParam
 const ctx = createContext({ scene, camera, renderer, audio, quality, sunDir });
 ctx.sky = sky;
 ctx.mergeActors = PILOT;                         // pilot: each car one mesh per material (src/world/actors.js)
+ctx.carDetail = PILOT ? params.get('cardetail') !== '0' : params.get('cardetail') === '1';   // detailed cars near the camera
+                                                 // (src/world/cars.js): pilot by default, ego mode only on request (tests)
 window.__ctx = ctx; window.THREE = THREE;
 // ego mode draws signal heads larger so the lamps stay visible at KeiSim's 320x160 camera resolution
 ctx.signalScale = Number(params.get('sigscale') || (EGO || PILOT ? 2.2 : 1));
@@ -112,7 +115,13 @@ async function build() {
   town = await loadTown(`./${TDIR}/town_${SEED}.json`);
   ctx.town = town; window.__town = town;
   L.configureWorld({ play: town.play, heightAt: town.heightAt, farTown: town.farTown, farSkip: town.farSkip });
-  const name = $('townname'); if (name) name.textContent = SEED;
+  const name = $('townname'); if (name) name.textContent = SEED.split('-')[0];      // '1015-98782ab7': settings hash
+  if (PILOT && town.data && town.data.cfg && town.data.cfg.signal_mode === 'two_phase') {
+    const kana = document.querySelector('#intro .kana'); if (kana) kana.textContent = 'KeiPilot · 二段階の信号の町';
+    const sum = $('townsum');
+    if (sum) sum.insertAdjacentHTML('afterbegin', '<p class="tp">この町の信号は二段階です（向かい合う方向が同時に青）。' +
+      '右折は交差点の中の待ち位置まで進み、対向車が途切れてから曲がります。周りの車も同じ規則で走ります。</p>');
+  }
   const sum = $('townsum'); if (sum && !PILOT) sum.textContent = `${town.junctions.length} junctions · ${town.buildings.length} lots · ${town.trees.length} trees`;
   await loadFonts();
   const base = ROADS === 'detail' ? MODULES.concat(['roaddeco']) : MODULES;
@@ -318,8 +327,9 @@ function wireMenus() {
     rsel.addEventListener('change', () => { const u = new URL(location.href); u.searchParams.set('roads', rsel.value); location.href = u.toString(); });
   }
   const tsel = $('townsel');
-  // pilot: only the classic towns (the in-browser traffic has split signals; town styles: keisim/config.py)
-  if (tsel && PILOT) for (const o of [...tsel.options]) if (o.value.includes('-')) o.remove();
+  // pilot: not the walk-only towns (data-nopilot: the road-types town, whose narrow-road and give-way rules the
+  // in-browser traffic does not have; town styles: keisim/config.py). The two-phase towns 1015 / 1018 stay.
+  if (tsel && PILOT) for (const o of [...tsel.options]) if ('nopilot' in o.dataset) o.remove();
   if (tsel) { tsel.value = SEED; tsel.addEventListener('change', () => { const u = new URL(location.href); u.searchParams.set('town', tsel.value); location.href = u.toString(); }); }
 }
 main();
