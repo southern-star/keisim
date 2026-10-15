@@ -5,7 +5,8 @@
 // (one approach at a time, so turns never cross a green stream). Two-phase towns (opposite approaches green
 // together, Japan's usual signal) add keisim's right-turn rule: a turn that crosses or merges with a movement of
 // higher rank (right < left < straight) waits at its connector's wait point while a car with priority, the ego
-// included, would reach the crossing within YIELD_GAP s. Cars stuck for long where the ego camera cannot see them
+// included, would reach the crossing within YIELD_GAP s; of two equal movements that cross (the right turns at a
+// skewed junction), one gives way (equalGivesWay). Cars stuck for long where the ego camera cannot see them
 // are moved elsewhere. All coordinates are KeiSim's (x east, y north, yaw counter-clockwise).
 import { heading, pointOn, wrap } from './nav.js';
 
@@ -16,6 +17,7 @@ const LOOK = 45.0;                                          // m of path searche
 const YIELD_GAP = 5.0;                                      // keisim/traffic.py YIELD_GAP
 const YIELD_CLEAR = 2.4;                                    // keisim/roadnet.py YIELD_CLEAR
 const RANK = { right: 0, left: 1, straight: 2 };            // the lower-ranked movement yields
+const KIND_RANK = { alley: 0, residential: 1, street: 2, main: 3 };   // road types: the minor road gives way
 const EGO = { L: 4.5, W: 1.85 };
 // keisim/traffic.py CAR_COLORS (BGR there) as RGB
 const COLORS = [[235, 235, 235], [238, 240, 240], [195, 190, 190], [32, 30, 30], [125, 120, 120], [25, 60, 140],
@@ -183,7 +185,8 @@ export function createTraffic(data, lanes, { count = 24, seed = 1 } = {}) {
   /** keisim Town._make_yields: inside every signalised junction, a connector yields to the connectors of the other
    *  approaches green at the same time whose movement ranks higher and whose centre line comes within 2.2 m of its
    *  own (a crossing or a merge): yields [{b, here, there}] (closest points), and wait: the furthest front-bumper
-   *  position whose front circle (0.9 m behind the bumper) stays YIELD_CLEAR from all of those paths. */
+   *  position whose front circle (0.9 m behind the bumper) stays YIELD_CLEAR from all of those paths. Of two equal
+   *  movements that cross (the right turns at a skewed junction), one gives way (equalGivesWay). */
   function makeYields() {
     const byJunction = new Map();
     for (const L of lanes) {
@@ -192,12 +195,15 @@ export function createTraffic(data, lanes, { count = 24, seed = 1 } = {}) {
       if (!byJunction.has(J.id)) byJunction.set(J.id, []);
       for (const o of L.next) byJunction.get(J.id).push(o.conn);
     }
-    for (const conns of byJunction.values()) {
+    for (const [jid, conns] of byJunction) {
+      const equals = [];
       for (const a of conns) {
         const ga = phaseOf.get(a.from.id);
         for (const b of conns) {
           const gb = phaseOf.get(b.from.id);
-          if (b.from === a.from || ga === undefined || ga !== gb || RANK[a.turn] >= RANK[b.turn]) continue;
+          if (b.from === a.from || ga === undefined || ga !== gb) continue;
+          const equal = RANK[a.turn] === RANK[b.turn];      // equal pairs once each, in keisim's order
+          if (RANK[a.turn] > RANK[b.turn] || (equal && (a.from.id > b.from.id || (a.from.id === b.from.id && a.to.id > b.to.id)))) continue;
           let best = Infinity, here = 0, there = 0;
           for (let i = 0; i < a.pts.length; i++) {
             for (let j = 0; j < b.pts.length; j++) {
@@ -205,8 +211,16 @@ export function createTraffic(data, lanes, { count = 24, seed = 1 } = {}) {
               if (d < best) { best = d; here = a.cum[i]; there = b.cum[j]; }
             }
           }
-          if (best < 2.2) a.yields.push({ b, here, there });
+          if (best >= 2.2) continue;
+          if (equal) equals.push({ a, b, here, there });
+          else a.yields.push({ b, here, there });
         }
+      }
+      // approaches each connector gives way to by rank (taken before the equal pairs: order-independent)
+      const ranked = new Map(conns.map((c) => [c, new Set(c.yields.map((y) => y.b.from.id))]));
+      for (const { a, b, here, there } of equals) {
+        if (equalGivesWay(junctions.get(jid), a, b, ranked)) a.yields.push({ b, here, there });
+        else b.yields.push({ b: a, here: there, there: here });
       }
       for (const a of conns) {
         if (!a.yields.length) continue;
@@ -221,6 +235,22 @@ export function createTraffic(data, lanes, { count = 24, seed = 1 } = {}) {
         }
       }
     }
+  }
+
+  /** keisim Town._equal_gives_way: does connector a give way to b? If one of them already gives way to the other's
+   *  approach, that one (the cars queue in one lane: the other order deadlocks); else the one from the minor road
+   *  (road types); else the one with the other approach on its left (左方優先); else the lower approach lane. */
+  function equalGivesWay(J, a, b, ranked) {
+    const ra = ranked.get(a), rb = ranked.get(b);
+    if (rb.has(a.from.id) !== ra.has(b.from.id)) return ra.has(b.from.id);
+    const kindOf = (L) => KIND_RANK[(data.roads[L.road] && data.roads[L.road].kind) || 'street'];
+    const ka = kindOf(a.from), kb = kindOf(b.from);
+    if (ka !== kb) return ka < kb;
+    const h = a.from.h1, vx = b.pts[0][0] - J.pos[0], vy = b.pts[0][1] - J.pos[1];
+    let side = (Math.cos(h) * vy - Math.sin(h) * vx) / Math.max(Math.hypot(vx, vy), 1e-9);
+    if (data.cfg.left_hand_traffic === false) side = -side;
+    if (Math.abs(side) > 0.2) return side > 0;
+    return a.from.id < b.from.id;
   }
 
   function sampleDims() {
