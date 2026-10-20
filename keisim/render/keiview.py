@@ -62,6 +62,8 @@ class KeiViewRenderer:
         self._new_episode = True
         self._light = None
         self.last_ms = 0.0
+        self.town_ms = 0.0
+        log_path = log_path or os.environ.get("KEIVIEW_LOG")      # ego_server's stderr (timings per town / frame)
         self._log = open(log_path, "ab") if log_path else subprocess.DEVNULL
         cmd = [node, "tools/ego_server.mjs", "--w", str(self.W), "--h", str(self.H), "--q", quality, "--gl", gl,
                "--tdir", TOWN_DIR]
@@ -99,14 +101,32 @@ class KeiViewRenderer:
 
     # ------------------------------------------------------------------ API
     def load_town(self, seed, town_cfg=None):
-        key = town_key(seed, town_cfg)
+        """seed: a procedural town's seed (exported on demand), or a Town object (keisim/realworld.py): its name is the
+        key, and web/.towns/town_<name>.json is written if it is not there yet (scripts/import_osm.py writes it too)."""
+        from ..roadnet import Town
+        if isinstance(seed, Town):
+            key = seed.name
+            path = os.path.join(WEB_DIR, TOWN_DIR, f"town_{key}.json")
+            if not os.path.exists(path):
+                spec = importlib.util.spec_from_file_location("keiview_export_town",
+                                                              os.path.join(ROOT, "scripts", "export_town.py"))
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                tmp = f"{path}.{os.getpid()}.tmp"
+                with open(tmp, "w") as f:
+                    json.dump(mod.export_town(seed), f, separators=(",", ":"))
+                os.replace(tmp, path)
+        else:
+            key = town_key(seed, town_cfg)
         if self.town == key:
             return {"cached": True}
-        export_town(int(seed), town_cfg)
+        if not isinstance(seed, Town):
+            export_town(int(seed), town_cfg)
         r = self._call({"op": "town", "town": key})
         if r.get("errors"):
             raise RuntimeError(f"KeiView town {key}: {r['errors']}")
         self.town = key
+        self.town_ms = float(r.get("ms", 0.0))
         self._new_episode = True
         return r
 

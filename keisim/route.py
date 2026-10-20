@@ -33,7 +33,8 @@ class Route:
             if lane.kind == "conn":
                 J = town.junctions[lane.junction]
                 self.junctions.append({"s_in": offs[k], "s_out": offs[k] + lane.length, "junction": J.id,
-                                       "turn": lane.turn, "signalized": J.signalized, "lane": lid})
+                                       "turn": lane.turn, "signalized": J.signalized, "lane": lid,
+                                       "decision": len(J.arms) >= 3})
             if lane.stop_s is not None:
                 self.stops.append((offs[k] + lane.stop_s, lid))
         # curvature along the flattened path
@@ -53,9 +54,9 @@ class Route:
         return self.lanes[self.lane_index_at(s)]
 
     def next_decision(self, s):
-        """Next junction with a real choice (>=3 arms) that has not been exited."""
+        """Next junction with a real choice (>=3 arms, signalised or not) that has not been exited."""
         for j in self.junctions:
-            if j["signalized"] and j["s_out"] > s + 0.5:
+            if j["decision"] and j["s_out"] > s + 0.5:
                 return j
         return None
 
