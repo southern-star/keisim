@@ -81,6 +81,9 @@ def fetch_osm(bbox, cache=None, servers=OVERPASS_SERVERS):
     return osm
 
 
+ACUTE_DEG = 35.0          # arms of a junction closer than this: one is dropped (Graph.drop_acute_arms)
+
+
 class Projection:
     """Local tangent plane at (lat0, lon0): x east, y north in metres (WGS84 radii of curvature; the error over a
     few km is centimetres)."""
@@ -185,20 +188,58 @@ class Graph:
         if len(arms) < 2:
             return 3.0
         angs = np.array([a for a, _ in arms])
+        # arms closer than drop_acute_arms' angle (a contraction can make them, even two edges along the same line, between
+        # its passes) count as one road: one of them goes at the next drop_acute_arms / drop_duplicates, and sizing the
+        # circle for them (wo / tan(gap / 2)) would make every nearby edge "short" and contract the whole town
+        keep = [angs[0]]
+        for a in angs[1:]:
+            if a - keep[-1] >= math.radians(ACUTE_DEG):
+                keep.append(a)
+        if len(keep) > 1 and keep[0] + 2 * math.pi - keep[-1] < math.radians(ACUTE_DEG):
+            keep.pop()
+        angs = np.array(keep)
+        if len(angs) < 2:
+            return 3.0
         gaps = np.diff(np.concatenate([angs, [angs[0] + 2 * math.pi]]))
         gmin = float(gaps.min())
         specs = [RoadSpec.of_kind(self.edges[e]["kind"], self.cfg) for _, e in arms]
         wo = max(rs.walk_outer for rs in specs)
-        if len(arms) >= 3:
+        if len(angs) >= 3:
             return max(Town.graph_min_radius(specs, gmin), wo / math.tan(gmin / 2.0) + 1.5)
         wo = max(wo, self.cfg.walk_outer)
         return max(3.0, wo / math.tan(min(gmin, 2 * math.pi - gmin) / 2.0) + 1.0)
 
     # -- clean-up passes -------------------------------------------------------------------------------------------
-    def drop_acute_arms(self, min_deg=35.0):
+    def drop_duplicates(self, tol=2.0):
+        """Two edges between the same two nodes along the same line (OSM sometimes maps one street as two ways) leave
+        a junction with two arms at the same angle, which no junction circle fits: the later one is dropped. tol (m):
+        the largest gap between the two lines, sampled every 5 m."""
+        seen = {}
+        for eid in sorted(self.edges):
+            e = self.edges[eid]
+            key = frozenset(e["n"])                 # node ids mix OSM ints and split-point strings: no sorting
+            if len(key) < 2:
+                continue
+            for other in seen.get(key, []):
+                a, b = self.oriented(eid, e["n"][0]), self.oriented(other, e["n"][0])
+                if abs(self.length(eid) - self.length(other)) > tol:
+                    continue
+                sa = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(a, axis=0).T))])
+                sb = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(b, axis=0).T))])
+                t = np.linspace(0.0, 1.0, max(2, int(sa[-1] / 5.0) + 1))
+                pa = np.stack([np.interp(t * sa[-1], sa, a[:, k]) for k in (0, 1)], 1)
+                pb = np.stack([np.interp(t * sb[-1], sb, b[:, k]) for k in (0, 1)], 1)
+                if np.hypot(*(pa - pb).T).max() <= tol:
+                    self.remove_edge(eid, "duplicate way")
+                    break
+            else:
+                seen.setdefault(key, []).append(eid)
+
+    def drop_acute_arms(self, min_deg=None):
         """Two arms of a junction closer than min_deg (a road crossing another at a shallow angle) would need a
         huge junction circle: the lower-ranked (then shorter) of the two edges is dropped (its road then ends at
         its other junctions, or is pruned)."""
+        min_deg = ACUTE_DEG if min_deg is None else min_deg
         rank = {"alley": 0, "residential": 1, "street": 2, "main": 3}
         changed = True
         while changed:
@@ -384,10 +425,12 @@ def road_graph(osm, bbox, drop_kinds=("primary",), bend_deg=BEND_DEG, signal_rad
         before = len(G.edges)
         G.prune_dead_ends()
         G.merge_straight(bend_deg)
+        G.drop_duplicates()
         G.drop_acute_arms()
         G.contract_short()
         if len(G.edges) == before:
             break
+    G.drop_duplicates()
     G.prune_dead_ends()
     G.largest_component()
     # signals: 3+-arm junctions with a traffic_signals node nearby

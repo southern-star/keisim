@@ -129,3 +129,24 @@ def test_procedural_export_unchanged():
     with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web", "towns", "town_1000.json")) as f:
         ref = json.load(f)
     assert export(1000) == ref
+
+
+def test_graph_duplicate_and_coincident_arms():
+    """Two edges between the same nodes along the same line (OSM maps some streets twice; contractions can make such
+    pairs too) are one road: drop_duplicates keeps one, and est_radius sizes a junction as if arms closer than
+    drop_acute_arms' angle were one (before, a zero gap divided by tan(0), a 1 deg gap made a 300 m circle and the
+    contraction swallowed the town: the boxes north and south of osm_sapporo)."""
+    from keisim.realworld import Graph
+    G = Graph()
+    G.nodes.update({1: (0.0, 0.0), 2: (60.0, 0.0), 3: (0.0, 60.0), 4: (-60.0, 0.0), 5: (60.0, 1.0)})
+    G.add_edge(1, 2, [(0.0, 0.0), (60.0, 0.0)], "residential", 10)
+    G.add_edge(2, 1, [(60.0, 0.0), (30.0, 0.0), (0.0, 0.0)], "residential", 11)     # the same line, other way, other id
+    G.add_edge(1, 3, [(0.0, 0.0), (0.0, 60.0)], "residential", 12)
+    G.add_edge(1, 4, [(0.0, 0.0), (-60.0, 0.0)], "residential", 13)
+    r = G.est_radius(1)
+    assert math.isfinite(r) and r < 12.0, r
+    G.drop_duplicates()
+    assert sorted(e["way"] for e in G.edges.values()) == [10, 12, 13] and G.dropped["duplicate way"] == 1
+    G.add_edge(1, 5, [(0.0, 0.0), (60.0, 1.0)], "residential", 14)                   # 1 deg from the edge to node 2
+    r = G.est_radius(1)
+    assert math.isfinite(r) and r < 12.0, r
