@@ -28,7 +28,8 @@ from keipilot.data import ShardWriter, write_meta  # noqa: E402
 from keisim.config import TOWN_STYLES, town_config  # noqa: E402
 from keisim.expert import LABEL_VERSION  # noqa: E402
 
-REASONS = {"cruise": 0, "curve": 1, "vehicle": 2, "pedestrian": 3, "red_light": 4, "junction_blocked": 5, "yield": 6}
+REASONS = {"cruise": 0, "curve": 1, "vehicle": 2, "pedestrian": 3, "red_light": 4, "junction_blocked": 5, "yield": 6,
+           "crossing": 7}
 WEATHERS = {"noon": 0, "cloudy": 1, "sunset": 2, "fog": 3}
 
 

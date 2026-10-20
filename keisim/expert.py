@@ -23,6 +23,8 @@ YIELD_TTA_MAX = 8.0                      # yield_tta labels are clipped here (8 
 LATE_COMMIT = 1.0                        # m: past its wait point, a right turn still stops for oncoming traffic until
                                          # its front bumper is this close to the first crossing (centre lines)
 LATE_MARGIN = 1.0                        # s: ... if a moving car with priority arrives sooner than it clears + this
+CROSSING_V = 10.0 / 3.6                  # m/s: 徐行 at the wait point of an unsignalised crossing the ego gives way at
+CROSSING_B = 1.6                         # m/s^2: ... slowing down towards it (the curve envelope's deceleration)
 
 
 def clear_time(d_cross, v, length):
@@ -179,6 +181,11 @@ class Expert:
         # stops short of the oncoming lane when a moving car with priority would arrive before the ego has cleared
         # the crossing (plus LATE_MARGIN): earlier labels said "go on" there, which taught models to keep rolling
         # into the oncoming lane after an overshoot. This late check uses the ego speed (rare, on-policy frames).
+        # Unsignalised crossings with 3+ arms (Town.from_graph: priority crossings) where the ego gives way: 徐行
+        # (CROSSING_V) at the wait point, whether a car is coming or not (道路交通法 36 / 42 条: the minor road's
+        # approach to a crossing with poor visibility). The cars with priority come from the sides, mostly outside
+        # the camera's 100 deg until the last metres: at the old 30 km/h a yield began 9 m before the wait point
+        # (median), with the car in view at that moment only half of the time, and models braked too late.
         yield_tta = math.nan          # label for the model's auxiliary head: earliest arrival of a car with priority
         if tr.has_yields:
             s_front = s + hl
@@ -192,6 +199,10 @@ class Expert:
                     d_wait = jn["s_in"] + conn.wait_s - s_front
                     d_cross = jn["s_in"] + conn.yields[0][1] - s_front
                     if d_wait >= -0.5:
+                        if not jn["signalized"] and len(w.town.junctions[jn["junction"]].arms) >= 3:
+                            v_x = math.sqrt(CROSSING_V ** 2 + 2 * CROSSING_B * max(d_wait, 0.0))
+                            if v_x < target:
+                                target, reason = v_x, "crossing"
                         tta = tr.min_arrival(conn, w.t, tr.yield_tables())
                         yield_tta = min(tta, YIELD_TTA_MAX)
                         if tta < YIELD_GAP:

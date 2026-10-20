@@ -32,6 +32,8 @@ def sample_weights(d, dagger_weight=1.0, kv_weight=1.0):
     reason = d["reason"]
     w[reason == 3] *= 3.0                       # pedestrian
     w[reason == 4] *= 1.5                       # red light
+    w[reason == 6] *= 3.0                       # yield (right turns, priority crossings): ~0.4 % of the frames
+    w[reason == 7] *= 2.0                       # 徐行 towards a crossing the ego gives way at (real towns)
     w[d["tl"] == 1] *= 2.0                      # yellow
     start = (d["v"] < 1.0) & (d["speed"] > 1.0)
     w[start] *= 3.0                             # moving off (anti-inertia)
