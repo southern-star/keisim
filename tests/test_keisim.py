@@ -597,3 +597,22 @@ def test_road_types_narrow_bends_and_expert():
             kinds.add(env.world.town.roads[lane.road].kind)
     assert info["status"] == "success", info
     assert over == 0 and {"residential", "alley"} <= kinds
+
+
+def test_lead_edge_focus_geometry():
+    """--focus_lead_edge (scripts/collect.py): a car ahead in the lane is in view; one close at the front left, or
+    beside / behind the camera, is partly outside its 100 deg; a quarter circle of radius 10 m turns about 92 deg over
+    the path's next 15 m, a straight path 0 (also when the last waypoints repeat at the end of a route)."""
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
+    from collect import corners_outside_fov, route_turn_deg
+    cam = EnvConfig().camera
+    ego = (0.0, 0.0, 0.0)
+    assert not corners_outside_fov(cam, ego, (10.0, 0.0), 0.0, 2.2, 0.85)
+    assert not corners_outside_fov(cam, ego, (30.0, -3.5), 0.0, 2.2, 0.85)
+    assert corners_outside_fov(cam, ego, (6.0, 5.0), 0.0, 2.2, 0.85)        # front corner in view, rear one out
+    assert corners_outside_fov(cam, ego, (-2.0, 3.5), 0.0, 2.2, 0.85)
+    s = np.arange(1, 11) * 2.0
+    arc = np.stack([10 * np.sin(s / 10), 10 * (1 - np.cos(s / 10))], 1)
+    assert abs(route_turn_deg(arc) - np.degrees(1.6)) < 0.5
+    line = np.stack([np.minimum(s, 12.0), np.zeros_like(s)], 1)
+    assert route_turn_deg(line) == 0.0

@@ -38,6 +38,10 @@ SUITES = {
     "long3": [(t, 9200 + e) for t in range(1010, 1020) for e in range(2)],
     # long3's towns with other episodes (new routes and traffic): twice the routes, as rare failures are noisy
     "long3b": [(t, 9300 + e) for t in range(1010, 1020) for e in range(2)],
+    # confirmation sets: long3's towns with episodes no model was picked on (KeiPilot v0.7 was chosen as the best of
+    # several runs on long3 + long3b, so its scores there are optimistic)
+    "long3c": [(t, 9400 + e) for t in range(1010, 1020) for e in range(2)],
+    "long3d": [(t, 9500 + e) for t in range(1010, 1020) for e in range(2)],
 }
 CAP_SCALE = {"classic": 1, "varied": 2, "twophase": 2, "roadtypes": 2}      # NPC count caps per town style
 # per-suite defaults for arguments left unset on the command line
@@ -52,6 +56,7 @@ SUITE_DEFAULTS = {
     "long3": {"route_length": 2500.0, "max_steps": 20000, "town_style": "twophase", "jam_fixes": True,
               "blocked_timeout": 180.0},
 }
+SUITE_DEFAULTS["long3c"] = SUITE_DEFAULTS["long3d"] = SUITE_DEFAULTS["long3"]
 
 
 _ENV = None
