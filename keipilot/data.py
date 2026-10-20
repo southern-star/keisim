@@ -28,11 +28,12 @@ CF_DEFAULTS = {"target_nolight": np.float32(np.nan), "lt_over": False, "lt_d": n
 class ShardWriter:
     """Accumulates frames and writes compressed shards."""
 
-    def __init__(self, out_dir, prefix, frames_per_shard=2000, jpeg_quality=92):
+    def __init__(self, out_dir, prefix, frames_per_shard=2000, jpeg_quality=92, start=0):
+        """start: index of the first shard written (a resumed collection continues after the shards it has)."""
         os.makedirs(out_dir, exist_ok=True)
         self.out_dir, self.prefix = out_dir, prefix
         self.fps, self.q = frames_per_shard, jpeg_quality
-        self.k = 0
+        self.k = start
         self.total = 0
         self._reset()
 

@@ -9,15 +9,16 @@
 > imitating a privileged expert, plus DAgger. The expert's plan depends on the ego speed only at traffic lights, so
 > recorded frames are relabelled for counterfactual speeds; this is what makes the model actually use its speed input.
 > The same towns can also be rendered by KeiView, an anime cel-shaded three.js renderer in `web/`.
-> KeiPilot v0.7 scores Driving Score 1.000 on every 600 m suite in KeiSim (80 routes, no infraction) and
-> 0.980 / 1.000 / 0.995 in KeiView (unseen towns A / B / dense traffic). It drives Japan's two-phase signals,
-> where right turns wait inside the junction for a gap in the oncoming traffic: on 160 such routes (380 km) its
-> collisions fell from 14 (v0.6) to 1. The failure logs showed why v0.6 crashed: it overshot the unmarked waiting
-> point, and the expert had no label for "you overshot, stop anyway". Two focused DAgger rounds (junction decisions,
-> then pedestrians) each fixed one thing and broke the other when fine-tuned in sequence; one training run on all
-> the data kept both. It drives in the browser too, with no install and with surrounding traffic:
-> <https://southern-star.github.io/keisim/?pilot=1> (onnxruntime-web on WebGPU, or WASM).
-> Quick start: `bash setup.sh`, download `keipilot.pt` from Release v0.7.0, then
+> KeiPilot v0.8 scores Driving Score 1.000 on every 600 m suite in KeiSim (80 routes, no infraction) and
+> 1.000 / 1.000 / 0.996 in KeiView (unseen towns A / B / dense traffic). It drives Japan's two-phase signals,
+> where right turns wait inside the junction for a gap in the oncoming traffic. v0.8 no longer creeps up on a stopped
+> car on a sharp curve, where that car is partly out of the image (closest gap while moving: 2.8 m -> 3.8 m, the
+> expert's value); the DAgger frames for this were picked by projecting the car ahead into the camera. Checking it
+> exposed a winner's curse: v0.7 had been picked as the best of several training runs on the same 160 two-phase
+> routes that report its 0-1 collisions. On 160 fresh routes v0.7 has 8 collisions and v0.8 has 7, and three more
+> epochs on v0.7's own data alone lose the picked score. It drives in the browser too, with no install and with
+> surrounding traffic: <https://southern-star.github.io/keisim/?pilot=1> (onnxruntime-web on WebGPU, or WASM).
+> Quick start: `bash setup.sh`, download `keipilot.pt` from Release v0.8.0, then
 > `uv run scripts/demo.py --agent model --ckpt runs/keipilot.pt --show`.
 
 ![gallery](docs/gallery.jpg)
@@ -65,6 +66,7 @@ DS = Route Completion × 違反ペナルティ（車両 ×0.60、歩行者 ×0.5
 | **KeiPilot v0.5** (+ 安全層 BrakeHold / RedHold) | **1.000** | **1.000** | **1.000** | **1.000** |
 | **KeiPilot v0.6** (+ 右折待ち、安全層つき) | **1.000** | **1.000** | **1.000** | **1.000** |
 | **KeiPilot v0.7** (+ 右折の失敗を狙った学習、安全層つき) | **1.000** | **1.000** | **1.000** | **1.000** |
+| **KeiPilot v0.8** (+ 画面の端の前の車への追従、安全層つき) | **1.000** | **1.000** | **1.000** | **1.000** |
 
 * **KeiPilot v0.2**: 未見の街 80 ルート (48.7 km) で、**完走率 100%、違反 0 件**。
   - 内訳は、上の KeiSim の 40 ルートと、KeiView (6 章) の 40 ルートです。
@@ -78,6 +80,9 @@ DS = Route Completion × 違反ペナルティ（車両 ×0.60、歩行者 ×0.5
   - KeiView で描いた同じスイートでは、未見の街 A と B が 1.000 (v0.5 の B の 1 本も完走)、高密度交通が 0.995 (NPC の詰まり 1 本) です。
 * **KeiPilot v0.7**: KeiSim の 4 スイート 80 ルートはすべて完走し、違反は 0 件です。
   - KeiView では、未見の街 A が 0.980、B が 1.000、高密度交通が 0.995 (NPC の詰まり 1 本) です。A の 1 本は、信号待ちのあと青になっても発進せず、90 秒動けませんでした。
+* **KeiPilot v0.8**: KeiSim の 4 スイート 80 ルートはすべて完走し、違反は 0 件です。
+  - KeiView では、未見の街 A と B が 1.000、高密度交通が 0.996 (v0.7 と同じ NPC の詰まり 1 本) です。
+  - 高密度交通は、600 m を走りきるのに 400 秒を超えるルートがあるので、v0.7 と同じく `--max_steps 6000` で評価しています。
 * KeiPilot v0.1 (DAgger) は、未見の街 40 ルートで完走率 100%、衝突 0 件でした。
   - 減点は信号無視 5 件 (0.21/km) です。
   - 高密度交通では 20 本中 19 本を完走しました (歩行者との接触 1 件)。
@@ -111,12 +116,12 @@ DS = Route Completion × 違反ペナルティ（車両 ×0.60、歩行者 ×0.5
 評価では、違反や打ち切りがあったルートについて、前後の判断を `runs/failures/` に自動で保存します。
 「動けず」は、エキスパートが 3 秒以上続けて「進め」だったのに止まっていればモデルの誤り、そうでなければ交通の詰まり、と自動で分類します。
 
-| モデルの誤りによる失敗<br>(長距離 + 長距離 × 高密度、KeiSim + KeiView の計 80 ルート、約 190 km、信号約 1,350 回) | v0.2 | v0.3 | **v0.5** | **v0.6** | v0.7 |
-|---|---|---|---|---|---|
-| 信号無視 | 3 | 1 | **0** | 1 | 1 |
-| 青信号を赤と見間違えて発進しない | 2 | 3 | **0** | **0** | **0** |
-| 歩行者との接触 | 2 | 4 | 2 | **0** | 1 |
-| 渋滞中の低速での追突 | 1 | 0 | 1 | **0** | 1 |
+| モデルの誤りによる失敗<br>(長距離 + 長距離 × 高密度、KeiSim + KeiView の計 80 ルート、約 190 km、信号約 1,350 回) | v0.2 | v0.3 | **v0.5** | **v0.6** | v0.7 | v0.8 |
+|---|---|---|---|---|---|---|
+| 信号無視 | 3 | 1 | **0** | 1 | 1 | **0** |
+| 青信号を赤と見間違えて発進しない | 2 | 3 | **0** | **0** | **0** | **0** |
+| 歩行者との接触 | 2 | 4 | 2 | **0** | 1 | 2 |
+| 渋滞中の低速での追突 | 1 | 0 | 1 | **0** | 1 | **0** |
 
 * v0.3 = v0.2 + 黄信号のラベルを「急ブレーキ (6 m/s²) で止まれるなら止まる」に変えて追加学習 (label version 4)。
   - 一度止まると決めたら、途中で「進む」に切り替わらなくなりました。
@@ -129,6 +134,7 @@ DS = Route Completion × 違反ペナルティ（車両 ×0.60、歩行者 ×0.5
 * v0.7 = v0.6 + 右折の失敗を狙った学習 (下の開発ログ 7.)。この 80 ルートでのモデルの誤りは 3 件で、v0.6 より 2 件多くなりました。
   - 黄に変わったとき前の車について 3 m/s で動いていて停止線を越えた信号無視 (KeiView)、歩行者との接触、渋滞中の低速での追突が 1 件ずつです。
   - どれも 1 件ずつのまれな失敗で、評価のばらつきの範囲です。2 現示の街では、v0.7 の衝突は v0.6 よりはっきり減っています (下の long3 / long3b)。
+* v0.8 = v0.7 + 前の車を画面の端に捉えた場面の DAgger (下の開発ログ 8.)。この 80 ルートでのモデルの誤りは、歩行者との接触 2 件 (どちらも KeiView) です。
 * 残る弱点
   - **歩行者**: 横断しそうな歩行者への反応が、エキスパートより 1 秒ほど遅れることがあります。
     - エキスパートは歩行者の 1〜2 秒後の位置を予測して止まりますが、1 枚の画像からは「これから渡る」が読み取りにくいためです。
@@ -146,14 +152,15 @@ DS = Route Completion × 違反ペナルティ（車両 ×0.60、歩行者 ×0.5
   - 動けないと判定するまでの時間を 90 秒から 180 秒にしました。残る長い待ちは、出口の列がじわじわ進む渋滞で、信号を 3〜4 周期待つのは混んだ街では普通だからです。
 * 車線が長いぶん NPC の上限を 2 倍にして、交通の密度を今までの街とそろえています。信号つきの停止線は 20 ルートで約 250 回です (今までの長距離スイートは約 340 回)。
 
-| long2 (2.5 km × 20 ルート、約 50 km) | エキスパート | **v0.5** (安全層つき) | **v0.6** (安全層つき) | v0.7 (安全層つき) |
-|---|---|---|---|---|
-| KeiSim: 通常 / 高密度 | 1.000 / 1.000 | **1.000 / 1.000** | **1.000 / 1.000** | **1.000** / 0.960 |
-| KeiView: 通常 / 高密度 | — | **1.000 / 1.000** | **1.000 / 1.000** | **1.000 / 1.000** |
+| long2 (2.5 km × 20 ルート、約 50 km) | エキスパート | **v0.5** (安全層つき) | **v0.6** (安全層つき) | v0.7 (安全層つき) | v0.8 (安全層つき) |
+|---|---|---|---|---|---|
+| KeiSim: 通常 / 高密度 | 1.000 / 1.000 | **1.000 / 1.000** | **1.000 / 1.000** | **1.000** / 0.960 | 0.976 / 0.933 |
+| KeiView: 通常 / 高密度 | — | **1.000 / 1.000** | **1.000 / 1.000** | **1.000 / 1.000** | **1.000** / 0.956 |
 
 * v0.5 は 80 ルート (約 200 km、信号約 1,000 回) をすべて完走し、違反は 0 件でした。シミュレータ由来の失敗もありませんでした。
 * 長距離スイートで残っていた失敗 (歩行者 2 件、追突 1 件) は、この 200 km では起きませんでした。まれな失敗をこれ以上測るには、狙った場面を何百回も起こす評価が必要です。
 * v0.7 の高密度 (KeiSim) の 1 本は、青を赤と読み違えて発進しなかったものです。
+* v0.8 の 4 本は、どれも交通の詰まりでの打ち切りです。違反はありません。
 
 **長距離スイート 3** (`--suite long3`): 日本のふつうの信号と右折待ち
 long2 と同じ街の形で、信号を 2 現示にしました (`TownConfig.signal_mode = "two_phase"`、街のタイプ twophase)。
@@ -167,10 +174,10 @@ long2 と同じ街の形で、信号を 2 現示にしました (`TownConfig.sig
 
 * 停止線を越えてまだ動いている車 (黄の終わりに入った車) も、交差点の中の車として数えます。数えないと、その車が交差点を抜けきる前に交差方向が青で入って衝突しました。
 
-| long3 (2.5 km × 20 ルート) | エキスパート | v0.5 (安全層つき) | v0.6 (安全層つき) | **v0.7** (安全層つき) |
-|---|---|---|---|---|
-| KeiSim: 通常 / 高密度 | 1.000 / 0.963 | 0.763 / 0.847 | 0.940 / 0.838 | **0.945 / 0.946** |
-| KeiView: 通常 / 高密度 | — | 0.692 / 0.700 | 0.909 / 0.758 | **0.950 / 0.928** |
+| long3 (2.5 km × 20 ルート) | エキスパート | v0.5 (安全層つき) | v0.6 (安全層つき) | **v0.7** (安全層つき) | v0.8 (安全層つき) |
+|---|---|---|---|---|---|
+| KeiSim: 通常 / 高密度 | 1.000 / 0.963 | 0.763 / 0.847 | 0.940 / 0.838 | 0.945 / **0.946** | **0.962** / 0.876 |
+| KeiView: 通常 / 高密度 | — | 0.692 / 0.700 | 0.909 / 0.758 | **0.950** / 0.928 | 0.927 / **0.939** |
 
 * v0.5 は右折待ちを知りません。80 ルートの失敗 35 件のうち、19 件はエキスパートなら待つ場面での右折の衝突です。9 件は、前の車について停止線をじわじわ越えた信号無視です (エキスパートの以前のルールと同じ)。
 * v0.6 は右折待ちを学びました (下の開発ログ 6.)。80 ルートで、右折の衝突 6 件、そのほかの車との衝突 2 件、歩行者との接触 2 件、信号無視 1 件です。
@@ -181,22 +188,55 @@ long2 と同じ街の形で、信号を 2 現示にしました (`TownConfig.sig
 **long3b** (`--suite long3b`): long3 と同じ街で、エピソード (ルートと交通) だけを変えた 20 ルートです。
 右折の衝突のようなまれな失敗は 80 ルートでは数件しか起きず、差がばらつきに埋もれるので、long3 と合わせた 160 ルートで比べます。
 
-| long3b (2.5 km × 20 ルート) | エキスパート | v0.6 (安全層つき) | **v0.7** (安全層つき) |
-|---|---|---|---|
-| KeiSim: 通常 / 高密度 | 1.000 / 0.920 | 0.919 / 0.866 | **0.980 / 0.960** |
-| KeiView: 通常 / 高密度 | — | 0.943 / **0.967** | **0.955** / 0.901 |
+| long3b (2.5 km × 20 ルート) | エキスパート | v0.6 (安全層つき) | **v0.7** (安全層つき) | v0.8 (安全層つき) |
+|---|---|---|---|---|
+| KeiSim: 通常 / 高密度 | 1.000 / 0.920 | 0.919 / 0.866 | 0.980 / **0.960** | **1.000** / 0.865 |
+| KeiView: 通常 / 高密度 | — | 0.943 / **0.967** | 0.955 / 0.901 | **0.961** / 0.928 |
 
-| long3 + long3b (160 ルート、約 380 km) | v0.6 | **v0.7** |
+| long3 + long3b (160 ルート、約 380 km) | v0.6 | **v0.7** | v0.7 (同じコードで取り直し) | v0.8 |
+|---|---|---|---|---|
+| DS の平均 | 0.892 | 0.946 | **0.960** | 0.932 |
+| 完走 | 133 | **143** | 142 | **143** |
+| 右折の衝突 | 9 | 1 | **0** | 1 |
+| 青になった直後、交差点に残っている車との衝突 | 2 | **0** | **0** | 1 |
+| 歩行者との接触 | 3 | **0** | **0** | 1 |
+| そのほかの車との衝突 | — | **0** | **0** | 1 |
+| 信号無視 | 1 | 1 | 1 | 1 |
+| 動けず: 交通の詰まり / モデルの迷い | 10 / 3 | 14 / 2 | 16 / 2 | 13 / **0** |
+
+* v0.6 → v0.7 で、衝突は 14 件から 1 件になりました。増えたのは交通の詰まりでの打ち切りで、エキスパートでも進めない場面です。
+* ただし v0.7 は、何本か学習したモデルの中から、この 160 ルートの成績で選んだものです。同じルートで選んで同じルートで測ると、選んだときの当たりが乗って、実力より良く出ます。次の確認用スイートで比べ直しました。
+
+**確認用スイート long3c / long3d** (`--suite long3c`, `--suite long3d`): long3 と同じ街で、どのモデルの選定にも使っていないエピソード (9400 番台と 9500 番台) の 40 ルートです。v0.8 からは、このスイートでモデルを比べます。
+
+| long3c + long3d (160 ルート、約 380 km) | v0.7 | **v0.8** |
 |---|---|---|
-| DS の平均 | 0.892 | **0.946** |
-| 完走 | 133 | **143** |
-| 右折の衝突 | 9 | **1** |
-| 青になった直後、交差点に残っている車との衝突 | 2 | **0** |
+| DS の平均 | 0.909 | **0.920** |
+| 完走 | 136 | **140** |
+| 右折の衝突 | **0** | 2 |
+| 青になった直後、交差点に残っている車との衝突 | **3** | 5 |
 | 歩行者との接触 | 3 | **0** |
-| 信号無視 | 1 | 1 |
-| 動けず: 交通の詰まり / モデルの迷い | 10 / 3 | 14 / **2** |
+| そのほかの車との衝突 | 2 | **0** |
+| 信号無視 | 0 | 0 |
+| 動けず: 交通の詰まり / モデルの迷い | 14 / 2 | 12 / 1 |
 
-* 衝突は 14 件から 1 件になりました。増えたのは交通の詰まりでの打ち切りで、エキスパートでも進めない場面です。
+* v0.7 の衝突は、long3 + long3b の 0〜1 件に対して、ここでは 8 件でした。v0.8 は 7 件で、安全性は同じくらいです。
+* 衝突の中身は少し違います。v0.8 は青になった直後に交差点へ入る衝突がやや多く、v0.7 は歩行者との接触が多めです。どちらも件数が少なく、はっきりした差ではありません。
+
+**前の車への追従** (v0.8 の目的、`tools/follow_log.py` と `tools/follow_analyze.py`)
+前の車の後ろを走る場面を、エキスパートと比べました。test と long3 の高密度で各 20 ルート、安全層つきです。
+
+| test / long3 (高密度) | エキスパート | v0.7 | **v0.8** |
+|---|---|---|---|
+| 自車が動いているときの最小の車間 | 3.75 / 3.70 m | 2.82 / 3.61 m | **3.75 / 3.80 m** |
+| 止まったときの車間 (短い方から 5 %) | 3.97 / 4.05 m | 4.08 / 4.06 m | 4.06 / 4.00 m |
+| 車間時間の中央値 | 2.32 / 2.26 s | 2.37 / 2.28 s | 2.34 / 2.29 s |
+| アクセルとブレーキの踏み替え (1 km あたり) | 56 / 82 | 82 / 101 | 82 / 105 |
+
+* v0.7 は、急カーブで止まっている前の車に 2.82 m まで近づきました (test 高密度の 1002/9002)。前の車が画面の端で一部切れていた場面です。v0.8 は同じ場面で 3.82 m で止まります。
+* 下の図は、速度ごとの車間です (test 高密度、線は中央値、帯は 25〜75 %)。v0.8 はエキスパートとほぼ重なります。
+
+![速度ごとの車間](docs/follow_gap_vs_speed.png)
 
 ### 見つけた弱点と対処（開発ログ）
 
@@ -274,6 +314,24 @@ long2 と同じ街の形で、信号を 2 現示にしました (`TownConfig.sig
      - long3 + long3b の 160 ルートで、衝突は 14 → 1 件 (右折 9 → 1、歩行者 3 → 0)、DS の平均は 0.892 → 0.946 になりました。
      - 回帰テストの 300 ルートでは 292 本が完走しました。v0.6 は 294 本で、ほぼ同じです。違反は車 1、歩行者 1、信号無視 1 の 3 件でした (v0.6 は信号無視 1 件)。
    - 学習データの読み込みも直しました。41 GB のデータを読むと、2 倍のメモリ (約 86 GB) を使っていました。読み込み先を先に確保して詰める方式にして、ピークが半分、読み込みが 14 分から 3 分になりました。
+8. **画面の端の前の車への追従と、モデルの選び方の偏り (v0.8)**: 推論専用のクラウドのセッションが v0.7 の追従を分析したのが出発点です。
+   - **見つかった失敗**: 急カーブで止まっている前の車に、v0.7 は 2.8 m まで近づきました (エキスパートは 3.75 m で止まる)。
+     - 前の車は画面の左端で一部が切れていて、止まる判断が弱くなっていました。
+     - 画角を広げても、近くの車にはあまり効かないことも測りました (`tools/fov_log.py`)。
+   - **データ**: エキスパートの計画に、前の車の番号 (`lead_owner`) を足しました。エキスパートの運転は 1 ビットも変わりません。
+     - 前の車の四隅をカメラに投影し、画角から一部はみ出すか、ルートがこの先 15 m で 30° 以上曲がる場面を、注目するフレームにしました (`collect.py --focus_lead_edge 12`)。
+     - v0.7 に運転させて、DAgger のデータを 140k フレーム集めました。
+   - **学習**: v0.7 から、全データで 3 エポック学習しました (新しいデータの比重 11.7 %)。これが v0.8 で、追従は直りました。
+     - ところが long3 + long3b では、衝突が 1 件から 4 件に増えました。
+   - **原因を切り分けた**
+     - 比重を下げる (6.2 %、2 エポック)、2 現示の街の分を外す、学習率を 1/4 にする、のどれでも、衝突は減りませんでした (4、13、10 件)。比重を下げると、追従も直りません。
+     - 新しいデータを入れずに、v0.7 を同じ設定で 3 エポック学習し直すだけでも、衝突は 5 件になりました。崩れの原因は新しいデータではなく、追加学習そのものでした。
+     - v0.7 は、何本か学習したモデルの中から、まさに long3 + long3b の成績で選んだものでした。どのモデルの選定にも使っていない long3c + long3d では、v0.7 も 8 件衝突しました (v0.8 は 7 件)。long3 + long3b の 0〜1 件は、選んだときの当たりでした。
+   - **赤の誤判定**: 信号のない所で前の車について止まっているとき、モデルが赤と判断することが 3〜4 % ありました。
+     - 赤と判断したフレームを、テールランプを消して描き直して調べました (`tools/red_fp.py`)。
+     - 赤と言うのは、45 m より先に自分の信号が見えているときだけでした。エキスパートは 45 m より先の信号をラベルにしないので、その外側を読んでいるだけです。long3 では、手前に並んだ車のテールランプも手がかりにしていました。
+     - テールランプだけを赤信号と見間違えることは、ありませんでした。
+   - **評価の上限**: test の高密度には、600 m を走りきるのに 400 秒を超えるルートがあります。v0.7 と同じく `--max_steps 6000` で評価します (既定の 4000 では時間切れになる)。
 
 ## 3. 構成
 
@@ -294,7 +352,8 @@ keipilot/                軽量 E2E モデル (ResNet-18 + 小型 Transformer �
 scripts/
   collect.py             データ収集 (expert: ノイズ注入 + 仮想カメラ / dagger: モデルが運転しエキスパートがラベル)
   train.py               学習 (bf16, 重み付きサンプリング, 補助セグメンテーション)
-  evaluate.py            クローズドループ評価スイート (train / test / test2 / showcase / long, --dense, 安全層, 失敗の記録)
+  evaluate.py            クローズドループ評価スイート (train / test / test2 / showcase / long / long2 / long3 / long3b、
+                         確認用の long3c / long3d、--dense, 安全層, 失敗の記録)
   eval_perception.py     オフライン指標 (ADE, 信号認識, mIoU)
   demo.py                1 エピソード実行 + ダッシュボード動画 (--show でライブ表示)
   export_weights.py      推論用の fp16 重み (Release の keipilot.pt)
@@ -305,10 +364,12 @@ tests/test_keisim.py     不変条件 (レーンが道路外に出ない, 信号
                          反実仮想ラベルがエキスパートと一致, 黄信号のルール, 速度入力と履歴入力のゼロ初期化, 安全層,
                          エージェントの閉ループ, 右折待ちと待ち位置を過ぎたときの止まり方, データの読み込み)
 scripts/export_town.py   街を JSON に書き出す (KeiView 用)
+tools/                   評価の補助: follow_log.py / follow_analyze.py (前の車への追従とエキスパートの比較)、
+                         fov_log.py / fov_analyze.py (前の車が画角に入っているか)、red_fp.py (信号のない所での赤の判断)
 web/                     KeiView: 同じ街をアニメ調 (セル調) で歩ける three.js ビューア。KeiPilot の学習用カメラにもなる。
                          ?pilot=1 で KeiPilot がブラウザの中で運転する (6 章)
 docs/                    ギャラリー画像, 上面図, ハイライト動画, 結果ページ (docs/report/index.html)
-runs/eval/               評価結果 JSON (README の数値の出所)。学習済みモデルは GitHub Releases の keipilot.pt / keipilot.onnx (v0.7.0)
+runs/eval/               評価結果 JSON (README の数値の出所)。学習済みモデルは GitHub Releases の keipilot.pt / keipilot.onnx (v0.8.0)
 data/                    収集データ (リポジトリ外, 約 3 GB。scripts/collect.py で再生成できる)
 ```
 
@@ -375,6 +436,7 @@ nav command + target point + 自車速度 ─→ 条件埋め込み ┤
 * 学習 (v0.2): KeiView の画像 (6 章) で追加学習 → 速度入力 → 判断の入力つきデータ 220k フレームで反実仮想ラベル → DAgger 80k フレーム。
 * 学習 (v0.6): 2 現示の信号の街のデータ 220k フレーム (右折待ち) と、そのモデル自身の DAgger 80k フレーム (5 章のコマンド)。
 * 学習 (v0.7): 右折待ちの手前のデータ 140k フレーム → 交差点に絞った DAgger 110k フレーム → 歩行者の DAgger 85k フレーム。最後は中間のモデルから、全データ (2.07M フレーム) で 5 エポックを 1 回で学習 (5 章のコマンド、約 40 分)。
+* 学習 (v0.8): 前の車を画面の端に捉えた場面の DAgger 140k フレームを足し、v0.7 から全データ (2.20M フレーム) で 3 エポック (5 章のコマンド、約 25 分)。
 * 学習 (v0.3〜v0.5): 黄信号のラベル v4 で追加学習 → 信号の描画を直した街のデータ 300k フレームと DAgger 80k フレーム →
   KeiView の新しい描画のデータ 150k フレームと DAgger 40k フレーム (5 章のコマンド)。
   - どの段も、前のモデルからの追加学習です (4〜8 エポック、1 段 25〜50 分)。
@@ -384,12 +446,12 @@ nav command + target point + 自車速度 ─→ 条件埋め込み ┤
 ```bash
 git clone https://github.com/southern-star/keisim.git && cd keisim
 bash setup.sh
-gh release download v0.7.0 -R southern-star/keisim -p keipilot.pt -D runs   # 学習済みモデル (30 MB)
+gh release download v0.8.0 -R southern-star/keisim -p keipilot.pt -D runs   # 学習済みモデル (30 MB)
 ```
 
-`gh` がない場合は `curl -L --create-dirs -o runs/keipilot.pt https://github.com/southern-star/keisim/releases/download/v0.7.0/keipilot.pt` でも取得できます。
-Release v0.7.0 には、ブラウザ版用の `keipilot.onnx` もあります。
-以前のモデルは、v0.6 が Release v0.6.0 に、v0.5 が Release v0.5.0 に、v0.2 が Release v0.2.0 に、v0.1 のカメラのみのモデル (`keipilot.pt`, `keipilot_kv.pt`) が Release v0.1.0 にあります。どれも今のコードでそのまま読み込めます。
+`gh` がない場合は `curl -L --create-dirs -o runs/keipilot.pt https://github.com/southern-star/keisim/releases/download/v0.8.0/keipilot.pt` でも取得できます。
+Release v0.8.0 には、ブラウザ版用の `keipilot.onnx` もあります。
+以前のモデルは、v0.7 が Release v0.7.0 に、v0.6 が Release v0.6.0 に、v0.5 が Release v0.5.0 に、v0.2 が Release v0.2.0 に、v0.1 のカメラのみのモデル (`keipilot.pt`, `keipilot_kv.pt`) が Release v0.1.0 にあります。どれも今のコードでそのまま読み込めます。
 
 `nvidia-smi` を見て PyTorch のビルドを自動で選び、`.venv` を作ります（このPCでは約 1.5 分）。
 
@@ -523,9 +585,33 @@ uv run scripts/train.py --data $D7 --init runs/keipilot_v7/last.pt --out runs/ke
     --dir_weight data/tp3_dagger_v7=4 data/tp3_kv_dagger_v7=4 data/ped_dagger_v8=2 data/vped_dagger_v8=2 data/ped_kv_dagger_v8=2 data/vped_kv_dagger_v8=2
 uv run scripts/export_weights.py runs/keipilot_v10/last.pt runs/keipilot.pt   # Release v0.7.0 の keipilot.pt
 uv run --with onnx --with onnxruntime scripts/export_onnx.py runs/keipilot_v10/last.pt web/models/keipilot.onnx   # Release v0.7.0 の keipilot.onnx
+
+# v0.8: 前の車を画面の端に捉えた場面の DAgger (v0.7 が運転) → v0.7 から全データで 3 エポック (keipilot_v11 = Release v0.8.0)
+#       各データの最後のシャードは、評価用に data/fl_heldout_v10/ へ移してから学習しました
+FE="--mode dagger --ckpt runs/keipilot_v10/last.pt --vehicle_spacing 20 28 --ego_cross_rate 0.3 --focus_yield 0.15 --focus_lead_edge 12 --focus_reasons"
+uv run scripts/collect.py $FE --out data/fl_dagger_v10 --frames 40000 --workers 8 --seed 901
+uv run scripts/collect.py $FE --renderer keiview --episodes_per_town 3 --out data/fl_kv_dagger_v10 --frames 30000 --workers 5 --seed 902
+uv run scripts/collect.py $FE --town_style twophase --jam_fixes 1 --out data/fl_tp_dagger_v10 --frames 30000 --workers 7 --seed 903
+uv run scripts/collect.py $FE --town_style twophase --jam_fixes 1 --renderer keiview --episodes_per_town 3 --out data/fl_tp_kv_dagger_v10 \
+    --frames 20000 --workers 5 --seed 904
+uv run scripts/collect.py $FE --town_style varied --jam_fixes 1 --out data/fl_v_dagger_v10 --frames 20000 --workers 5 --seed 905
+FL="data/fl_dagger_v10 data/fl_kv_dagger_v10 data/fl_tp_dagger_v10 data/fl_tp_kv_dagger_v10 data/fl_v_dagger_v10"
+uv run scripts/train.py --data $D7 $FL --init runs/keipilot_v10/last.pt --out runs/keipilot_v11 --epochs 3 $T --aux_weight 0.5 \
+    --dir_weight data/tp3_dagger_v7=4 data/tp3_kv_dagger_v7=4 data/ped_dagger_v8=2 data/vped_dagger_v8=2 data/ped_kv_dagger_v8=2 data/vped_kv_dagger_v8=2 \
+                 data/fl_dagger_v10=2 data/fl_kv_dagger_v10=2 data/fl_tp_dagger_v10=2 data/fl_tp_kv_dagger_v10=2 data/fl_v_dagger_v10=2
+uv run scripts/export_weights.py runs/keipilot_v11/last.pt runs/keipilot.pt   # Release v0.8.0 の keipilot.pt
+uv run --with onnx --with onnxruntime scripts/export_onnx.py runs/keipilot_v11/last.pt web/models/keipilot.onnx   # Release v0.8.0 の keipilot.onnx
+
+# v0.8 の評価 (安全層つき): 確認用スイート、追従、信号のない所での赤の判断
+E="uv run scripts/evaluate.py --agent model --ckpt runs/keipilot_v11/last.pt --brake_hold --red_hold"
+$E --suite long3c && $E --suite long3c --dense && $E --suite long3d --renderer keiview   # long3c / long3d × 通常・高密度 × KeiSim・KeiView
+$E --suite test --dense --max_steps 6000
+uv run tools/follow_log.py runs/keipilot_v11/last.pt runs/follow/v11_test.jsonl 6 --suite test   # 追従のログ (CKPT の代わりに expert でエキスパート)
+uv run --with matplotlib python tools/follow_analyze.py runs/follow/v11_test.jsonl runs/follow/expert_test.jsonl runs/follow/test
+uv run tools/red_fp.py runs/red_fp_long3.json 6 --ckpts runs/keipilot_v10/last.pt runs/keipilot_v11/last.pt --suite long3
 ```
 
-学習データは全部メモリに読み込みます。v0.7 の全データ (2.07M フレーム) で約 36 GB、2 枚入力のモデルは前の画像も読むので約 47 GB です。足りない分はスワップに入ります。
+学習データは全部メモリに読み込みます。v0.8 の全データ (2.20M フレーム) で約 38 GB、2 枚入力のモデルは前の画像も読むので約 50 GB です。足りない分はスワップに入ります。
 
 開発時の `dir_*` は、信号の灯火に向きを付けた直後の描画で集めました。`dir2_*` は、KeiView の灯器を 2.2 倍にし、消灯中の灯火を黒くしたあとの描画です。
 今のコードで集め直すと、`dir_kv_*` も新しい描画になります。
@@ -621,11 +707,11 @@ uv run scripts/demo.py --agent model --ckpt runs/keipilot_kv_dagger/last.pt --re
 ```
 
 学習済みの重み（fp16, 30 MB）は Release にあります。
-v0.7 の `keipilot.pt` は、KeiSim と KeiView の両方で使える最新のモデルです。
+v0.8 の `keipilot.pt` は、KeiSim と KeiView の両方で使える最新のモデルです。
 この節の手順で作ったカメラのみのモデルは、v0.1.0 の `keipilot_kv.pt` です。
 
 ```bash
-gh release download v0.7.0 -R southern-star/keisim -p keipilot.pt -D runs
+gh release download v0.8.0 -R southern-star/keisim -p keipilot.pt -D runs
 uv run scripts/demo.py --agent model --ckpt runs/keipilot.pt --renderer keiview --town 1001 --episode 3 --out runs/demo_kv.mp4
 ```
 
@@ -635,18 +721,18 @@ uv run scripts/demo.py --agent model --ckpt runs/keipilot.pt --renderer keiview 
 - 追加学習: `runs/keipilot_kv/last.pt`
 - DAgger: `runs/keipilot_kv_dagger/last.pt`（最終モデル。Release の `keipilot_kv.pt` はこの fp16 版）
 
-| | 学習前 | KeiView で追加学習 | + KeiView で DAgger | **v0.2** (+ 速度・反実仮想ラベル) | **v0.5** (+ 信号の描画の修正・安全層) | **v0.6** (+ 右折待ち) | **v0.7** (+ 右折の失敗を狙った学習) |
-|---|---|---|---|---|---|---|---|
-| KeiView で走行・未見の街 A (DS) | 0.008（20 ルートとも発進できず） | 0.970 | 0.955 | **1.000** | **1.000** | **1.000** | 0.980 |
-| KeiView で走行・未見の街 B (DS) | — | 0.922 | 0.974 | **1.000** | 0.953 | **1.000** | **1.000** |
-| KeiView の 40 ルート: 完走 / 衝突 / 信号無視 | — | 39 / 0 / 7 | 39 / 0 / 4 | **40 / 0 / 0** | 39 / 0 / 0 | **40 / 0 / 0** | 39 / 0 / 0 |
-| KeiView・高密度交通 (DS) | — | — | 0.970 | **0.995** | **0.995** | **0.995** | **0.995** |
-| KeiSim で走行・未見の街 A (DS) | 0.970 | 0.985 | 0.970 | **1.000** | **1.000** | **1.000** | **1.000** |
-| KeiView 画像 6,000 枚: 経路 ADE / 目標速度 MAE | 0.455 m / 2.08 m/s | 0.100 m / 0.16 m/s | 0.093 m / 0.14 m/s | 0.080 m / 0.11 m/s | 0.058 m / 0.10 m/s ※ | 0.057 m / 0.10 m/s ※ | 0.059 m / 0.10 m/s ※ |
-| KeiView 画像 6,000 枚: 信号 4 クラス / mIoU / 歩行者 IoU | 69.2 % / 0.373 / 0.04 | 91.9 % / 0.737 / 0.54 | 92.7 % / 0.743 / 0.55 | 93.6 % / 0.760 / 0.57 | 97.9 % / 0.794 / 0.63 ※ | 98.0 % / 0.795 / 0.63 ※ | 97.9 % / 0.796 / 0.63 ※ |
-| KeiSim 画像 6,000 枚: 信号 4 クラス / mIoU | 96.2 % / 0.829 | 96.0 % / 0.809 | 96.0 % / 0.807 | 96.1 % / 0.814 | — | — | — |
+| | 学習前 | KeiView で追加学習 | + KeiView で DAgger | **v0.2** (+ 速度・反実仮想ラベル) | **v0.5** (+ 信号の描画の修正・安全層) | **v0.6** (+ 右折待ち) | **v0.7** (+ 右折の失敗を狙った学習) | **v0.8** (+ 画面の端の前の車への追従) |
+|---|---|---|---|---|---|---|---|---|
+| KeiView で走行・未見の街 A (DS) | 0.008（20 ルートとも発進できず） | 0.970 | 0.955 | **1.000** | **1.000** | **1.000** | 0.980 | **1.000** |
+| KeiView で走行・未見の街 B (DS) | — | 0.922 | 0.974 | **1.000** | 0.953 | **1.000** | **1.000** | **1.000** |
+| KeiView の 40 ルート: 完走 / 衝突 / 信号無視 | — | 39 / 0 / 7 | 39 / 0 / 4 | **40 / 0 / 0** | 39 / 0 / 0 | **40 / 0 / 0** | 39 / 0 / 0 | **40 / 0 / 0** |
+| KeiView・高密度交通 (DS) | — | — | 0.970 | **0.995** | **0.995** | **0.995** | **0.995** | **0.996** |
+| KeiSim で走行・未見の街 A (DS) | 0.970 | 0.985 | 0.970 | **1.000** | **1.000** | **1.000** | **1.000** | **1.000** |
+| KeiView 画像 6,000 枚: 経路 ADE / 目標速度 MAE | 0.455 m / 2.08 m/s | 0.100 m / 0.16 m/s | 0.093 m / 0.14 m/s | 0.080 m / 0.11 m/s | 0.058 m / 0.10 m/s ※ | 0.057 m / 0.10 m/s ※ | 0.059 m / 0.10 m/s ※ | 0.058 m / 0.11 m/s ※ |
+| KeiView 画像 6,000 枚: 信号 4 クラス / mIoU / 歩行者 IoU | 69.2 % / 0.373 / 0.04 | 91.9 % / 0.737 / 0.54 | 92.7 % / 0.743 / 0.55 | 93.6 % / 0.760 / 0.57 | 97.9 % / 0.794 / 0.63 ※ | 98.0 % / 0.795 / 0.63 ※ | 97.9 % / 0.796 / 0.63 ※ | 97.7 % / 0.795 / 0.63 ※ |
+| KeiSim 画像 6,000 枚: 信号 4 クラス / mIoU | 96.2 % / 0.829 | 96.0 % / 0.809 | 96.0 % / 0.807 | 96.1 % / 0.814 | — | — | — | — |
 
-※ v0.5〜v0.7 は、信号の描画を直したあとの KeiView で撮り直した未見の街の画像での値です (`runs/eval/perception_keipilot_v5_kv3.json`, `perception_keipilot_v6_kv3.json`, `perception_keipilot_v10_kv3.json`)。ほかの列とは画像が違います。
+※ v0.5〜v0.8 は、信号の描画を直したあとの KeiView で撮り直した未見の街の画像での値です (`runs/eval/perception_keipilot_v5_kv3.json`, `perception_keipilot_v6_kv3.json`, `perception_keipilot_v10_kv3.json`, `perception_keipilot_v11_kv3.json`)。ほかの列とは画像が違います。
 v0.5 の未見の街 B の 1 本については、[2. 結果](#2-結果-すべて-runsevaljson) を見てください。
 
 v0.2 の KeiView・高密度交通で完走できなかった 1 本は、NPC の詰まりで前の車が動かなくなったルートです。

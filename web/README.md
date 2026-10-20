@@ -111,7 +111,7 @@ KeiPilot の学習データ収集とクローズドループ評価で使いま�
 
 ```bash
 cd web && npm install && cd ..
-uv run scripts/demo.py --agent model --ckpt runs/keipilot.pt --renderer keiview --town 1001 --episode 3 --out runs/demo_kv.mp4   # Release v0.7.0 の重み
+uv run scripts/demo.py --agent model --ckpt runs/keipilot.pt --renderer keiview --town 1001 --episode 3 --out runs/demo_kv.mp4   # Release v0.8.0 の重み
 ```
 
 ## ブラウザで KeiPilot を走らせる（パイロットモード）
@@ -120,8 +120,8 @@ uv run scripts/demo.py --agent model --ckpt runs/keipilot.pt --renderer keiview 
 公開版: <https://southern-star.github.io/keisim/?pilot=1>
 
 ```bash
-uv run --with onnx --with onnxruntime scripts/export_onnx.py runs/keipilot_v10/last.pt web/models/keipilot.onnx
-#   （または Release v0.7.0 の keipilot.onnx を web/models/ に置く）
+uv run --with onnx --with onnxruntime scripts/export_onnx.py runs/keipilot_v11/last.pt web/models/keipilot.onnx
+#   （または Release v0.8.0 の keipilot.onnx を web/models/ に置く）
 cd web && node tools/serve.mjs                    # → http://localhost:5174/?pilot=1&town=1000
 ```
 
@@ -140,7 +140,7 @@ cd web && node tools/serve.mjs                    # → http://localhost:5174/?p
   - 右下に、モデルへの入力画像とモデルの領域分割を表示します。
 - 信号は KeiSim と同じ現示で切り替わります。
   - town 1000〜1003 は、流入方向ごとに 1 方向ずつ青になるスプリット現示です。交差点の中で進路が交わらないので、右折待ちはありません。
-  - town 1015 と 1018（`?town=1015-98782ab7`、`?town=1018-98782ab7`、右上のメニューでも選べます）は、日本でふつうの二段階の信号です。向かい合う方向が同時に青になり、右折は交差点の中の待ち位置で対向車の切れ目を待ちます（long3 と同じ街のタイプ）。KeiPilot v0.7 は、この右折待ちを学んでいます。
+  - town 1015 と 1018（`?town=1015-98782ab7`、`?town=1018-98782ab7`、右上のメニューでも選べます）は、日本でふつうの二段階の信号です。向かい合う方向が同時に青になり、右折は交差点の中の待ち位置で対向車の切れ目を待ちます（long3 と同じ街のタイプ）。KeiPilot は v0.6 からこの右折待ちを学んでいます。
 - 周りの車（`src/traffic.js`）が街を走ります。歩行者はいません。
   - 台数は車線の長さに合わせて決めます（車線 1 km あたり 12 台、最大 40 台。town 1000 では 28 台）。
   - 動きは `keisim/traffic.py` の NPC を軽くしたものです。交差点ごとにランダムに曲がり、IDM で前の車（と自車）との車間を取り、赤と黄色で止まります（黄色は止まれるときだけ）。交差点の中に別の現示の車がいるときと、出口が詰まっているときは、停止線で待ちます。

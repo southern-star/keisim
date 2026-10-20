@@ -247,8 +247,10 @@ class Expert:
             break
         if target < 0.3:
             target = 0.0
+        # lead_owner: what the gap is to (>= 0: NPC vehicle index in world.traffic, <= -2: pedestrian, -1: nothing)
         return {"path": path, "target_speed": float(target), "tl_state": int(tl), "reason": reason,
-                "gap": g, "target_nolight": float(target_nolight), "yield_tta": float(yield_tta), **lt}
+                "gap": g, "lead_owner": int(lead_o[0]), "target_nolight": float(target_nolight),
+                "yield_tta": float(yield_tta), **lt}
 
     def act(self, plan=None):
         env = self.env
