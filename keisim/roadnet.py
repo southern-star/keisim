@@ -605,16 +605,15 @@ class Town:
         """Who gives way inside a junction. Connectors of approaches that are green at the same time (opposite
         approaches with two-phase signals) may cross; the lower-ranked movement (right < left < straight) yields.
         Each yielding connector gets yields = [(other connector, s here, s there)], the closest points of the
-        two centre lines, and wait_s: where its front bumper waits, short of the first crossing. In mixed towns
-        the bends (unsignalised) whose two turns pass too closely are taken one at a time the same way: the outer
-        turn waits clear of the inner one (_narrow_wait), possibly before the bend; and two equal movements that
-        cross (the right turns at a skewed junction) are resolved too: if one of them already gives way to the other's
-        approach, that one (cars queue behind each other in the single lane: the other order could deadlock), else
-        the one from the minor road (main > street > residential > alley), between equal roads the one that reaches
-        the crossing later."""
+        two centre lines, and wait_s: where its front bumper waits, short of the first crossing.
+        Two equal movements that cross (the right turns of the paired approaches at a skewed junction) are resolved
+        too, by _equal_gives_way: if one of them already gives way to the other's approach, that one (cars queue
+        behind each other in the single lane: the other order deadlocks), else the one from the minor road (road
+        types: main > street > residential > alley), else the one with the other approach on its left (左方優先).
+        web/src/traffic.js makeYields() makes the same decisions for the browser demo.
+        In mixed towns the bends (unsignalised) whose two turns pass too closely are taken one at a time the same
+        way: the outer turn waits clear of the inner one (_narrow_wait), possibly before the bend."""
         rank = {"right": 0, "left": 1, "straight": 2}
-        road_rank = {"alley": 0, "residential": 1, "street": 2, "main": 3}
-        mixed = self.cfg.road_types == "mixed"
         for lane in self.lanes:
             lane.yields, lane.wait_s = [], None
         for J in self.junctions:
@@ -631,8 +630,9 @@ class Town:
                         continue
                     if not narrow and (ga is None or gb is None or ga[1] != gb[1]):
                         continue
-                    equal = rank[a.turn] == rank[b.turn]
-                    if rank[a.turn] > rank[b.turn] or (equal and (narrow or not mixed or a.id > b.id)):
+                    equal = rank[a.turn] == rank[b.turn]       # equal pairs once each, in a fixed order
+                    if rank[a.turn] > rank[b.turn] or \
+                            (equal and (narrow or (a.pred[0], a.succ[0]) > (b.pred[0], b.succ[0]))):
                         continue
                     pa, pb = a.poly.pts, b.poly.pts
                     d = np.hypot(*(pa[:, None, :] - pb[None, :, :]).transpose(2, 0, 1))
@@ -641,22 +641,14 @@ class Town:
                     # town: the turns pass too closely (narrow lanes; the body of a turning car swings out)
                     if d[i, j] >= (NARROW_PASS if narrow else 2.2):
                         continue
-                    if equal:                                # mixed towns: decided below, after the ranked ones
+                    if equal:                                # decided below, after the ranked ones
                         equals.append((a, b, float(a.poly.s[i]), float(b.poly.s[j])))
                         continue
                     a.yields.append((b.id, float(a.poly.s[i]), float(b.poly.s[j])))
+            # approaches each connector gives way to by rank (taken before the equal pairs: order-independent)
+            ranked = {c.id: {self.lanes[y[0]].pred[0] for y in c.yields} for c in conns}
             for a, b, sa, sb in equals:
-                ya = {self.lanes[y[0]].pred[0] for y in a.yields}     # approaches each one already gives way to
-                yb = {self.lanes[y[0]].pred[0] for y in b.yields}
-                if a.pred[0] in yb and b.pred[0] not in ya:
-                    a_gives = False
-                elif b.pred[0] in ya and a.pred[0] not in yb:
-                    a_gives = True
-                else:
-                    ka = road_rank[self.roads[self.lanes[a.pred[0]].road].kind]
-                    kb = road_rank[self.roads[self.lanes[b.pred[0]].road].kind]
-                    a_gives = (ka, -sa) <= (kb, -sb)
-                if a_gives:
+                if self._equal_gives_way(J, a, b, ranked):
                     a.yields.append((b.id, sa, sb))
                 else:
                     b.yields.append((a.id, sb, sa))
@@ -681,6 +673,26 @@ class Town:
                         wait = float(sb)
                         break
                 a.wait_s = wait
+
+    def _equal_gives_way(self, J, a, b, ranked):
+        """True if connector `a` gives way to `b` (equal movements whose paths cross; see _make_yields)."""
+        pa, pb = a.pred[0], b.pred[0]
+        if (pa in ranked[b.id]) != (pb in ranked[a.id]):
+            return pb in ranked[a.id]                 # a already waits for b's approach (or b for a's)
+        road_rank = {"alley": 0, "residential": 1, "street": 2, "main": 3}
+        ka = road_rank[self.roads[self.lanes[pa].road].kind]
+        kb = road_rank[self.roads[self.lanes[pb].road].kind]
+        if ka != kb:
+            return ka < kb                            # the minor road gives way
+        # 左方優先: give way to the car that comes from the left (the right with right-hand traffic); clear cases only
+        h = float(self.lanes[pa].heading[-1])
+        v = b.poly.pts[0] - J.pos
+        side = (math.cos(h) * v[1] - math.sin(h) * v[0]) / max(float(np.hypot(v[0], v[1])), 1e-9)
+        if not self.cfg.left_hand_traffic:
+            side = -side
+        if abs(side) > 0.2:
+            return side > 0
+        return pa < pb
 
     @staticmethod
     def _narrow_wait(a, others):

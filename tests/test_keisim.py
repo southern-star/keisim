@@ -530,21 +530,35 @@ def test_road_types_town_style():
             assert all(T.lanes[l].width >= NARROW_LANE for l in T.truck_lanes)
             assert all(any(T.lanes[c].succ[0] in T.truck_lanes for c in T.lanes[l].succ) for l in T.truck_lanes)
     assert kinds == {"main", "street", "residential", "alley"}
-    # equal movements that cross (right turns at a skewed T-junction): exactly one of the two gives way
-    T = Town(1310, town_config("roadtypes"))
+
+
+def test_equal_turns_that_cross_give_way():
+    """Two-phase junctions: of two equal movements of the same green whose paths cross (right turns at a skewed
+    junction), exactly one gives way; one that already waits for the other's approach is the one."""
+    from keisim.config import town_config
+
     n = 0
-    for J in (J for J in T.junctions if J.signalized):
-        conns = [T.lanes[c] for c in J.connectors]
-        for i, a in enumerate(conns):
-            for b in conns[i + 1:]:
-                if a.pred[0] == b.pred[0] or a.turn != b.turn or \
-                        T.lanes[a.pred[0]].signal[1] != T.lanes[b.pred[0]].signal[1]:
-                    continue
-                d = np.hypot(*(a.poly.pts[:, None, :] - b.poly.pts[None, :, :]).transpose(2, 0, 1)).min()
-                if d < 2.2:
-                    n += 1
-                    assert (b.id in [y[0] for y in a.yields]) != (a.id in [y[0] for y in b.yields])
-    assert n >= 1
+    for style, seeds in (("twophase", range(1010, 1020)), ("roadtypes", (1227, 1310))):
+        for seed in seeds:
+            T = Town(seed, town_config(style))
+            for J in (J for J in T.junctions if J.signalized):
+                conns = [T.lanes[c] for c in J.connectors]
+                for i, a in enumerate(conns):
+                    for b in conns[i + 1:]:
+                        if a.pred[0] == b.pred[0] or a.turn != b.turn or \
+                                T.lanes[a.pred[0]].signal[1] != T.lanes[b.pred[0]].signal[1]:
+                            continue
+                        d = np.hypot(*(a.poly.pts[:, None, :] - b.poly.pts[None, :, :]).transpose(2, 0, 1)).min()
+                        if d >= 2.2:
+                            continue
+                        n += 1
+                        a_gives = b.id in [y[0] for y in a.yields]
+                        assert a_gives != (a.id in [y[0] for y in b.yields])
+                        waits = lambda x, y: any(T.lanes[c].pred[0] == y.pred[0] and T.lanes[c].turn != x.turn
+                                                 for c, _, _ in x.yields)
+                        if waits(a, b) != waits(b, a):
+                            assert a_gives == waits(a, b)
+    assert n >= 4
 
 
 def test_road_types_narrow_bends_and_expert():
