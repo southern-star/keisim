@@ -103,7 +103,7 @@ export function createNavigator(data, lanes = buildLanes(data)) {
     const J = junctions.get(L.to);
     const opts = L.next;
     if (!opts.length) return null;
-    if (J && J.signalized && want.turn && !decisions.some((d) => d.sIn > seg.s + 1)) {
+    if (J && J.arms >= 3 && want.turn && !decisions.some((d) => d.sIn > seg.s + 1)) {
       const o = opts.find((c) => c.turn === want.turn);
       want.turn = null;
       if (o) return o;
@@ -119,7 +119,7 @@ export function createNavigator(data, lanes = buildLanes(data)) {
       const sIn = cum[cum.length - 1];
       append(c.conn.pts);
       const sOut = cum[cum.length - 1];
-      if (J && J.signalized) decisions.push({ junction: J.id, turn: c.turn, sIn, sOut, lane: last, conn: c.conn });
+      if (J && J.arms >= 3) decisions.push({ junction: J.id, turn: c.turn, sIn, sOut, lane: last, conn: c.conn });
       append(c.lane.pts);
       last = c.lane;
     }
