@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Print a markdown table from evaluation json files (runs/eval/*.json)."""
+"""Print a markdown table from evaluation json files (runs/eval/*.json written by evaluate.py).
+
+The other results in runs/eval (eval_perception.py's perception_*.json, bench_speed.py's speed.json) have
+no closed-loop summary; they are skipped, with a note on stderr."""
 from __future__ import annotations
 
 import glob
@@ -10,9 +13,12 @@ import sys
 
 def main():
     files = sys.argv[1:] or sorted(glob.glob("runs/eval/*.json"))
-    rows = []
+    rows, skipped = [], []
     for f in files:
         d = json.load(open(f))
+        if "summary" not in d:
+            skipped.append(os.path.basename(f))
+            continue
         s = d["summary"]
         name = os.path.basename(f)[:-5]
         inf = s["infractions_per_km"]
@@ -24,6 +30,9 @@ def main():
     for r in rows:
         print(f"| {r[0]} | {r[1]} | {r[2]:.3f} | {r[3]:.3f} | {r[4]:.3f} | {r[5] * 100:.0f}% | {r[6]:.1f} | {r[7]:.1f} | "
               f"{r[8]:.2f} | {r[9]:.2f} | {r[10]:.2f} | {r[11]:.2f} | {r[12]:.2f} | {r[13]} |")
+    if skipped:
+        print(f"skipped {len(skipped)} files without a summary (not evaluate.py results): {', '.join(skipped)}",
+              file=sys.stderr)
 
 
 if __name__ == "__main__":
