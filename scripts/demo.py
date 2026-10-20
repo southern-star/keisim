@@ -3,6 +3,7 @@
 
   python scripts/demo.py --agent expert --out runs/demo_expert.mp4
   python scripts/demo.py --agent model --ckpt runs/keipilot/best.pt --town 1001 --episode 7
+  python scripts/demo.py --agent model --ckpt runs/keipilot.pt --osm_town osm_sapporo --episode 110 --route 600
 """
 from __future__ import annotations
 
@@ -39,17 +40,31 @@ def main():
     ap.add_argument("--town_style", default="classic", choices=list(TOWN_STYLES),
                     help="twophase: Japan's two-phase signals, right turns wait for gaps in the oncoming traffic; "
                          "roadtypes: twophase with main roads, residential roads without sidewalks and alleys")
+    ap.add_argument("--osm_town", default=None,
+                    help="a real town (keisim.realworld.osm_town, cached at data/osm/<name>.json) instead of --town; "
+                         "the same --episode and --route as evaluate.py --osm_town give the same route and traffic")
+    ap.add_argument("--osm_bbox", type=float, nargs=4, metavar=("S", "W", "N", "E"),
+                    default=[43.088, 141.360, 43.097, 141.372], help="--osm_town's box (default: Sapporo Higashi-ku)")
     args = ap.parse_args()
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
 
     cfg = EnvConfig()
     cfg.renderer = args.renderer
     cfg.keiview_roads = args.keiview_roads
-    cfg.town = town_config(args.town_style)
-    if args.town_style != "classic":       # the long2 / long3 traffic rules (box rule, hidden jam release)
+    town = args.town
+    if args.osm_town:
+        from keisim.realworld import osm_town
+        town = osm_town(tuple(args.osm_bbox), cache=f"data/osm/{args.osm_town}.json", name=args.osm_town)
+        cfg.town = town.cfg
+        cfg.blocked_timeout = 180.0
+        cfg.traffic.max_vehicles *= 2           # evaluate.py's NPC caps for two-phase towns (CAP_SCALE)
+        cfg.traffic.max_peds *= 2
+    else:
+        cfg.town = town_config(args.town_style)
+    if args.osm_town or args.town_style != "classic":       # the long2 / long3 traffic rules (box rule, hidden jam release)
         cfg.traffic.box_rule = cfg.traffic.release_hidden = True
     env = KeiEnv(cfg)
-    obs = env.reset(town_seed=args.town, episode_seed=args.episode, route_length=args.route, weather=args.weather)
+    obs = env.reset(town_seed=town, episode_seed=args.episode, route_length=args.route, weather=args.weather)
     agent = None
     if args.agent == "model":
         from keipilot.agent import KeiPilotAgent

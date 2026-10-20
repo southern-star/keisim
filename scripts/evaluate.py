@@ -6,6 +6,13 @@ an episode seed fixes route, traffic, pedestrians, signal phase and weather.
 
   python scripts/evaluate.py --agent expert --suite test
   python scripts/evaluate.py --agent model --ckpt runs/keipilot_bc/best.pt --suite test --videos 3
+
+A real town imported from OpenStreetMap (keisim/realworld.py, scripts/import_osm.py) replaces the suite's town seeds:
+
+  python scripts/evaluate.py --agent model --ckpt runs/keipilot.pt --osm_town osm_sapporo --routes 20
+
+The town is rebuilt from the Overpass cache data/osm/<name>.json, routes get the episode seeds 100.. (the same as
+import_osm.py's expert drives) and the results go to runs/eval/<name>/ (never over the suites' JSON).
 """
 from __future__ import annotations
 
@@ -65,7 +72,16 @@ def run_route(job):
     from keisim.config import EnvConfig, town_config
     from keisim.env import KeiEnv
     cfg = EnvConfig()
-    cfg.town = town_config(args.get("town_style", "classic"))
+    osm = None
+    if isinstance(town, str):                        # a real town (keisim/realworld.py), built once per worker
+        global _TOWN
+        if "_TOWN" not in globals() or _TOWN.name != town:
+            from keisim.realworld import osm_town
+            _TOWN = osm_town(tuple(args["osm_bbox"]), cache=f"data/osm/{town}.json", name=town)
+        osm = _TOWN
+        cfg.town = osm.cfg
+    else:
+        cfg.town = town_config(args.get("town_style", "classic"))
     cfg.traffic.box_rule = cfg.traffic.release_hidden = bool(args.get("jam_fixes", False))
     cfg.blocked_timeout = float(args.get("blocked_timeout", 90.0))
     cfg.render_seg = False
@@ -98,7 +114,11 @@ def run_route(job):
             _AGENT = KeiPilotAgent(args["ckpt"], brake_hold=args.get("brake_hold", False), red_hold=args.get("red_hold", False))
         agent = _AGENT
         agent.reset()
-    obs = env.reset(town_seed=town, episode_seed=ep, route_length=args["route_length"], weather=args["weather"])
+    obs = env.reset(town_seed=osm if osm is not None else town, episode_seed=ep, route_length=args["route_length"],
+                    weather=args["weather"])
+    kv = env._keiview if cfg.renderer == "keiview" else None
+    kv_ms = []                                  # KeiView: ego_server's render time per frame (ms)
+    kv_town_ms = kv.town_ms if kv is not None else None
     video = None
     events = []
     if idx < args["videos"]:
@@ -149,6 +169,8 @@ def run_route(job):
         obs, r, done, info = env.step(action)
         speeds.append(env.world.ego.v)
         steps += 1
+        if kv is not None and cfg.render_rgb:
+            kv_ms.append(kv.last_ms)
     if video is not None:
         video.close()
         with open(video.path[:-4] + ".json", "w") as f:
@@ -159,6 +181,11 @@ def run_route(job):
     m.update({"town": town, "episode": ep, "steps": steps, "wall": time.time() - t0,
               "avg_speed": float(np.mean(speeds)) if speeds else 0.0, "weather": env.weather.name,
               "lights_passed": int(sum(1 for s_stop, _ in env.route.stops if s_stop < env.s_ego))})
+    if kv is not None:
+        m["keiview_ms"] = {"town": kv_town_ms, "frames": len(kv_ms),
+                           "mean": float(np.mean(kv_ms)) if kv_ms else None,
+                           "p90": float(np.percentile(kv_ms, 90)) if kv_ms else None}
+    m["junction_passes"] = junction_passes(env, log, dt)
     if m["status"] in ("blocked", "timeout") and log:
         m["blocked_by"] = blocked_cause(log[-int(cfg.blocked_timeout / dt):], dt)
     if (m["status"] != "success" or m["infractions"]) and args.get("fail_dir"):
@@ -171,6 +198,36 @@ def run_route(job):
         with open(os.path.join(args["fail_dir"], f"{town}_{ep}.json"), "w") as f:
             json.dump({"result": {k: v for k, v in m.items()}, "windows": windows}, f)
     return m
+
+
+def junction_passes(env, log, dt, approach=15.0):
+    """What happened at each junction of the route: its kind (signalised / priority crossing / bend), the ego's turn,
+    whether the expert wanted a stop there ("yield" at a priority crossing, a red light, ...), whether the ego actually
+    stood (v < 0.1), for how long, and for how long of that the expert would have driven on (a needless stop).
+    s is relative to the route start, like the infractions' s. Routes the ego never reached are listed with
+    reached=False."""
+    s0 = env.route.s_start
+    rows = [r for r in log]
+    out = []
+    for j in env.route.junctions:
+        J = env.world.town.junctions[j["junction"]]
+        a, b = j["s_in"] - approach, j["s_out"]
+        win = [r for r in rows if a <= r[1] + s0 <= b]
+        kind = "signalised" if j["signalized"] else ("priority" if len(J.arms) >= 3 else "bend")
+        rec = {"junction": int(j["junction"]), "kind": kind, "arms": len(J.arms), "turn": j["turn"],
+               "s_in": round(j["s_in"] - s0, 1), "s_out": round(j["s_out"] - s0, 1),
+               "reached": bool(win), "yields": bool(env.world.town.lanes[j["lane"]].yields)}
+        if win:
+            reasons = {}
+            for r in win:
+                reasons[r[3]] = reasons.get(r[3], 0) + 1
+            stood = [r for r in win if r[2] < 0.1]
+            rec.update({"expert_reasons": reasons, "expert_stop": any(r[-1] < 0.3 for r in win),
+                        "v_min": round(min(r[2] for r in win), 2), "stood_s": round(len(stood) * dt, 1),
+                        "needless_s": round(sum(1 for r in stood if r[-1] > 1.0) * dt, 1),
+                        "s_first_stop": None if not stood else round(stood[0][1], 1)})
+        out.append(rec)
+    return out
 
 
 def blocked_cause(win, dt, go_s=3.0):
@@ -246,7 +303,16 @@ def main():
     ap.add_argument("--blocked_timeout", type=float, default=None, help="s without progress (default 90, long2 180)")
     ap.add_argument("--jam_fixes", type=int, default=None, choices=[0, 1],
                     help="box rule + release of NPCs stuck out of the ego camera's view (default: 0, long2: 1)")
+    ap.add_argument("--osm_town", default=None,
+                    help="a real town (keisim.realworld.osm_town, cached at data/osm/<name>.json) instead of --suite")
+    ap.add_argument("--osm_bbox", type=float, nargs=4, metavar=("S", "W", "N", "E"),
+                    default=[43.088, 141.360, 43.097, 141.372], help="--osm_town's box (default: Sapporo Higashi-ku)")
+    ap.add_argument("--routes", type=int, default=20, help="--osm_town: number of routes (episode seeds 100..)")
+    ap.add_argument("--episode0", type=int, default=100, help="--osm_town: first episode seed")
     args = ap.parse_args()
+    if args.osm_town:                   # real towns: mixed road kinds, two-phase signals, the long3 traffic rules
+        SUITE_DEFAULTS["osm"] = {"town_style": "twophase", "jam_fixes": True, "blocked_timeout": 180.0}
+        args.suite = "osm"
     dflt = {"route_length": 600.0, "max_steps": 4000, "town_style": "classic", "jam_fixes": 0, "blocked_timeout": 90.0,
             **SUITE_DEFAULTS.get(args.suite, {})}
     suite_style, suite_fixes, suite_timeout = dflt["town_style"], int(dflt["jam_fixes"]), dflt["blocked_timeout"]
@@ -265,20 +331,27 @@ def main():
         tag += "_hold"
     if args.red_hold:
         tag += "_red"
-    jobs = SUITES[args.suite]
+    if args.osm_town:
+        jobs = [(args.osm_town, args.episode0 + e) for e in range(args.routes)]
+    else:
+        jobs = SUITES[args.suite]
     suffix = ("_dense" if args.dense else "") + ("" if args.weather == "random" else f"_{args.weather}") + \
         ("_keiview" if args.renderer == "keiview" else "") + \
         ("_kvdetail" if args.renderer == "keiview" and args.keiview_roads == "detail" else "") + \
         ("" if args.town_style == suite_style else f"_{args.town_style}") + \
         ("" if int(args.jam_fixes) == suite_fixes else ("_jamfix" if args.jam_fixes else "_nojamfix")) + \
         ("" if args.blocked_timeout == suite_timeout else f"_wait{args.blocked_timeout:.0f}")
-    fail_dir = os.path.join("runs", "failures", f"{tag}_{args.suite}{suffix}")
+    if args.osm_town:
+        suffix = suffix.replace("_twophase", "")
+        fail_dir = os.path.join("runs", "failures", args.osm_town, f"{tag}{suffix}")
+    else:
+        fail_dir = os.path.join("runs", "failures", f"{tag}_{args.suite}{suffix}")
     a = {"agent": args.agent, "ckpt": args.ckpt, "route_length": args.route_length, "weather": args.weather,
          "max_steps": args.max_steps, "videos": args.videos, "video_dir": args.video_dir, "tag": tag,
          "dense": args.dense, "renderer": args.renderer, "keiview_roads": args.keiview_roads, "fail_dir": fail_dir,
          "brake_hold": args.brake_hold,
          "red_hold": args.red_hold, "town_style": args.town_style, "jam_fixes": bool(args.jam_fixes),
-         "blocked_timeout": args.blocked_timeout}
+         "blocked_timeout": args.blocked_timeout, "osm_bbox": args.osm_bbox}
     t0 = time.time()
     ctx = mp.get_context("spawn")
     with ctx.Pool(args.workers) as pool:
@@ -289,7 +362,8 @@ def main():
                   f"inf={[i['type'] for i in m['infractions']]} ({m['wall']:.0f}s)", flush=True)
     s = summarize(results)
     print(json.dumps(s, indent=1))
-    out = args.out or f"runs/eval/{tag}_{args.suite}{suffix}.json"
+    out = args.out or (f"runs/eval/{args.osm_town}/{tag}{suffix}.json" if args.osm_town
+                       else f"runs/eval/{tag}_{args.suite}{suffix}.json")
     os.makedirs(os.path.dirname(out), exist_ok=True)
     with open(out, "w") as f:
         json.dump({"summary": s, "results": results, "args": vars(args), "time": time.time() - t0}, f, indent=1)
