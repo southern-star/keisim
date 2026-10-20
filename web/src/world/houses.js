@@ -25,6 +25,12 @@ export async function build(ctx) {
   const lots = [];   // every house lot {x, z, rotY, w, d} (frontage centre; +Z faces the road) — poles run service drops to them
   const collect = (res) => { if (!res) return; for (const k of Object.keys(services)) for (const s of res[k] || []) services[k].push(s); };
   const stats = { houses: 0, mansions: 0, failed: 0 };
+  // Real towns (scripts/import_osm.py) have thousands of lots: the geometry bins are plain JS arrays, and one
+  // bin of a whole 1 km town (10M+ triangles) crashes Chrome's renderer. Emitting the bins every FLUSH_EVERY lots
+  // keeps them small; batchStatic merges the meshes again per spatial cell, so the draw calls stay the same.
+  const FLUSH_EVERY = 150;
+  let n = 0;
+  const tick = () => { if (++n % FLUSH_EVERY === 0) gb.flush(root, 'houses'); };
 
   // ------------------------------------------------------------------ KeiSim buildings
   for (const b of T.buildings) {
@@ -46,6 +52,7 @@ export async function build(ctx) {
           stats.houses++;
         }
       } catch (e) { stats.failed++; console.warn('[houses] lot failed', seed, e); }
+      tick();
     }
   }
   // ------------------------------------------------------------------ KeiView parcels (export: rows 1-3)
@@ -63,6 +70,7 @@ export async function build(ctx) {
         stats.houses++;
       } else { plotParcel(H, F, ctx.rng('plot-' + seed), -p.w / 2, p.w / 2, -p.d, 0, p.kind); stats[p.kind] = (stats[p.kind] || 0) + 1; }
     } catch (e) { stats.failed++; console.warn('[houses] parcel failed', seed, p.kind, e); }
+    tick();
   }
   gb.flush(root, 'houses');
   const far = buildFarTown(H);

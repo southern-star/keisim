@@ -266,8 +266,12 @@ def make_parcels(town: Town, buildings):
 
 
 def export(seed: int, town_cfg=None) -> dict:
-    town = Town(seed, town_cfg)
-    cfg = town.cfg
+    return export_town(Town(seed, town_cfg))
+
+
+def export_town(town: Town) -> dict:
+    """The keisim-town JSON of any Town (procedural, or Town.from_graph: scripts/import_osm.py)."""
+    seed, cfg = town.seed, town.cfg
     x0, y0, x1, y1 = town.bbox
     origin = [round((x0 + x1) / 2, 1), round((y0 + y1) / 2, 1)]
     R, road_mask, walk_mask = surface_masks(town)
@@ -298,6 +302,7 @@ def export(seed: int, town_cfg=None) -> dict:
               "r": round(t["r"], 2), "ch": round(t["ch"], 2)} for t in town.trees]
     return {
         "format": "keisim-town", "version": 1, "seed": seed, "style": town_tag(cfg), "summary": town.summary(),
+        **({"name": town.name} if town.name != str(seed) else {}),
         "origin": origin, "bbox": r2(town.bbox),
         "cfg": {"lane_width": cfg.lane_width, "shoulder": cfg.shoulder, "sidewalk_width": cfg.sidewalk_width,
                 "road_half_width": cfg.road_half_width, "walk_outer": cfg.walk_outer,
