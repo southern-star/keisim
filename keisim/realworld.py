@@ -8,8 +8,8 @@ projected onto a local tangent plane (metres, +x east, +y north, box centre at t
 nodes shared by several ways, and cleaned up into something KeiSim can represent, i.e. two-way roads of one lane
 per direction meeting at junctions: one-way roads, roads of 3+ lanes, service roads and footways are dropped, dead
 ends pruned, straight degree-2 nodes merged into their roads (sharp ones become bends), junctions closer than
-~25 m contracted into one (KeiSim's junctions are circles of 9.5 m or more), and the largest connected component
-kept. Junctions with 3+ arms that have a `highway=traffic_signals` node within SIGNAL_RADIUS get KeiSim signals;
+~21 m contracted into one (KeiSim's junctions are circles: 8 m for residential roads, 8.25 m for streets,
+Town.graph_min_radius), and the largest connected component kept. Junctions with 3+ arms that have a `highway=traffic_signals` node within SIGNAL_RADIUS get KeiSim signals;
 the others are priority crossings (roadnet._make_yields). OSM highway classes map to config.ROAD_KINDS
 (HIGHWAY_KINDS). Building outlines become oriented boxes (cv2.minAreaRect) with `height`, `building:levels` x 3 m,
 or 7 m; the Town drops those over a road or sidewalk.
@@ -187,9 +187,10 @@ class Graph:
         angs = np.array([a for a, _ in arms])
         gaps = np.diff(np.concatenate([angs, [angs[0] + 2 * math.pi]]))
         gmin = float(gaps.min())
-        wo = max(RoadSpec.of_kind(self.edges[e]["kind"], self.cfg).walk_outer for _, e in arms)
+        specs = [RoadSpec.of_kind(self.edges[e]["kind"], self.cfg) for _, e in arms]
+        wo = max(rs.walk_outer for rs in specs)
         if len(arms) >= 3:
-            return max(9.5, wo / math.tan(gmin / 2.0) + 1.5)
+            return max(Town.graph_min_radius(specs, gmin), wo / math.tan(gmin / 2.0) + 1.5)
         wo = max(wo, self.cfg.walk_outer)
         return max(3.0, wo / math.tan(min(gmin, 2 * math.pi - gmin) / 2.0) + 1.0)
 
@@ -282,8 +283,9 @@ class Graph:
             self.add_edge(a, b, np.concatenate([p1, p2[1:]]), kind, way)
             del self.adj[n]
 
-    def contract_short(self, gap=6.0):
-        """Edges too short for KeiSim's junction circles (est_radius at both ends plus `gap` m of road) are
+    def contract_short(self, gap=5.0):
+        """Edges too short for KeiSim's junction circles (est_radius at both ends plus `gap` m of road between them,
+        the stop line's setback) are
         contracted: the two end nodes become one (at the junction's position if only one is a junction, else
         midway) and the edges of the other move over. Self-loops that result are dropped."""
         changed = True
@@ -477,6 +479,9 @@ def graph_town(G, cfg, seed=0, buildings=None, name="osm"):
     signalized = {index[n] for n in G.signals}
     town = Town.from_graph(seed, cfg, positions, roads, signalized, buildings, name=name)
     town.osm = {"node_ids": order, "edge_ways": [G.edges[k]["way"] for k in sorted(G.edges)]}
+    # the NPC fleet of 6 m residential roads: vans and 2 t trucks (6.0 x 2.0 m), not the 7.6 m trucks of the
+    # procedural towns, whose front corner sweeps into the next lane on the tight turns of these junctions
+    town.max_vehicle_dims = (6.0, 2.0)
     return town
 
 

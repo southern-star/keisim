@@ -5,10 +5,12 @@ import math
 import os
 import sys
 
+import numpy as np
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from keisim.config import EnvConfig  # noqa: E402
-from keisim.realworld import Projection, osm_town, road_kind  # noqa: E402
+from keisim.realworld import Projection, osm_town, road_kind, town_config  # noqa: E402
 
 LAT0, LON0 = 43.09, 141.366
 BBOX = (LAT0 - 0.0025, LON0 - 0.0035, LAT0 + 0.0025, LON0 + 0.0035)
@@ -94,6 +96,30 @@ def test_mini_town_builds_and_expert_drives():
     while not done:
         _, _, done, info = env.step(env.expert_action())
     assert info["status"] == "success" and info["DS"] > 0.99, info
+
+
+def test_graph_junction_radius_follows_road_width():
+    """Town.from_graph sizes its 3+-arm junctions from the arms' cross-sections (residential 8 m, streets 8.25 m, a
+    skew raises the floor) and every turn through them stays drivable at the car's minimum turning radius; the
+    procedural _build keeps its 9.5 m (test_procedural_export_unchanged)."""
+    from keisim.geometry import curvature_of
+    from keisim.roadnet import RoadSpec, Town
+    from keisim.vehicle import EgoVehicle
+    cfg = town_config()
+    res, st = RoadSpec.of_kind("residential", cfg), RoadSpec.of_kind("street", cfg)
+    assert abs(Town.graph_min_radius([res]) - 8.0) < 1e-9 and abs(Town.graph_min_radius([st]) - 8.25) < 1e-9
+    assert abs(Town.graph_min_radius([res, st]) - 8.25) < 1e-9 and Town.graph_min_radius([res], math.radians(70)) > 8.5
+    town = osm_town(BBOX, osm=mini_osm(), name="mini")
+    radius = {(round(float(J.pos[0])), round(float(J.pos[1]))): J.radius for J in town.junctions}
+    assert abs(radius[(90, 90)] - 8.0) < 1e-6 and abs(radius[(0, 0)] - 8.25) < 1e-6, radius
+    assert town.max_vehicle_dims == (6.0, 2.0) and town.mirrored_turn_yield
+    for J in town.junctions:
+        if len(J.arms) >= 3:
+            assert J.radius >= Town.graph_min_radius([town.roads[a["road"]].spec for a in J.arms]) - 1e-9
+    r_car = EgoVehicle.WHEELBASE / math.tan(EgoVehicle.MAX_STEER)
+    for lane in town.lanes:
+        if lane.kind == "conn" and lane.turn != "straight" and len(town.junctions[lane.junction].arms) >= 3:
+            assert 1.0 / np.abs(curvature_of(lane.pts)).max() >= r_car, (lane.junction, lane.turn)
 
 
 def test_procedural_export_unchanged():

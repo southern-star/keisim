@@ -213,6 +213,8 @@ class Traffic:
 
     # --------------------------------------------------------------- spawning
     def _sample_dims(self):
+        """(length, width, height), kind (1: truck). Towns with max_vehicle_dims (keisim.realworld) cap the length
+        and width after the draw (the random stream is the same)."""
         r = self.rng.random()
         if r < 0.62:
             return np.array([self.rng.uniform(4.0, 4.8), self.rng.uniform(1.68, 1.85), self.rng.uniform(1.4, 1.6)]), 0
@@ -220,7 +222,11 @@ class Traffic:
             return np.array([self.rng.uniform(3.35, 3.45), 1.48, self.rng.uniform(1.6, 1.8)]), 0  # kei car
         if r < 0.92:
             return np.array([self.rng.uniform(4.6, 5.0), self.rng.uniform(1.8, 1.95), self.rng.uniform(1.75, 2.0)]), 0
-        return np.array([self.rng.uniform(6.0, 7.6), self.rng.uniform(2.0, 2.25), self.rng.uniform(2.6, 3.0)]), 1
+        dims = np.array([self.rng.uniform(6.0, 7.6), self.rng.uniform(2.0, 2.25), self.rng.uniform(2.6, 3.0)])
+        cap = getattr(self.town, "max_vehicle_dims", None)
+        if cap is not None:
+            dims[:2] = np.minimum(dims[:2], cap)
+        return dims, 1
 
     def spawn_many(self, n, avoid_xy, avoid_r=12.0, lanes=None, s_range=None):
         town, rng = self.town, self.rng

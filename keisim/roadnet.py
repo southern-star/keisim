@@ -21,8 +21,11 @@ from .geometry import (Polyline, arc_bezier, box_corners, cubic_bezier, curvatur
                        headings_of, offset_polyline, resample, unit, wrap)
 
 LANE_DS = 0.5
+TURN_RADIUS_MIN = 6.5     # m, the lane-centre arc of a right-angle turn in a Town.from_graph junction (graph_min_radius)
+TURN_RADIUS_DRIVABLE = 4.5   # m, the tightest arc any junction connector may ask of the car (EgoVehicle: 3.95 m)
 NARROW_LANE = 3.0        # m: lanes narrower than this keep trucks out, and their bends are taken one at a time
 NARROW_PASS = 2.9        # m: two turns in an unsignalised bend whose centre lines come closer than this give way
+MIRROR_PASS = 3.6        # m: a right turn whose centre line runs this close to the oncoming left turn's gives way to it
 NARROW_CLEAR = 1.9       # m: ... and the outer one waits with its front corners and sides this far from the inner
                          # one's centre line (its half width + the swing of its body in the turn + a margin)
 
@@ -280,10 +283,11 @@ class Town:
         for J in self.junctions:
             if not J.arms:
                 raise ValueError(f"junction {J.id} has no roads")
-            wo = max(roads[arm["spec"]][3].walk_outer for arm in J.arms)
+            specs = [roads[arm["spec"]][3] for arm in J.arms]
+            wo = max(rs.walk_outer for rs in specs)
             if len(J.arms) < 3:
                 wo = max(wo, self.cfg.walk_outer)
-            self._size_junction(J, wo)
+            self._size_junction(J, wo, specs)
             J.signalized = J.id in signalized and len(J.arms) >= 3
         for rid, (a, b, pts, spec) in enumerate(roads):
             Ja, Jb = self.junctions[a], self.junctions[b]
@@ -301,6 +305,7 @@ class Town:
                 arm["angle"] = float(math.atan2(p[1] - J.pos[1], p[0] - J.pos[0]))
         for J in self.junctions:
             J.arms.sort(key=lambda x: x["angle"])
+        self.mirrored_turn_yield = True
         self._build_from_graph(buildings)
         return self
 
@@ -332,6 +337,8 @@ class Town:
         self.markings: list[np.ndarray] = []      # white paint polygons
         self.markings_yellow: list[np.ndarray] = []   # yellow paint (centre lines of main roads)
         self.crosswalks: list[np.ndarray] = []
+        self.mirrored_turn_yield = False     # Town.from_graph: right turns give way to the oncoming left turn
+        self.max_vehicle_dims = None         # (length, width) cap of the NPC cars (keisim.realworld: narrow roads)
 
     # ------------------------------------------------------------------ build
     def _build(self):
@@ -418,17 +425,40 @@ class Town:
         self._build_from_graph()
 
     @staticmethod
-    def _size_junction(J, wo):
+    def _size_junction(J, wo, specs=None):
         """Sort the arms counter-clockwise and set the junction radius from the tightest angle between neighbouring
-        arms and the widest arm's walk_outer `wo` (3+ arms: at least 9.5 m; bends: at least 3 m)."""
+        arms and the widest arm's walk_outer `wo` (3+ arms: at least 9.5 m, or graph_min_radius of the arms'
+        cross-sections `specs` when those are given, i.e. in Town.from_graph; bends: at least 3 m)."""
         J.arms.sort(key=lambda a: a["angle"])
         angs = np.array([a["angle"] for a in J.arms])
         gaps = np.diff(np.concatenate([angs, [angs[0] + 2 * math.pi]]))
         gmin = float(gaps.min())
         if len(J.arms) >= 3:
-            J.radius = max(9.5, wo / math.tan(gmin / 2.0) + 1.5)
+            floor = 9.5 if specs is None else Town.graph_min_radius(specs, gmin)
+            J.radius = max(floor, wo / math.tan(gmin / 2.0) + 1.5)
         else:
             J.radius = max(3.0, wo / math.tan(min(gmin, 2 * math.pi - gmin) / 2.0) + 1.0)
+
+    @staticmethod
+    def graph_min_radius(specs, gmin=math.pi / 2):
+        """Floor of a 3+-arm junction's radius in Town.from_graph towns, from the cross-sections of its arms and the
+        tightest angle `gmin` between neighbouring arms: the procedural 9.5 m fits 7-8 m streets with sidewalks but
+        makes the crossings of 6 m residential roads (about 8 m across in reality) look like blobs. The circle must
+        clear the widest arm's sidewalk corners at a right angle (walk_outer + 1.5 m, the formula of _size_junction
+        at 90 deg); give the right-angle turn between lane centres (radius - lane_width / 2) the arc TURN_RADIUS_MIN,
+        which the pure pursuit controller sets: leaving a left turn it drifts outwards and still points outwards,
+        so the car's body reaches 1.74 m right of its lane centre on the procedural 8 m arcs, 1.87 m on 6.5 m
+        arcs, 1.92 m on 5.5 m arcs and 1.98 m on 4.5 m arcs (scripts in the hand-over note); against a 2 m wide
+        van entering its own turn from the road being entered, 3 m lane spacing leaves 0.13 m at 6.5 m and nothing
+        at 4.5 m (two expert collisions per 40 routes in the Sapporo town); and keep the sharpest turn, an arc of
+        radius * tan(gmin / 2) - lane_width / 2 (both lanes sit on the inside of the wedge), drivable at
+        TURN_RADIUS_DRIVABLE (the car's minimum is 2.7 m / tan 0.6 = 3.95 m). Right-angle crossings: 8.0 m for
+        residential roads, 8.25 m for streets, 9.25 m for main roads; a 70 deg skew raises the residential floor
+        to 8.6 m, 45 deg to 14.5 m."""
+        wo = max(rs.walk_outer for rs in specs)
+        lane = max(rs.lane_width for rs in specs)
+        return max(wo + 1.5, lane / 2.0 + TURN_RADIUS_MIN,
+                   (TURN_RADIUS_DRIVABLE + lane / 2.0) / math.tan(min(gmin, math.pi / 2) / 2.0))
 
     def _build_from_graph(self, buildings=None):
         """Everything derived from self.junctions (pos, arms [spec = road id, end, angle; sorted], radius,
@@ -698,7 +728,13 @@ class Town:
         types: main > street > residential > alley), else the one with the other approach on its left (左方優先).
         web/src/traffic.js makeYields() makes the same decisions for the browser demo.
         In mixed towns the bends (unsignalised) whose two turns pass too closely are taken one at a time the same
-        way: the outer turn waits clear of the inner one (_narrow_wait), possibly before the bend."""
+        way: the outer turn waits clear of the inner one (_narrow_wait), possibly before the bend.
+        Towns from a graph (mirrored_turn_yield): a right turn also gives way, at its entry, to the oncoming left turn
+        around the same corner when their centre lines run closer than MIRROR_PASS (道路交通法: 右折車は対向の
+        左折車の進行も妨げない). On the 3 m lanes of real residential roads the two bodies pass within decimetres
+        (concentric arcs 3 m apart; the car's corners and its tracking error eat the rest), which cost the expert
+        two collisions in the Sapporo town at junction radius 6 m; the procedural towns' 3.5 m streets and 9.5 m
+        junctions leave more room and keep the old rules."""
         rank = {"right": 0, "left": 1, "straight": 2}
         for lane in self.lanes:
             lane.yields, lane.wait_s = [], None
@@ -744,6 +780,19 @@ class Town:
                     a.yields.append((b.id, sa, sb))
                 else:
                     b.yields.append((a.id, sb, sa))
+            if self.mirrored_turn_yield and len(J.arms) >= 3:
+                for a in conns:
+                    if a.turn != "right":
+                        continue
+                    for b in conns:
+                        if b.turn != "left" or b.pred[0] == a.pred[0] or any(y[0] == b.id for y in a.yields):
+                            continue
+                        if (self.lanes[b.pred[0]].road != self.lanes[a.succ[0]].road or
+                                self.lanes[b.succ[0]].road != self.lanes[a.pred[0]].road):
+                            continue                         # not the same corner the other way round
+                        d = np.hypot(*(a.poly.pts[:, None, :] - b.poly.pts[None, :, :]).transpose(2, 0, 1))
+                        if d.min() < MIRROR_PASS:            # wait at the entry until the left turn has cleared
+                            a.yields.append((b.id, 0.0, float(b.length)))
             for a in conns:
                 if not a.yields:
                     continue
