@@ -49,6 +49,10 @@ SUITES = {
     # several runs on long3 + long3b, so its scores there are optimistic)
     "long3c": [(t, 9400 + e) for t in range(1010, 1020) for e in range(2)],
     "long3d": [(t, 9500 + e) for t in range(1010, 1020) for e in range(2)],
+    # more confirmation sets (since KeiPilot v0.8 models are judged on long3c + long3d): v16 vs v17 differed there by
+    # 3 vs 8 collisions in 160 routes, within the run-to-run noise of these chaotic long routes
+    "long3e": [(t, 9600 + e) for t in range(1010, 1020) for e in range(2)],
+    "long3f": [(t, 9700 + e) for t in range(1010, 1020) for e in range(2)],
 }
 CAP_SCALE = {"classic": 1, "varied": 2, "twophase": 2, "roadtypes": 2}      # NPC count caps per town style
 # per-suite defaults for arguments left unset on the command line
@@ -64,6 +68,7 @@ SUITE_DEFAULTS = {
               "blocked_timeout": 180.0},
 }
 SUITE_DEFAULTS["long3c"] = SUITE_DEFAULTS["long3d"] = SUITE_DEFAULTS["long3"]
+SUITE_DEFAULTS["long3e"] = SUITE_DEFAULTS["long3f"] = SUITE_DEFAULTS["long3"]
 
 
 _ENV = None
