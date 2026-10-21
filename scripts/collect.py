@@ -412,6 +412,9 @@ def main():
         p.join()
     print(f"done in {time.time() - t0:.0f}s -> {args.out}")
     report(args.out)
+    failed = [i for i, p in enumerate(procs) if p.exitcode != 0]
+    if failed:                  # e.g. KeiView without node on PATH: the workers die, the run must not look complete
+        sys.exit(f"workers {failed} failed (exit codes {[procs[i].exitcode for i in failed]})")
 
 
 if __name__ == "__main__":
