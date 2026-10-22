@@ -25,6 +25,11 @@ LATE_COMMIT = 1.0                        # m: past its wait point, a right turn 
 LATE_MARGIN = 1.0                        # s: ... if a moving car with priority arrives sooner than it clears + this
 CROSSING_V = 10.0 / 3.6                  # m/s: 徐行 at the wait point of an unsignalised crossing the ego gives way at
 CROSSING_B = 1.6                         # m/s^2: ... slowing down towards it (the curve envelope's deceleration)
+STOP_SIGN_MARGIN = 1.0                   # m: 止まれ: the front bumper stops this far before the stop line (still in view)
+STOP_SIGN_ZONE = 1.5                     # m: ... and the stop counts when the ego stands within this much more of it
+STOP_SIGN_V = 0.05                       # m/s: standing (a full stop: 一時停止)
+STOP_SIGN_OVER = 1.5                     # m: a car that rolled this far past the line without stopping stops there;
+                                         # further in, the junction's own rules take over
 
 
 def clear_time(d_cross, v, length):
@@ -87,6 +92,7 @@ class Expert:
 
     def __init__(self, env):
         self.env = env
+        self._ss_route, self._ss_done = None, set()    # 止まれ lines (route s) the ego has stopped at on this route
 
     def path_local(self, route, s, pose):
         pts = route.poly.interp(np.minimum(s + PATH_S, route.poly.length))
@@ -97,6 +103,7 @@ class Expert:
         w = env.world
         route = env.route
         ego = w.ego
+        real = pose is None and s is None           # the ego itself (not a displaced camera): updates the 止まれ memory
         if pose is None:
             pose = ego.pose
         if s is None:
@@ -214,6 +221,31 @@ class Expert:
                         yield_tta = min(tta, YIELD_TTA_MAX)
                         if tta < clear_time(d_cross, v, ego.LENGTH) + LATE_MARGIN:
                             target, reason = 0.0, "yield"
+                break
+
+        # --- 止まれ (Town.from_graph: the minor road's approaches to priority crossings, Lane.stop_sign_s). The ego
+        # stops with its front bumper STOP_SIGN_MARGIN before the painted line (the line stays in the camera's view),
+        # once: after standing there (or up to STOP_SIGN_OVER past the line, if it rolled over it) the line no longer
+        # binds, and the 徐行 and give-way rules above take the ego on to its connector's wait point. The memory of
+        # the stops made is per route and only the ego itself updates it (not the plan of a displaced camera). The
+        # rule depends on the ego speed only through that memory, so it is part of target_nolight.
+        if route.stop_signs:
+            if self._ss_route is not route:
+                self._ss_route, self._ss_done = route, set()
+            s_front = s + hl
+            for s_line, lid in route.stop_signs:
+                d = s_line - s_front
+                if d < -STOP_SIGN_OVER or s_line in self._ss_done:
+                    continue
+                if d > 45.0:
+                    break
+                if v < STOP_SIGN_V and d <= STOP_SIGN_MARGIN + STOP_SIGN_ZONE:
+                    if real:
+                        self._ss_done.add(s_line)
+                    continue
+                v_s = stop_profile(d - STOP_SIGN_MARGIN, self.B_COMF)
+                if v_s < target:
+                    target, reason = v_s, "stop_sign"
                 break
 
         # --- traffic light. The speed-independent inputs of the decision are returned too (lt_*), so recorded

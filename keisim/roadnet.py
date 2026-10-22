@@ -26,6 +26,7 @@ TURN_RADIUS_DRIVABLE = 4.5   # m, the tightest arc any junction connector may as
 NARROW_LANE = 3.0        # m: lanes narrower than this keep trucks out, and their bends are taken one at a time
 NARROW_PASS = 2.9        # m: two turns in an unsignalised bend whose centre lines come closer than this give way
 MIRROR_PASS = 3.6        # m: a right turn whose centre line runs this close to the oncoming left turn's gives way to it
+STOP_SIGN_SETBACK = 2.0  # m: the 止まれ stop line of a minor road's approach to a priority crossing, before its lane's end
 NARROW_CLEAR = 1.9       # m: ... and the outer one waits with its front corners and sides this far from the inner
                          # one's centre line (its half width + the swing of its body in the turn + a margin)
 
@@ -54,6 +55,7 @@ class Lane:
         self.speed_limit = speed_limit
         self.width = width                # lane width (connectors: the wider of the two roads' lanes)
         self.stop_s = None                # arc length of the stop line
+        self.stop_sign_s = None           # arc length of a 止まれ stop line (minor road before a priority crossing)
         self.signal = None                # (junction id, phase index)
 
     def __repr__(self):
@@ -306,6 +308,8 @@ class Town:
         for J in self.junctions:
             J.arms.sort(key=lambda x: x["angle"])
         self.mirrored_turn_yield = True
+        self.stop_signs = True
+        self.yield_lookback = True
         self._build_from_graph(buildings)
         return self
 
@@ -338,6 +342,8 @@ class Town:
         self.markings_yellow: list[np.ndarray] = []   # yellow paint (centre lines of main roads)
         self.crosswalks: list[np.ndarray] = []
         self.mirrored_turn_yield = False     # Town.from_graph: right turns give way to the oncoming left turn
+        self.stop_signs = False              # Town.from_graph: 止まれ on the minor roads' approaches to priority crossings
+        self.yield_lookback = False          # Town.from_graph: Traffic.min_arrival looks into the junction before
         self.max_vehicle_dims = None         # (length, width) cap of the NPC cars (keisim.realworld: narrow roads)
 
     # ------------------------------------------------------------------ build
@@ -642,6 +648,21 @@ class Town:
             b = offset_polyline(pts, off - width / 2)
             return np.concatenate([a, b[::-1]])
 
+        def stop_line(lane, s, rs):
+            """Stop line across incoming `lane` at arc length `s` (centre-line side to edge), 0.45 m deep."""
+            p = lane.poly.interp(s)
+            h = float(lane.poly.heading(s))
+            u, n = unit(h), unit(h + math.pi / 2)
+            inner = -side * (rs.lane_width / 2.0)   # towards road centre
+            if rs.edge == "classic":
+                outer = side * (rs.lane_width / 2.0 + rs.shoulder - 0.35)
+            else:                                    # up to the edge line
+                outer = side * (rs.lane_width / 2.0 + 0.2)
+            a0 = p + n * inner
+            a1 = p + n * outer
+            w = 0.45
+            return np.array([a0 - u * w / 2, a1 - u * w / 2, a1 + u * w / 2, a0 + u * w / 2])
+
         for road in self.roads:
             rs = road.spec
             hw = rs.half_width
@@ -675,10 +696,8 @@ class Town:
                 m = (s >= s0) & (s <= s1)
                 if m.sum() >= 2:
                     self.markings.append(strip(c[m], 0.0, mw))
-            # stop lines and crosswalks at signalised ends
+            # stop lines and crosswalks at signalised ends; a stop line only at the minor road's 止まれ
             for end, J in (("a", self.junctions[road.a]), ("b", self.junctions[road.b])):
-                if not J.signalized:
-                    continue
                 if end == "b":
                     lane = self.lanes[road.lane_ab]
                     s_end = L
@@ -687,20 +706,11 @@ class Town:
                     lane = self.lanes[road.lane_ba]
                     s_end = 0.0
                     direction = -1.0
-                # stop line across incoming lane (centre-line side to edge)
-                sl_s = lane.stop_s
-                p = lane.poly.interp(sl_s)
-                h = float(lane.poly.heading(sl_s))
-                u, n = unit(h), unit(h + math.pi / 2)
-                inner = -side * (rs.lane_width / 2.0)   # towards road centre
-                if rs.edge == "classic":
-                    outer = side * (rs.lane_width / 2.0 + rs.shoulder - 0.35)
-                else:                                    # up to the edge line
-                    outer = side * (rs.lane_width / 2.0 + 0.2)
-                a0 = p + n * inner
-                a1 = p + n * outer
-                w = 0.45
-                self.markings.append(np.array([a0 - u * w / 2, a1 - u * w / 2, a1 + u * w / 2, a0 + u * w / 2]))
+                if not J.signalized:
+                    if lane.stop_sign_s is not None:
+                        self.markings.append(stop_line(lane, lane.stop_sign_s, rs))
+                    continue
+                self.markings.append(stop_line(lane, lane.stop_s, rs))
                 # crosswalk (zebra) between stop line and junction
                 cs0 = s_end - direction * 4.2
                 cs1 = s_end - direction * 0.8
@@ -734,16 +744,24 @@ class Town:
         左折車の進行も妨げない). On the 3 m lanes of real residential roads the two bodies pass within decimetres
         (concentric arcs 3 m apart; the car's corners and its tracking error eat the rest), which cost the expert
         two collisions in the Sapporo town at junction radius 6 m; the procedural towns' 3.5 m streets and 9.5 m
-        junctions leave more room and keep the old rules."""
+        junctions leave more room and keep the old rules.
+        Towns from a graph (stop_signs) also put a 止まれ stop line on every approach of the minor road to a priority
+        crossing, STOP_SIGN_SETBACK before the end of its lane (Lane.stop_sign_s; _make_markings paints it): the
+        expert stops there once, then goes on to its connector's wait point and gives way from there."""
         rank = {"right": 0, "left": 1, "straight": 2}
         for lane in self.lanes:
-            lane.yields, lane.wait_s = [], None
+            lane.yields, lane.wait_s, lane.stop_sign_s = [], None, None
         for J in self.junctions:
             narrow = not J.signalized and self.cfg.road_types == "mixed" and len(J.arms) < 3
             prio = not J.signalized and len(J.arms) >= 3
             if not (J.signalized or narrow or prio):
                 continue
             major = self._priority_groups(J) if prio else None
+            if prio and self.stop_signs:
+                for arm in J.arms:
+                    if major[arm["in"]] == 1:
+                        lin = self.lanes[arm["in"]]
+                        lin.stop_sign_s = max(0.5, lin.length - STOP_SIGN_SETBACK)
             conns = [self.lanes[c] for c in J.connectors]
             equals = []
             for a in conns:

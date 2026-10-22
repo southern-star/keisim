@@ -150,3 +150,46 @@ def test_graph_duplicate_and_coincident_arms():
     G.add_edge(1, 5, [(0.0, 0.0), (60.0, 1.0)], "residential", 14)                   # 1 deg from the edge to node 2
     r = G.est_radius(1)
     assert math.isfinite(r) and r < 12.0, r
+
+
+def test_stop_signs():
+    """止まれ (Town.from_graph): every approach of the minor road to a priority crossing, and no other lane, gets a
+    stop line (painted as a marking); the expert stands still at each one it passes, with its front bumper about
+    STOP_SIGN_MARGIN before the line, and still completes the route. Signalised junctions keep their own lines."""
+    from keisim.expert import STOP_SIGN_MARGIN, STOP_SIGN_V
+    town = osm_town(BBOX, osm=mini_osm(), name="mini")
+    assert town.stop_signs and town.yield_lookback
+    want = set()
+    for J in town.junctions:
+        if not J.signalized and len(J.arms) >= 3:
+            want |= {lid for lid, g in town._priority_groups(J).items() if g == 1}
+    have = {l.id for l in town.lanes if l.stop_sign_s is not None}
+    assert want and have == want, (want, have)
+    assert all(town.lanes[l].stop_s is None for l in have)                    # never a signal's approach
+    signal_lines = sum(l.stop_s is not None for l in town.lanes)
+    town2 = osm_town(BBOX, osm=mini_osm(), name="mini2")
+    town2.stop_signs = False
+    town2._make_yields()
+    town2.markings = []
+    town2._make_markings()
+    assert len(town.markings) == len(town2.markings) + len(have) and signal_lines > 0
+    from keisim.env import KeiEnv
+    env = KeiEnv(EnvConfig(town=town.cfg, render_rgb=False, render_seg=False))
+    passed = 0
+    for ep in range(3):
+        env.reset(town, episode_seed=ep, route_length=300, render=False)
+        lines = [s for s, _ in env.route.stop_signs]
+        vmin = {s: 99.0 for s in lines}
+        hl = env.world.ego.LENGTH / 2
+        done = False
+        while not done:
+            front = env.s_ego + hl
+            for s in lines:
+                if s - STOP_SIGN_MARGIN - 2.0 <= front <= s + 0.5:
+                    vmin[s] = min(vmin[s], env.world.ego.v)
+            _, _, done, info = env.step(env.expert_action())
+        assert info["status"] == "success", info
+        gone = [s for s in lines if s < env.s_ego]
+        assert all(vmin[s] < STOP_SIGN_V for s in gone), vmin
+        passed += len(gone)
+    assert passed > 0
