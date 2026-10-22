@@ -22,10 +22,10 @@ PENALTY = {"vehicle": 0.60, "pedestrian": 0.50, "static": 0.65, "red_light": 0.7
 
 
 class TownAssets:
-    def __init__(self, seed, cfg: EnvConfig):
+    def __init__(self, seed, cfg: EnvConfig, town=None):
         self.seed = seed
         self.cfg = cfg
-        self.town = Town(seed, cfg.town)
+        self.town = town if town is not None else Town(seed, cfg.town)
         self._tex = self._static = self._cam = self._bev = None
 
     @property
@@ -52,11 +52,17 @@ _CACHE: "OrderedDict[tuple, TownAssets]" = OrderedDict()
 
 
 def get_assets(seed, cfg: EnvConfig, max_cache=3) -> TownAssets:
-    key = (int(seed), id(cfg.town), id(cfg.camera))
+    """Assets of the procedural town `seed` (cfg.town), or of an explicit Town passed in its place (Town.from_graph)."""
+    town = None
+    if isinstance(seed, Town):
+        town, seed = seed, seed.seed
+        key = (id(town), id(cfg.camera))
+    else:
+        key = (int(seed), id(cfg.town), id(cfg.camera))
     if key in _CACHE:
         _CACHE.move_to_end(key)
         return _CACHE[key]
-    a = TownAssets(seed, cfg)
+    a = TownAssets(seed, cfg, town)
     _CACHE[key] = a
     while len(_CACHE) > max_cache:
         _CACHE.popitem(last=False)
@@ -92,10 +98,11 @@ class KeiEnv:
 
     # ------------------------------------------------------------------ reset
     def reset(self, town_seed=0, episode_seed=None, route_length=None, weather=None, render=True):
+        """town_seed: a procedural town's seed, or a Town (keisim/realworld.py) to drive in."""
         cfg = self.cfg
         self.assets = get_assets(town_seed, cfg)
         town = self.assets.town
-        self.town_seed, self.episode_seed = town_seed, episode_seed
+        self.town_seed, self.episode_seed = town.seed, episode_seed
         rng = np.random.default_rng(episode_seed)
         self.rng = rng
         L = route_length if route_length is not None else rng.uniform(*cfg.route_length)

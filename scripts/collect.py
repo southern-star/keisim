@@ -28,7 +28,8 @@ from keipilot.data import ShardWriter, write_meta  # noqa: E402
 from keisim.config import TOWN_STYLES, town_config  # noqa: E402
 from keisim.expert import LABEL_VERSION  # noqa: E402
 
-REASONS = {"cruise": 0, "curve": 1, "vehicle": 2, "pedestrian": 3, "red_light": 4, "junction_blocked": 5, "yield": 6}
+REASONS = {"cruise": 0, "curve": 1, "vehicle": 2, "pedestrian": 3, "red_light": 4, "junction_blocked": 5, "yield": 6,
+           "crossing": 7}
 WEATHERS = {"noon": 0, "cloudy": 1, "sunset": 2, "fog": 3}
 
 
@@ -124,6 +125,22 @@ def lead_at_edge(env, plan, max_gap):
     return abs(route_turn_deg(plan["path"])) >= LEAD_TURN_DEG
 
 
+# real towns (keisim/realworld.py, scripts/import_osm.py): name -> box (south, west, north, east); the Overpass answer is
+# cached at data/osm/<name>.json. osm_sapporo is the evaluation town (evaluate.py --osm_town, episodes 100-119).
+OSM_BOXES = {
+    "osm_sapporo": (43.088, 141.360, 43.097, 141.372),
+    "osm_sapporo_n": (43.097, 141.360, 43.106, 141.372),
+    "osm_sapporo_e": (43.088, 141.372, 43.097, 141.384),
+    "osm_sapporo_s": (43.079, 141.360, 43.088, 141.372),
+}
+
+
+def osm_spec(spec):
+    """--osm_towns entry: NAME (a box of OSM_BOXES) or NAME:S,W,N,E."""
+    name, _, box = spec.partition(":")
+    return name, (tuple(float(x) for x in box.split(",")) if box else OSM_BOXES[name])
+
+
 # per-worker counts (stats_wNN.json, saved with every shard so a resumed run keeps them): every recording step
 # (steps_*) and the kept frames
 STAT_KEYS = ("steps", "steps_focus", "steps_lead_edge", "frames", "focus", "lead_edge", "lead_edge_vehicle",
@@ -172,9 +189,20 @@ def worker(wid, args, quota, out_dir, counter):
     cfg = EnvConfig()
     cfg.town = town_config(args.town_style)
     cfg.traffic.box_rule = cfg.traffic.release_hidden = bool(args.jam_fixes)
-    if args.town_style != "classic":                   # varied towns: twice the caps keep the classic density
+    if args.town_style != "classic" or args.osm_towns:   # varied / real towns: twice the caps keep the classic density
         cfg.traffic.max_vehicles *= 2
         cfg.traffic.max_peds *= 2
+    # real towns: each worker builds its own variant of every box once (seed: signal timings, trees, building colours),
+    # named apart so KeiView's town files (web/.towns/town_<name>.json) never collide
+    osm = {}
+
+    def osm_town_of(k):
+        if k not in osm:
+            from keisim.realworld import osm_town
+            name, box = osm_spec(args.osm_towns[k])
+            seed = args.osm_seed0 + 100 * k + wid
+            osm[k] = osm_town(box, cache=f"data/osm/{name}.json", name=f"{name}_s{seed}", seed=seed)
+        return osm[k]
     cfg.route_length = (args.route_min, args.route_max)
     cfg.route_deviation = 4.0 if args.mode == "dagger" else cfg.route_deviation
     cfg.render_rgb = cfg.render_seg = False
@@ -210,7 +238,12 @@ def worker(wid, args, quota, out_dir, counter):
     town, left = None, 0
     while n < quota:
         if left <= 0:
-            town, left = int(rng.integers(args.town_lo, args.town_hi)), args.episodes_per_town
+            if args.osm_towns:
+                town = osm_town_of(int(rng.integers(len(args.osm_towns))))
+                env.cfg.town = town.cfg
+            else:
+                town = int(rng.integers(args.town_lo, args.town_hi))
+            left = args.episodes_per_town
         left -= 1
         ep_seed = int(rng.integers(1 << 40))
         env.reset(town_seed=town, episode_seed=ep_seed, render=False)
@@ -354,12 +387,20 @@ def main():
                     help="town style (keisim/config.py); twophase: right turns wait for gaps in the oncoming traffic; "
                          "roadtypes: twophase with main roads, residential roads without sidewalks and alleys")
     ap.add_argument("--jam_fixes", type=int, default=0, choices=[0, 1], help="box rule + hidden jam release (long2/3)")
+    ap.add_argument("--osm_towns", nargs="*", default=[], metavar="NAME[:S,W,N,E]",
+                    help="drive real towns (keisim/realworld.py; boxes of OSM_BOXES or given) instead of procedural "
+                         "ones; a town is picked per --episodes_per_town episodes. Use --jam_fixes 1 as evaluate.py does")
+    ap.add_argument("--osm_seed0", type=int, default=1000, help="seeds of the real towns' variants (per worker)")
+    ap.add_argument("--allow_eval_town", action="store_true", help="let --osm_towns include osm_sapporo (tests only)")
     ap.add_argument("--history", type=float, default=0.0, help="also store the frame this many s earlier (multi-frame)")
     ap.add_argument("--segment", type=float, default=3.0, help="with --history: seconds a virtual camera is kept")
     args = ap.parse_args()
+    if any(osm_spec(t)[0] == "osm_sapporo" for t in args.osm_towns) and not args.allow_eval_town:
+        ap.error("osm_sapporo is the evaluation town (evaluate.py --osm_town): collect in other boxes")
     quota = [args.frames // args.workers + (1 if i < args.frames % args.workers else 0) for i in range(args.workers)]
     write_meta(args.out, label_version=LABEL_VERSION, mode=args.mode, ckpt=args.ckpt, frames=args.frames, history=args.history,
                renderer=args.renderer, town_style=args.town_style, jam_fixes=args.jam_fixes, late_yield=True,
+               **({"osm_towns": args.osm_towns, "osm_seed0": args.osm_seed0} if args.osm_towns else {}),
                **({"keiview_roads": args.keiview_roads} if args.keiview_roads != "plain" else {}))
     ctx = mp.get_context("spawn" if args.mode == "dagger" else "fork")
     counter = ctx.Value("i", 0)
@@ -371,6 +412,9 @@ def main():
         p.join()
     print(f"done in {time.time() - t0:.0f}s -> {args.out}")
     report(args.out)
+    failed = [i for i, p in enumerate(procs) if p.exitcode != 0]
+    if failed:                  # e.g. KeiView without node on PATH: the workers die, the run must not look complete
+        sys.exit(f"workers {failed} failed (exit codes {[procs[i].exitcode for i in failed]})")
 
 
 if __name__ == "__main__":

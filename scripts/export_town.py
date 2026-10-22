@@ -111,6 +111,12 @@ def building_frontage(town: Town, b, samples):
     sgn. Recover (road, sc, sgn, setback) by finding the road sample whose heading
     equals yaw and whose normal line passes through the building centre (plain
     nearest-point projection fails for buildings that overhang a road's end).
+
+    Real towns (Town.from_graph) have buildings deep inside their blocks, far
+    from every road: a road sample beyond the road's end, on the line of the
+    road, must not win over the nearest road just because the building lies on
+    that line (`overhang`), and the lot KeiView draws in front of such a
+    building is capped at SETBACK_MAX deep.
     """
     c = np.array([b["x"], b["y"]])
     u = np.array([math.cos(b["yaw"]), math.sin(b["yaw"])])
@@ -124,13 +130,18 @@ def building_frontage(town: Town, b, samples):
         lat = rel @ v
         mis = np.abs(np.sin(hs - b["yaw"]))
         setback = np.abs(lat) - half_d - wo
-        score = np.abs(along) + 50.0 * mis + 5.0 * np.clip(0.5 - setback, 0, None) + 5.0 * np.clip(setback - 5.0, 0, None)
+        overhang = np.clip(np.abs(along) - max(1.0, b["l"] / 2), 0, None)   # past a road's end by more than half the box
+        score = (np.abs(along) + 20.0 * overhang + 50.0 * mis
+                 + 5.0 * np.clip(0.5 - setback, 0, None) + 5.0 * np.clip(setback - 5.0, 0, None))
         i = int(np.argmin(score))
         if best is None or score[i] < best[0]:
             best = (float(score[i]), rd.id, float(ss[i] + along[i]), float(lat[i]), float(setback[i]))
     _, rid, s, lat, setback = best
     return {"road": rid, "s": round(s, 2), "side": 1 if lat > 0 else -1,   # +1 = left of the road direction a->b
-            "setback": round(setback, 2)}
+            "setback": round(min(setback, SETBACK_MAX), 2)}
+
+
+SETBACK_MAX = 8.0       # m, the deepest front lot KeiView draws (real blocks have buildings far from any road)
 
 
 PARCEL_RES = 0.5        # m per pixel for the free-space raster used to place parcels
@@ -266,8 +277,12 @@ def make_parcels(town: Town, buildings):
 
 
 def export(seed: int, town_cfg=None) -> dict:
-    town = Town(seed, town_cfg)
-    cfg = town.cfg
+    return export_town(Town(seed, town_cfg))
+
+
+def export_town(town: Town) -> dict:
+    """The keisim-town JSON of any Town (procedural, or Town.from_graph: scripts/import_osm.py)."""
+    seed, cfg = town.seed, town.cfg
     x0, y0, x1, y1 = town.bbox
     origin = [round((x0 + x1) / 2, 1), round((y0 + y1) / 2, 1)]
     R, road_mask, walk_mask = surface_masks(town)
@@ -298,6 +313,7 @@ def export(seed: int, town_cfg=None) -> dict:
               "r": round(t["r"], 2), "ch": round(t["ch"], 2)} for t in town.trees]
     return {
         "format": "keisim-town", "version": 1, "seed": seed, "style": town_tag(cfg), "summary": town.summary(),
+        **({"name": town.name} if town.name != str(seed) else {}),
         "origin": origin, "bbox": r2(town.bbox),
         "cfg": {"lane_width": cfg.lane_width, "shoulder": cfg.shoulder, "sidewalk_width": cfg.sidewalk_width,
                 "road_half_width": cfg.road_half_width, "walk_outer": cfg.walk_outer,
