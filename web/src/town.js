@@ -52,6 +52,8 @@ export function prepareTown(data) {
 
   const junctions = data.junctions.map((j) => ({ ...j, p: P(j.pos) }));
   const signals = data.signals.map((s) => ({ ...s, headP: P(s.head), poleP: P(s.pole), rotY: rotYOf(s.yaw) }));
+  // 止まれ signs (real towns): post position and the facing (local +Z towards the approaching driver)
+  const stopSigns = (data.stop_signs || []).map((s) => ({ ...s, poleP: P(s.pole), rotY: rotYOf(s.yaw) }));
   const trees = data.trees.map((t) => ({ ...t, p: P([t.x, t.y]) }));
 
   // ------------------------------------------------------------------ building lots
@@ -71,7 +73,7 @@ export function prepareTown(data) {
     return { ...b, i, corners, lot: { x: front[0], z: front[1], rotY: rotYOf(faceYaw), w: b.l, depth: b.setback + b.w } };
   });
 
-  const T = { data, cfg, origin: data.origin, P, dirOf, rotYOf, bounds, roads, junctions, signals, trees, buildings };
+  const T = { data, cfg, origin: data.origin, P, dirOf, rotYOf, bounds, roads, junctions, signals, stopSigns, trees, buildings };
 
   // ------------------------------------------------------------------ surface grid + distance to road
   const grid = rasterize(T, 0.25);
@@ -159,7 +161,7 @@ function makeViews(T) {
   // on the sidewalk, kerb side (trees stand at the back edge); roads without one: in the 路側帯
   const walkOff = (road) => (road.sidewalk > 0 ? road.hw + 0.85 : road.hw - 0.4);
   const byDeg = (j) => T.roads.filter((r) => r.a === j.id || r.b === j.id);
-  const obstacles = [...T.trees.map((t) => t.p), ...T.signals.map((s) => s.poleP)];
+  const obstacles = [...T.trees.map((t) => t.p), ...T.signals.map((s) => s.poleP), ...T.stopSigns.map((s) => s.poleP)];
   // hero: on the sidewalk ~34 m before the signalised junction nearest to the town centre, facing it
   const sig = T.junctions.filter((j) => j.signalized).sort((a, b) => Math.hypot(...a.p) - Math.hypot(...b.p));
   const J = sig[0] || T.junctions[0];

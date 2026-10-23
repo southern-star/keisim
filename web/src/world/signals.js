@@ -68,6 +68,29 @@ export function build(ctx) {
       lamps.push({ J, phase: s.phase, slot: SLOT[i], local: new THREE.Vector3(x, 0, 0.118), head });
     }
   }
+  // 止まれ signs (real towns, keisim Town.stop_sign_posts): a red inverted triangle with a white rim on a post,
+  // the same size as KeiSim's (0.75 m, rim 0.9 m) and unscaled; local +Z faces the approaching driver
+  const mRed = ctx.mat.toon('#c8282d', { paint: 0.03 });
+  const mWhite = ctx.mat.toon('#ebebe8', { paint: 0.03 });
+  const mBack = ctx.mat.toon('#7d7d78', { paint: 0.03 });
+  const tri = (a) => {
+    const h = a * Math.sqrt(3) / 2, sh = new THREE.Shape();
+    sh.moveTo(-a / 2, h / 3); sh.lineTo(a / 2, h / 3); sh.lineTo(0, -2 * h / 3); sh.closePath();
+    return new THREE.ShapeGeometry(sh);
+  };
+  const gRim = tri(0.9), gRed = tri(0.75);
+  for (const s of T.stopSigns || []) {
+    const [px, pz] = s.poleP;
+    const g0 = ctx.L.heightAt(px, pz);
+    K.cyl(0.035, 0.035, s.z + 0.2, mPole, [px, g0 + (s.z + 0.2) / 2, pz], null, 8);
+    const sign = K.group([px, g0 + s.z, pz], s.rotY);
+    for (const [geo, mat, z, ry] of [[gRim, mBack, 0.035, Math.PI], [gRim, mWhite, 0.04, 0], [gRed, mRed, 0.045, 0]]) {
+      const m = new THREE.Mesh(geo, mat);
+      m.position.set(0, 0, z); m.rotation.y = ry;
+      m.castShadow = true; m.receiveShadow = true;
+      sign.add(m);
+    }
+  }
   ctx.addStatic(root);
 
   // lamps: one instanced mesh, colours updated from the junction timing
@@ -116,5 +139,5 @@ export function build(ctx) {
     if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
     labelCol.needsUpdate = true;
   });
-  ctx.services.signals = { count: T.signals.length, lamps: lamps.length };
+  ctx.services.signals = { count: T.signals.length, lamps: lamps.length, stopSigns: (T.stopSigns || []).length };
 }

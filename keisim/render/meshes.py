@@ -223,6 +223,22 @@ class StaticScene:
             cx, cy = (px + hx) / 2, (py + hy) / 2
             objs.append((cx, cy, L / 2 + 1.5, f0, len(fb)))
 
+        # 止まれ signs (Town.from_graph): post + red inverted triangle with a white rim, facing the driver (+x)
+        red, white, back = np.array([45, 40, 200.0]), np.array([235, 235, 232.0]), np.array([120, 120, 125.0])
+        for sp in town.stop_sign_posts:
+            f0 = len(fb)
+            px, py = sp["pole"]
+            zc = sp["z"]
+            post = box_faces(-0.035, 0.035, -0.035, 0.035, 0.0, zc + 0.2, skip=("bottom",))
+            for f in post.values():
+                fb.add(transform(f, px, py, 0.0), grey, SEM["pole"], 0.0)
+            for col, a, x, out in ((back, 0.9, 0.035, -1.0), (white, 0.9, 0.04, 1.0), (red, 0.75, 0.045, 1.0)):
+                h = a * math.sqrt(3) / 2
+                tri = np.array([[x, -a / 2, zc + h / 3], [x, a / 2, zc + h / 3], [x, 0.0, zc - 2 * h / 3]])
+                tri = _orient(tri, np.array([out, 0.0, 0.0]))
+                fb.add(transform(tri, px, py, sp["yaw"]), col, SEM["pole"], 1.0 + (x - 0.035) * 10)
+            objs.append((px, py, 1.0, f0, len(fb)))
+
         self.faces = fb.pack()
         self.objs = np.array(objs, np.float64).reshape(-1, 5)
 

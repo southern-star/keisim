@@ -19,6 +19,7 @@ import numpy as np
 from .config import ROAD_KINDS, TL_GREEN, TL_RED, TL_YELLOW, TownConfig
 from .geometry import (Polyline, arc_bezier, box_corners, cubic_bezier, curvature_of,
                        headings_of, offset_polyline, resample, unit, wrap)
+from .glyphs import TOMARE
 
 LANE_DS = 0.5
 TURN_RADIUS_MIN = 6.5     # m, the lane-centre arc of a right-angle turn in a Town.from_graph junction (graph_min_radius)
@@ -27,6 +28,8 @@ NARROW_LANE = 3.0        # m: lanes narrower than this keep trucks out, and thei
 NARROW_PASS = 2.9        # m: two turns in an unsignalised bend whose centre lines come closer than this give way
 MIRROR_PASS = 3.6        # m: a right turn whose centre line runs this close to the oncoming left turn's gives way to it
 STOP_SIGN_SETBACK = 2.0  # m: the 止まれ stop line of a minor road's approach to a priority crossing, before its lane's end
+TOMARE_GAP, TOMARE_LEN = 0.8, 2.6   # m: the painted 止まれ ends this far before the stop line and is this long
+TOMARE_CHAR_W, TOMARE_SPACE = 0.72, 0.12   # m: width of each of its three characters across the lane, and between them
 NARROW_CLEAR = 1.9       # m: ... and the outer one waits with its front corners and sides this far from the inner
                          # one's centre line (its half width + the swing of its body in the turn + a margin)
 
@@ -344,6 +347,7 @@ class Town:
         self.mirrored_turn_yield = False     # Town.from_graph: right turns give way to the oncoming left turn
         self.stop_signs = False              # Town.from_graph: 止まれ on the minor roads' approaches to priority crossings
         self.yield_lookback = False          # Town.from_graph: Traffic.min_arrival looks into the junction before
+        self.stop_sign_posts: list[dict] = []   # 止まれ signs: {lane, pole (x, y), yaw (facing the driver), z}
         self.max_vehicle_dims = None         # (length, width) cap of the NPC cars (keisim.realworld: narrow roads)
 
     # ------------------------------------------------------------------ build
@@ -563,6 +567,7 @@ class Town:
         self._make_raster()
         self._make_markings()
         self._make_signal_heads()
+        self._make_stop_sign_posts()
         self._make_buildings_and_trees(buildings)
         self._finalize_static()
 
@@ -663,6 +668,40 @@ class Town:
             w = 0.45
             return np.array([a0 - u * w / 2, a1 - u * w / 2, a1 + u * w / 2, a0 + u * w / 2])
 
+        def tomare_text(lane, s_line, lane_width):
+            """The 止まれ painted before a stop line: its three characters side by side across the lane (left to
+            right as the driver reads them), stretched along it, row 0 of the glyphs at the far end. Rectangles
+            from runs of paint, merged down the rows (no holes, so both renderers fill them alike)."""
+            cw = min(TOMARE_CHAR_W, (lane_width - 0.5 - 2 * TOMARE_SPACE) / 3)
+            total = 3 * cw + 2 * TOMARE_SPACE
+            s_far = s_line - TOMARE_GAP
+            if s_far - TOMARE_LEN < 0.5:
+                return []
+            rects = []
+            for k, glyph in enumerate(TOMARE):
+                rows = [np.frombuffer(r.encode(), np.uint8) == ord("#") for r in glyph]
+                nr, nc = len(rows), len(rows[0])
+                left = total / 2 - k * (cw + TOMARE_SPACE)          # lateral of the character's left edge (+ = left)
+                open_runs = {}                                       # (c0, c1) -> first row
+                for r in range(nr + 1):
+                    runs = set()
+                    if r < nr:
+                        m = np.concatenate([[False], rows[r], [False]])
+                        d = np.diff(m.astype(np.int8))
+                        runs = set(zip(np.nonzero(d == 1)[0].tolist(), np.nonzero(d == -1)[0].tolist()))
+                    for run in list(open_runs):
+                        if run not in runs:                          # the rectangle ends above row r
+                            r0 = open_runs.pop(run)
+                            sa, sb = s_far - r0 * TOMARE_LEN / nr, s_far - r * TOMARE_LEN / nr
+                            la, lb = left - run[0] * cw / nc, left - run[1] * cw / nc
+                            pa, pb = lane.poly.interp(sa), lane.poly.interp(sb)
+                            na = unit(float(lane.poly.heading(sa)) + math.pi / 2)
+                            nb = unit(float(lane.poly.heading(sb)) + math.pi / 2)
+                            rects.append(np.array([pa + na * la, pa + na * lb, pb + nb * lb, pb + nb * la]))
+                    for run in runs:
+                        open_runs.setdefault(run, r)
+            return rects
+
         for road in self.roads:
             rs = road.spec
             hw = rs.half_width
@@ -709,6 +748,7 @@ class Town:
                 if not J.signalized:
                     if lane.stop_sign_s is not None:
                         self.markings.append(stop_line(lane, lane.stop_sign_s, rs))
+                        self.markings.extend(tomare_text(lane, lane.stop_sign_s, rs.lane_width))
                     continue
                 self.markings.append(stop_line(lane, lane.stop_s, rs))
                 # crosswalk (zebra) between stop line and junction
@@ -940,6 +980,25 @@ class Town:
                     "head": head, "pole": pole, "yaw": h_in + math.pi, "z": 5.4,
                 })
 
+    def _make_stop_sign_posts(self):
+        """止まれ signs (Town.from_graph): a red inverted triangle on a post at the curb side of every approach with a
+        stop line (Lane.stop_sign_s), level with the line, pushed outwards until it stands clear of the drivable
+        surface. No random draws: the trees and buildings after it come out as before."""
+        side = 1.0 if self.cfg.left_hand_traffic else -1.0
+        ring = np.array([[0.35, 0], [-0.35, 0], [0, 0.35], [0, -0.35], [0, 0]])
+        self.stop_sign_posts = []
+        for lane in self.lanes:
+            if lane.stop_sign_s is None:
+                continue
+            rs = self.roads[lane.road].spec
+            p = lane.poly.interp(lane.stop_sign_s)
+            h = float(lane.poly.heading(lane.stop_sign_s))
+            n = unit(h + math.pi / 2) * side                  # towards the curb
+            d = rs.lane_width / 2 + 0.7
+            while d < rs.lane_width / 2 + 5.0 and np.any(self.surface(p + n * d + ring) == 1):
+                d += 0.25
+            self.stop_sign_posts.append({"lane": lane.id, "pole": p + n * d, "yaw": h + math.pi, "z": 2.1})
+
     def _make_buildings_and_trees(self, buildings=None):
         """Procedural buildings along the roads (or the given boxes {x, y, yaw, l, w, h}, minus those over a road or
         sidewalk) and trees along the sidewalks."""
@@ -1025,13 +1084,15 @@ class Town:
                         n = unit(h + math.pi / 2) * sgn
                         pos = p + n * (wo - 0.55)
                         g = rng.uniform(0.75, 1.15)
-                        self.trees.append({
+                        tree = {
                             "x": float(pos[0]), "y": float(pos[1]),
                             "trunk_h": float(rng.uniform(1.9, 2.8)),
                             "r": float(rng.uniform(1.2, 2.0)),
                             "ch": float(rng.uniform(2.2, 3.6)),
                             "color": np.array([40 * g, 125 * g, 60 * g]) * rng.uniform(0.8, 1.2, 3),
-                        })
+                        }
+                        if not any(math.hypot(*(pos - sp["pole"])) < 1.5 for sp in self.stop_sign_posts):
+                            self.trees.append(tree)
                     s += float(rng.uniform(9.0, 16.0))
 
     def _finalize_static(self):

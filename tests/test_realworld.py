@@ -154,7 +154,7 @@ def test_graph_duplicate_and_coincident_arms():
 
 def test_stop_signs():
     """止まれ (Town.from_graph): every approach of the minor road to a priority crossing, and no other lane, gets a
-    stop line (painted as a marking); the expert stands still at each one it passes, with its front bumper about
+    stop line, the painted 止まれ (markings) and a sign beside the road; the expert stands still at each one it passes, with its front bumper about
     STOP_SIGN_MARGIN before the line, and still completes the route. Signalised junctions keep their own lines."""
     from keisim.expert import STOP_SIGN_MARGIN, STOP_SIGN_V
     town = osm_town(BBOX, osm=mini_osm(), name="mini")
@@ -172,7 +172,10 @@ def test_stop_signs():
     town2._make_yields()
     town2.markings = []
     town2._make_markings()
-    assert len(town.markings) == len(town2.markings) + len(have) and signal_lines > 0
+    extra = len(town.markings) - len(town2.markings)                          # a stop line + the painted 止まれ each
+    assert extra > 10 * len(have) and signal_lines > 0, extra
+    assert sorted(sp["lane"] for sp in town.stop_sign_posts) == sorted(have)  # one sign per stop line, off the road
+    assert all(town.surface(sp["pole"][None])[0] != 1 for sp in town.stop_sign_posts)
     from keisim.env import KeiEnv
     env = KeiEnv(EnvConfig(town=town.cfg, render_rgb=False, render_seg=False))
     passed = 0
