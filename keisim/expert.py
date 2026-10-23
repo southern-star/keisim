@@ -74,8 +74,16 @@ def light_stop(v, d, st, t_rem, exit_blocked):
 def target_for_speed(v, lab):
     """The expert's target speed had the ego been driving at `v`, from the speed-independent parts of its plan
     (target_nolight, lt_over, lt_d, lt_st, lt_trem, lt_blocked; see Expert.plan). Relabels recorded frames with
-    counterfactual ego speeds, so a speed-input model learns how the speed changes the decision."""
+    counterfactual ego speeds, so a speed-input model learns how the speed changes the decision.
+    止まれ (optional ss_d, ss_go: the pending stop line ahead and the target without it): standing (v < STOP_SIGN_V)
+    within STOP_SIGN_MARGIN + STOP_SIGN_ZONE of the line, the stop is made and the ego goes on (ss_go); at any other
+    speed the line still binds (target_nolight). A single frame cannot tell "stopped here already" from "about to
+    stop", except by the speed: these pairs, from the same images, are what teaches it (models trained only on the
+    states their DAgger visited either froze at the line or rolled over it)."""
     target = float(lab["target_nolight"])
+    ss_d, ss_go = float(lab.get("ss_d", math.nan)), float(lab.get("ss_go", math.nan))
+    if math.isfinite(ss_d) and math.isfinite(ss_go) and v < STOP_SIGN_V and ss_d <= STOP_SIGN_MARGIN + STOP_SIGN_ZONE:
+        target = ss_go
     if lab["lt_over"] and v < 3.0:
         target = 0.0
     d = float(lab["lt_d"])
@@ -229,6 +237,8 @@ class Expert:
         # binds, and the 徐行 and give-way rules above take the ego on to its connector's wait point. The memory of
         # the stops made is per route and only the ego itself updates it (not the plan of a displaced camera). The
         # rule depends on the ego speed only through that memory, so it is part of target_nolight.
+        # ss_d / ss_go: the pending line and the target without it, recorded for target_for_speed's counterfactuals
+        ss_d, ss_go = math.nan, target
         if route.stop_signs:
             if self._ss_route is not route:
                 self._ss_route, self._ss_done = route, set()
@@ -243,6 +253,7 @@ class Expert:
                     if real:
                         self._ss_done.add(s_line)
                     continue
+                ss_d = d
                 v_s = stop_profile(d - STOP_SIGN_MARGIN, self.B_COMF)
                 if v_s < target:
                     target, reason = v_s, "stop_sign"
@@ -293,7 +304,7 @@ class Expert:
         # lead_owner: what the gap is to (>= 0: NPC vehicle index in world.traffic, <= -2: pedestrian, -1: nothing)
         return {"path": path, "target_speed": float(target), "tl_state": int(tl), "reason": reason,
                 "gap": g, "lead_owner": int(lead_o[0]), "target_nolight": float(target_nolight),
-                "yield_tta": float(yield_tta), **lt}
+                "yield_tta": float(yield_tta), "ss_d": float(ss_d), "ss_go": float(ss_go), **lt}
 
     def act(self, plan=None):
         env = self.env

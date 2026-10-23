@@ -196,3 +196,30 @@ def test_stop_signs():
         assert all(vmin[s] < STOP_SIGN_V for s in gone), vmin
         passed += len(gone)
     assert passed > 0
+
+
+def test_stop_sign_counterfactuals():
+    """The expert's recorded 止まれ inputs (ss_d, ss_go) let target_for_speed rebuild its label at the recorded speed,
+    and give "go on" (ss_go) for the same frame standing at the line: the pairs that teach a single-frame model when
+    the stop is made."""
+    from keisim.expert import STOP_SIGN_MARGIN, STOP_SIGN_ZONE, target_for_speed
+    town = osm_town(BBOX, osm=mini_osm(), name="mini")
+    from keisim.env import KeiEnv
+    env = KeiEnv(EnvConfig(town=town.cfg, render_rgb=False, render_seg=False))
+    keys = ("target_nolight", "lt_over", "lt_d", "lt_st", "lt_trem", "lt_blocked", "ss_d", "ss_go")
+    pending = near = 0
+    for ep in range(3):
+        env.reset(town, episode_seed=ep, route_length=300, render=False)
+        done = False
+        while not done:
+            p = env.plan
+            lab = {k: p[k] for k in keys}
+            assert abs(target_for_speed(env.world.ego.v, lab) - p["target_speed"]) < 1e-6, (lab, p["target_speed"])
+            if math.isfinite(p["ss_d"]):
+                pending += 1
+                if p["ss_d"] <= STOP_SIGN_MARGIN + STOP_SIGN_ZONE:
+                    near += 1
+                    go = target_for_speed(0.0, lab)
+                    assert go == (0.0 if p["ss_go"] < 0.3 else p["ss_go"]) or not math.isnan(p["lt_d"])
+            _, _, done, _ = env.step(env.expert_action())
+    assert pending > 0 and near > 0, (pending, near)

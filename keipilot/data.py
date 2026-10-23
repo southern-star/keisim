@@ -12,7 +12,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from keisim.expert import target_for_speed
+from keisim.expert import STOP_SIGN_MARGIN, STOP_SIGN_ZONE, target_for_speed
 
 LABEL_KEYS = ("cmd", "tp", "path", "speed", "tl", "v", "reason", "town", "episode", "step", "weather", "virtual")
 # inputs of the expert's traffic-light decision (keisim.expert.target_for_speed); shards recorded before
@@ -23,6 +23,11 @@ AUX_KEYS = ("yield_tta",)        # earliest arrival [s] of a car with priority a
 AUX_DEFAULTS = {"yield_tta": np.float32(np.nan)}
 CF_DEFAULTS = {"target_nolight": np.float32(np.nan), "lt_over": False, "lt_d": np.float32(np.nan), "lt_st": np.int8(3),
                "lt_trem": np.float32(np.nan), "lt_blocked": False}
+# 止まれ (keisim.expert.target_for_speed): the pending stop line ahead [m] and the target without it; recorded since
+# 2026-10-24, NaN where missing (older shards keep their light counterfactuals: these keys are optional)
+SS_KEYS = ("ss_d", "ss_go")
+SS_DEFAULTS = {"ss_d": np.float32(np.nan), "ss_go": np.float32(np.nan)}
+SS_STAND_PROB = 0.5     # counterfactual frames before a pending stop line: chance of the speed 0 (standing at it)
 
 
 class ShardWriter:
@@ -53,7 +58,7 @@ class ShardWriter:
         self.prev.append(np.zeros(0, np.uint8) if prev is None else prev)
         for k in LABEL_KEYS:
             self.lab[k].append(labels[k])
-        for k in CF_KEYS + AUX_KEYS:
+        for k in CF_KEYS + AUX_KEYS + SS_KEYS:
             if k in labels:
                 self.lab.setdefault(k, []).append(labels[k])
         if len(self.jpg) >= self.fps:
@@ -134,7 +139,7 @@ def load_shards(dirs, with_prev=True):
     buf = {k: np.empty(int(n), np.uint8) for k, n in zip(("jpg", "seg", "jpg_prev"), total)}
     jo, so, src = [], [], []
     po, pbase = [], 0
-    lab = {k: [] for k in LABEL_KEYS + CF_KEYS + AUX_KEYS}
+    lab = {k: [] for k in LABEL_KEYS + CF_KEYS + AUX_KEYS + SS_KEYS}
     cf_ok = []
     jbase = sbase = 0
     for fi, f in enumerate(files):
@@ -162,13 +167,15 @@ def load_shards(dirs, with_prev=True):
             lab[k].append(z[k] if has_cf else np.full(n_f, CF_DEFAULTS[k]))
         for k in AUX_KEYS:
             lab[k].append(z[k] if k in z else np.full(n_f, AUX_DEFAULTS[k]))
+        for k in SS_KEYS:
+            lab[k].append(z[k] if k in z else np.full(n_f, SS_DEFAULTS[k]))
         cf_ok.append(np.full(n_f, has_cf))
     data = {
         "jpg": buf["jpg"], "jpg_off": np.concatenate(jo + [np.array([jbase])]),
         "seg": buf["seg"], "seg_off": np.concatenate(so + [np.array([sbase])]),
         "jpg_prev": buf["jpg_prev"], "jpg_prev_off": np.concatenate(po + [np.array([pbase])]),
     }
-    for k in LABEL_KEYS + CF_KEYS + AUX_KEYS:
+    for k in LABEL_KEYS + CF_KEYS + AUX_KEYS + SS_KEYS:
         data[k] = np.concatenate(lab[k])
     data["cf_ok"] = np.concatenate(cf_ok)
     data["src"] = np.concatenate(src)
@@ -235,11 +242,15 @@ class DrivingDataset(Dataset):
             if prev is not None:
                 prev = None if rng.random() < self.history_drop else self._augment(prev, rng, p)
             if cf and self.cf_prob > 0 and rng.random() < self.cf_prob:
-                v = float(rng.uniform(0.0, self.cf_vmax))
+                ss_d = float(d["ss_d"][i])
+                if math.isfinite(ss_d) and ss_d <= STOP_SIGN_MARGIN + STOP_SIGN_ZONE and rng.random() < SS_STAND_PROB:
+                    v = 0.0                     # standing at the 止まれ line: the stop is made, the label says go on
+                else:
+                    v = float(rng.uniform(0.0, self.cf_vmax))
             elif rng.random() < self.speed_drop:
                 known = False
         if cf:          # label from the recorded decision inputs with the current rule (and the chosen speed)
-            speed = target_for_speed(v, {k: d[k][i] for k in CF_KEYS})
+            speed = target_for_speed(v, {k: d[k][i] for k in CF_KEYS + SS_KEYS})
         img = img[:, :, ::-1].transpose(2, 0, 1).copy()  # BGR -> RGB, CHW, uint8
         has_prev = prev is not None
         prev = prev[:, :, ::-1].transpose(2, 0, 1).copy() if has_prev else np.zeros_like(img)

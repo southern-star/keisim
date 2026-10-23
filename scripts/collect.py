@@ -172,7 +172,9 @@ def record(env, writer, rng, v_prob, weather_id, virtual_prob, offset=False, rgb
                lt_d=np.float32(plan["lt_d"]), lt_st=np.int8(plan["lt_st"]), lt_trem=np.float32(plan["lt_trem"]),
                lt_blocked=np.bool_(plan["lt_blocked"]),
                # auxiliary label: earliest arrival of a car with priority at the next right turn that gives way
-               yield_tta=np.float32(plan.get("yield_tta", np.nan)))
+               yield_tta=np.float32(plan.get("yield_tta", np.nan)),
+               # 止まれ: the pending stop line ahead and the target without it (counterfactual standing frames)
+               ss_d=np.float32(plan.get("ss_d", np.nan)), ss_go=np.float32(plan.get("ss_go", np.nan)))
 
 
 def worker(wid, args, quota, out_dir, counter):
