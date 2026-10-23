@@ -538,6 +538,7 @@ def osm_town(bbox, cache=None, osm=None, cfg=None, seed=0, name="osm", drop_kind
     boxes = align_boxes(building_boxes(osm, proj, bbox), G) if buildings else None
     town = graph_town(G, cfg, seed, boxes, name)
     town.proj, town.graph = proj, G
+    town.osm["bbox"] = [float(v) for v in bbox]
     town.n_boxes = len(boxes) if boxes is not None else None
     if verbose:
         print(graph_report(town))

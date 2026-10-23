@@ -29,6 +29,7 @@ KeiSim Town(seed)  ──scripts/export_town.py──▶  web/towns/town_<seed>.
 ```bash
 uv run scripts/export_town.py --town 1000 1001 1002 1003     # web/towns/ に出力（サンプル 4 つは同梱）
 uv run scripts/export_town.py --town 1015 1018 --style twophase   # 二段階の信号の町 → town_1015-98782ab7.json など（同梱）
+uv run scripts/import_osm.py --name osm_sapporo --out web/towns     # 実在の町（札幌、OpenStreetMap）→ town_osm_sapporo.json（同梱、data/osm/ の抜き出しから）
 cd web && node tools/serve.mjs                               # → http://localhost:5174/?town=1000
 ```
 
@@ -145,6 +146,7 @@ cd web && node tools/serve.mjs                    # → http://localhost:5174/?p
   - 台数は車線の長さに合わせて決めます（車線 1 km あたり 12 台、最大 40 台。town 1000 では 28 台）。
   - 動きは `keisim/traffic.py` の NPC を軽くしたものです。交差点ごとにランダムに曲がり、IDM で前の車（と自車）との車間を取り、赤と黄色で止まります（黄色は止まれるときだけ）。交差点の中に別の現示の車がいるときと、出口が詰まっているときは、停止線で待ちます。
   - 二段階の信号の町では、KeiSim と同じ右折のルールで動きます。
+  - 実在の町「札幌」（`?town=osm_sapporo`、[../README.md](../README.md) 2 章の「実在の町」）では、信号のない交差点で KeiSim と同じ優先道路の規則で動きます（細い道から来た車が優先道路のすべての動きに譲る、右折は対向の左折を先に行かせる、車は 6 m まで）。地図データは © OpenStreetMap contributors (ODbL) で、画面の右下に出典を出します。
     - 進路が交わる・合流する動きは、直進 > 左折 > 右折 の順に優先します。
     - 同じ向きの動きどうしが交わるとき（斜めの交差点の右折どうし）は、片方が譲ります。決め方も KeiSim と同じです（`Town._equal_gives_way`）。
       town 1015 と 1018 にはこの交差はありません。
@@ -167,7 +169,7 @@ cd web && node tools/serve.mjs                    # → http://localhost:5174/?p
   - WASM（1 スレッド）は約 0.2〜0.35 秒です。WASM でも閉ループは回りますが、計画の更新が遅れるぶん反応が遅くなります。
 - モデルの重みは float16 で保存し、グラフの中で float32 に戻します（30 MB、計算は float32）。値は Release の重みと同じです。
 
-URL パラメータ: `?town=1001`（二段階の信号の町は `?town=1015-98782ab7`）、`?q=low`（表示の画質。モデルの入力は常に medium）、`?ep=wasm` / `?ep=webgpu`（推論エンジンを固定）、`?model=<URL>`、`?traffic=0`（周りの車なし）、`?cars=20`（周りの車の台数）、`?cardetail=0`（周りの車を簡易な形で表示）
+URL パラメータ: `?town=1001`（二段階の信号の町は `?town=1015-98782ab7`、札幌は `?town=osm_sapporo`）、`?q=low`（表示の画質。モデルの入力は常に medium）、`?ep=wasm` / `?ep=webgpu`（推論エンジンを固定）、`?model=<URL>`、`?traffic=0`（周りの車なし）、`?cars=20`（周りの車の台数）、`?cardetail=0`（周りの車を簡易な形で表示）
 
 ```bash
 node tools/pilot_check.mjs --town 1000 --sec 60   # headless Chrome で 60 秒（シミュレーション時間）走らせて記録を表示

@@ -6,8 +6,12 @@
 // together, Japan's usual signal) add keisim's right-turn rule: a turn that crosses or merges with a movement of
 // higher rank (right < left < straight) waits at its connector's wait point while a car with priority, the ego
 // included, would reach the crossing within YIELD_GAP s; of two equal movements that cross (the right turns at a
-// skewed junction), one gives way (equalGivesWay). Cars stuck for long where the ego camera cannot see them
-// are moved elsewhere. All coordinates are KeiSim's (x east, y north, yaw counter-clockwise).
+// skewed junction), one gives way (equalGivesWay). Real towns (keisim/realworld.py, e.g. town osm_sapporo) add
+// keisim's priority crossings: at an unsignalised junction of 3+ arms the minor road's cars give way to every
+// movement of the priority road (priorityGroups), a right turn also waits at its entry for the oncoming left turn
+// around the same corner (mirrored_turn_yield), and the NPC fleet is capped at max_vehicle_dims. Cars stuck for
+// long where the ego camera cannot see them are moved elsewhere. All coordinates are KeiSim's (x east, y north,
+// yaw counter-clockwise).
 import { heading, pointOn, wrap } from './nav.js';
 
 const TL = { RED: 0, YELLOW: 1, GREEN: 2 };
@@ -17,6 +21,7 @@ const LOOK = 45.0;                                          // m of path searche
 const YIELD_GAP = 5.0;                                      // keisim/traffic.py YIELD_GAP
 const YIELD_CLEAR = 2.4;                                    // keisim/roadnet.py YIELD_CLEAR
 const RANK = { right: 0, left: 1, straight: 2 };            // the lower-ranked movement yields
+const MIRROR_PASS = 3.6;                                    // keisim/roadnet.py MIRROR_PASS
 const KIND_RANK = { alley: 0, residential: 1, street: 2, main: 3 };   // road types: the minor road gives way
 const EGO = { L: 4.5, W: 1.85 };
 // keisim/traffic.py CAR_COLORS (BGR there) as RGB
@@ -175,7 +180,11 @@ export function createTraffic(data, lanes, { count = 24, seed = 1 } = {}) {
     if (best) phaseOf.set(L.id, best.phase);
   }
   const twoPhase = data.cfg.signal_mode === 'two_phase';
-  if (twoPhase) makeYields();
+  // real towns: unsignalised junctions of 3+ arms are priority crossings (keisim Town.from_graph)
+  const priority = data.junctions.some((J) => !J.signalized && J.arms >= 3);
+  const mirrored = !!data.mirrored_turn_yield;
+  const yielding = twoPhase || priority;
+  if (yielding) makeYields();
   const roadLanes = lanes.filter((L) => L.len > 30);
   const totalLen = roadLanes.reduce((a, L) => a + L.len, 0);
   const cars = [];
@@ -186,24 +195,34 @@ export function createTraffic(data, lanes, { count = 24, seed = 1 } = {}) {
    *  approaches green at the same time whose movement ranks higher and whose centre line comes within 2.2 m of its
    *  own (a crossing or a merge): yields [{b, here, there}] (closest points), and wait: the furthest front-bumper
    *  position whose front circle (0.9 m behind the bumper) stays YIELD_CLEAR from all of those paths. Of two equal
-   *  movements that cross (the right turns at a skewed junction), one gives way (equalGivesWay). */
+   *  movements that cross (the right turns at a skewed junction), one gives way (equalGivesWay).
+   *  Priority crossings (unsignalised, 3+ arms; real towns): the minor road's connectors give way to every movement
+   *  of the priority road they would touch, whatever the turns; movements of the same road rank as above. With
+   *  mirrored_turn_yield a right turn also waits at its entry for the oncoming left turn around the same corner. */
   function makeYields() {
     const byJunction = new Map();
     for (const L of lanes) {
       const J = junctions.get(L.to);
-      if (!J || !J.signalized) continue;
+      if (!J || !(J.signalized || J.arms >= 3)) continue;
       if (!byJunction.has(J.id)) byJunction.set(J.id, []);
       for (const o of L.next) byJunction.get(J.id).push(o.conn);
     }
     for (const [jid, conns] of byJunction) {
+      const J = junctions.get(jid);
+      const prio = !J.signalized;
+      const major = prio ? priorityGroups(J, conns) : null;
       const equals = [];
       for (const a of conns) {
         const ga = phaseOf.get(a.from.id);
         for (const b of conns) {
           const gb = phaseOf.get(b.from.id);
-          if (b.from === a.from || ga === undefined || ga !== gb) continue;
+          if (b.from === a.from) continue;
+          // priority crossing, a and b from different roads: the minor one gives way whatever the turns
+          const minor = prio && major.get(a.from.id) !== major.get(b.from.id);
+          if (minor && major.get(a.from.id) === 0) continue;
+          if (!prio && (ga === undefined || ga !== gb)) continue;
           const equal = RANK[a.turn] === RANK[b.turn];      // equal pairs once each, in keisim's order
-          if (RANK[a.turn] > RANK[b.turn] || (equal && (a.from.id > b.from.id || (a.from.id === b.from.id && a.to.id > b.to.id)))) continue;
+          if (!minor && (RANK[a.turn] > RANK[b.turn] || (equal && (a.from.id > b.from.id || (a.from.id === b.from.id && a.to.id > b.to.id))))) continue;
           let best = Infinity, here = 0, there = 0;
           for (let i = 0; i < a.pts.length; i++) {
             for (let j = 0; j < b.pts.length; j++) {
@@ -212,15 +231,29 @@ export function createTraffic(data, lanes, { count = 24, seed = 1 } = {}) {
             }
           }
           if (best >= 2.2) continue;
-          if (equal) equals.push({ a, b, here, there });
+          if (equal && !minor) equals.push({ a, b, here, there });
           else a.yields.push({ b, here, there });
         }
       }
       // approaches each connector gives way to by rank (taken before the equal pairs: order-independent)
       const ranked = new Map(conns.map((c) => [c, new Set(c.yields.map((y) => y.b.from.id))]));
       for (const { a, b, here, there } of equals) {
-        if (equalGivesWay(junctions.get(jid), a, b, ranked)) a.yields.push({ b, here, there });
+        if (equalGivesWay(J, a, b, ranked)) a.yields.push({ b, here, there });
         else b.yields.push({ b: a, here: there, there: here });
+      }
+      if (mirrored && J.arms >= 3) {
+        // 道路交通法: a right turn does not get in the way of the oncoming left turn around the same corner; on 3 m
+        // lanes their centre lines run within MIRROR_PASS, so it waits at its entry until that turn has cleared
+        for (const a of conns) {
+          if (a.turn !== 'right') continue;
+          for (const b of conns) {
+            if (b.turn !== 'left' || b.from === a.from || a.yields.some((y) => y.b === b)) continue;
+            if (b.from.road !== a.to.road || b.to.road !== a.from.road) continue;   // not the same corner the other way round
+            let best = Infinity;
+            for (const p of a.pts) for (const q of b.pts) best = Math.min(best, Math.hypot(p[0] - q[0], p[1] - q[1]));
+            if (best < MIRROR_PASS) a.yields.push({ b, here: 0, there: b.len });
+          }
+        }
       }
       for (const a of conns) {
         if (!a.yields.length) continue;
@@ -235,6 +268,28 @@ export function createTraffic(data, lanes, { count = 24, seed = 1 } = {}) {
         }
       }
     }
+  }
+
+  /** keisim Town._priority_groups: approach lane id -> 0 on the priority road, 1 on the minor road(s). The priority
+   *  road is a pair of nearly opposite arms (the through road of a T-junction); with a choice, the pair of the higher
+   *  road kind, then the longer one. */
+  function priorityGroups(J, conns) {
+    const arms = [];
+    for (const c of conns) {
+      if (arms.some((a) => a.L === c.from)) continue;
+      const L = c.from, p = L.pts[L.pts.length - 1], r = data.roads[L.road] || {};
+      arms.push({ L, ang: Math.atan2(p[1] - J.pos[1], p[0] - J.pos[0]), rank: KIND_RANK[r.kind || 'street'], len: r.length || L.len });
+    }
+    const greater = (u, v) => { for (let n = 0; n < u.length; n++) if (u[n] !== v[n]) return u[n] > v[n]; return false; };
+    let best = null, pair = [0, 1];
+    for (let i = 0; i < arms.length; i++) {
+      for (let k = i + 1; k < arms.length; k++) {
+        const opp = Math.abs(wrap(arms[i].ang - arms[k].ang));
+        const key = [opp > Math.PI * 2 / 3 ? 1 : 0, Math.min(arms[i].rank, arms[k].rank), arms[i].rank + arms[k].rank, arms[i].len + arms[k].len, opp];
+        if (!best || greater(key, best)) { best = key; pair = [i, k]; }
+      }
+    }
+    return new Map(arms.map((a, n) => [a.L.id, pair.includes(n) ? 0 : 1]));
   }
 
   /** keisim Town._equal_gives_way: does connector a give way to b? If one of them already gives way to the other's
@@ -258,7 +313,10 @@ export function createTraffic(data, lanes, { count = 24, seed = 1 } = {}) {
     if (r < 0.62) return [4.0 + 0.8 * rnd(), 1.68 + 0.17 * rnd(), 1.4 + 0.2 * rnd(), 0];
     if (r < 0.78) return [3.35 + 0.1 * rnd(), 1.48, 1.6 + 0.2 * rnd(), 0];          // kei car
     if (r < 0.92) return [4.6 + 0.4 * rnd(), 1.8 + 0.15 * rnd(), 1.75 + 0.25 * rnd(), 0];
-    return [6.0 + 1.6 * rnd(), 2.0 + 0.25 * rnd(), 2.6 + 0.4 * rnd(), 1];             // small truck
+    const d = [6.0 + 1.6 * rnd(), 2.0 + 0.25 * rnd(), 2.6 + 0.4 * rnd(), 1];           // small truck
+    const cap = data.max_vehicle_dims;                                                // real towns: 6 m roads
+    if (cap) { d[0] = Math.min(d[0], cap[0]); d[1] = Math.min(d[1], cap[1]); }
+    return d;
   }
 
   /** A free spot on a random lane, away from the ego and the other cars, never right before a stop line. */
@@ -427,9 +485,10 @@ export function createTraffic(data, lanes, { count = 24, seed = 1 } = {}) {
           if (stop && d - 0.6 < gap) { gap = d - 0.6; vl = 0; }
         }
       }
-      // right turns that give way (two-phase): wait at the wait point while priority traffic would arrive within
-      // YIELD_GAP s; past the wait point, or too close to stop gently, the turn goes on (keisim Traffic._yield_gaps)
-      if (twoPhase) {
+      // turns that give way (two-phase signals, priority crossings): wait at the wait point while priority traffic
+      // would arrive within YIELD_GAP s; past the wait point, or too close to stop gently, the movement goes on
+      // (keisim Traffic._yield_gaps)
+      if (yielding) {
         let yc = null, dW = 0;
         if (g.kind === 'conn') {
           if (g.conn.yields.length) { yc = g.conn; dW = g.conn.wait - (c.s - g.s0 + c.L / 2); }
@@ -500,7 +559,7 @@ export function createTraffic(data, lanes, { count = 24, seed = 1 } = {}) {
   }
 
   return {
-    step, drawList, reset, cars, twoPhase,
+    step, drawList, reset, cars, twoPhase, priority,
     get contacts() { return contacts; }, get npcContacts() { return npcContacts; }, get n() { return cars.length; },
   };
 }
