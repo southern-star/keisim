@@ -33,10 +33,12 @@ if (PILOT) {                                      // the intro board describes t
     <li>← ↑ → 次の交差点で曲がる方向　Space 一時停止　R 最初から　T 周りの車（画面のボタンでも操作できます）</li>
     <li>ピンクはモデルが描いた走行経路、水色はナビのルート。右下はモデルへの入力画像と、モデルの領域分割です。</li>
     <li>周りの車は「周りの車」ボタン、T キー、<code>?traffic=0</code> で消せます（描画が重いとき。選んだ設定はこのブラウザに残ります）。</li>
-    <li>町は右上のメニューで選べます。town 1015 と 1018 は日本でふつうの二段階の信号で、右折は交差点の中で対向車の切れ目を待ちます。</li></ul>`);
+    <li>町は右上のメニューで選べます。town 1015 と 1018 は日本でふつうの二段階の信号で、右折は交差点の中で対向車の切れ目を待ちます。
+    「札幌」は OpenStreetMap から作った実在の町（札幌市東区の 1 km 角）で、ほとんどの交差点に信号がなく、細い道の車が優先道路に譲ります。</li></ul>`);
   set('#loadlabel', '読み込み中…');
 }
 const TDIR = (params.get('tdir') || 'towns').replace(/[^\w.-]/g, '');
+const TOWN_LABELS = { osm_sapporo: '札幌' };       // real towns: the name on the intro board (others: the seed)
 const $ = (id) => document.getElementById(id);
 
 const isTouch = matchMedia('(pointer: coarse)').matches;
@@ -115,14 +117,25 @@ async function build() {
   town = await loadTown(`./${TDIR}/town_${SEED}.json`);
   ctx.town = town; window.__town = town;
   L.configureWorld({ play: town.play, heightAt: town.heightAt, farTown: town.farTown, farSkip: town.farSkip });
-  const name = $('townname'); if (name) name.textContent = SEED.split('-')[0];      // '1015-98782ab7': settings hash
-  if (PILOT && town.data && town.data.cfg && town.data.cfg.signal_mode === 'two_phase') {
+  const name = $('townname'); if (name) name.textContent = TOWN_LABELS[SEED] || SEED.split('-')[0];   // '1015-98782ab7': settings hash
+  const real = !!(town.data && town.data.attribution);                      // a real town (keisim/realworld.py)
+  if (PILOT && real) {
+    const kana = document.querySelector('#intro .kana'); if (kana) kana.textContent = 'KeiPilot · 実在の町';
+    const sum = $('townsum');
+    if (sum) sum.insertAdjacentHTML('afterbegin', '<p class="tp">実在の町です（札幌市東区、OpenStreetMap の道路と建物）。' +
+      'ほとんどの交差点に信号はなく、細い道から来た車が優先道路の車に譲ります。周りの車も同じ規則で走ります。</p>');
+  } else if (PILOT && town.data && town.data.cfg && town.data.cfg.signal_mode === 'two_phase') {
     const kana = document.querySelector('#intro .kana'); if (kana) kana.textContent = 'KeiPilot · 二段階の信号の町';
     const sum = $('townsum');
     if (sum) sum.insertAdjacentHTML('afterbegin', '<p class="tp">この町の信号は二段階です（向かい合う方向が同時に青）。' +
       '右折は交差点の中の待ち位置まで進み、対向車が途切れてから曲がります。周りの車も同じ規則で走ります。</p>');
   }
   const sum = $('townsum'); if (sum && !PILOT) sum.textContent = `${town.junctions.length} junctions · ${town.buildings.length} lots · ${town.trees.length} trees`;
+  if (real) {                                                                // ODbL: the map's source stays visible
+    const credit = '<a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap contributors</a> (ODbL)';
+    if (sum) sum.insertAdjacentHTML('beforeend', `<p>地図データ: ${credit}</p>`);
+    const mc = $('mapcredit'); if (mc) { mc.innerHTML = `地図データ ${credit}`; mc.classList.add('on'); }
+  }
   await loadFonts();
   const base = ROADS === 'detail' ? MODULES.concat(['roaddeco']) : MODULES;
   const mods = EGO || PILOT ? base.concat(['actors']) : base;            // pilot: the surrounding traffic
