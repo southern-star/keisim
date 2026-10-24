@@ -348,6 +348,7 @@ class Town:
         self.stop_signs = False              # Town.from_graph: 止まれ on the minor roads' approaches to priority crossings
         self.yield_lookback = False          # Town.from_graph: Traffic.min_arrival looks into the junction before
         self.stop_sign_posts: list[dict] = []   # 止まれ signs: {lane, pole (x, y), yaw (facing the driver), z}
+        self._building_edges = None          # building_edges(), built on first use
         self.max_vehicle_dims = None         # (length, width) cap of the NPC cars (keisim.realworld: narrow roads)
 
     # ------------------------------------------------------------------ build
@@ -1094,6 +1095,19 @@ class Town:
                         if not any(math.hypot(*(pos - sp["pole"])) < 1.5 for sp in self.stop_sign_posts):
                             self.trees.append(tree)
                     s += float(rng.uniform(9.0, 16.0))
+
+    def building_edges(self):
+        """The buildings' outlines for line-of-sight tests: segments (4B, 2, 2), building centres (B, 2) and radii (B,)
+        (for a quick distance cut; the edges of building i are rows 4i..4i+3). Built on first use."""
+        if self._building_edges is None:
+            b = self.buildings
+            c = box_corners(np.array([x["x"] for x in b]), np.array([x["y"] for x in b]), np.array([x["yaw"] for x in b]),
+                            np.array([x["l"] for x in b]), np.array([x["w"] for x in b])).reshape(-1, 4, 2)
+            edges = np.stack([c, np.roll(c, -1, axis=1)], axis=2).reshape(-1, 2, 2)
+            centre = c.mean(axis=1)
+            self._building_edges = (edges, centre, np.linalg.norm(c - centre[:, None], axis=2).max(axis=1)
+                                    if len(b) else np.zeros(0))
+        return self._building_edges
 
     def _finalize_static(self):
         """Arrays of static collision boxes: (x, y, yaw, l, w)."""

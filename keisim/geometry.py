@@ -73,6 +73,27 @@ def obb_overlap(a, b):
     return hit
 
 
+def rays_clear(origin, pts, edges):
+    """Rays from `origin` (2,) to `pts` (N,2) that cross none of the segments `edges` (M,2,2) -> bool (N,).
+    An edge through the end point itself does not block (the last 0.1 % of the ray is not tested)."""
+    pts = np.asarray(pts, float).reshape(-1, 2)
+    edges = np.asarray(edges, float).reshape(-1, 2, 2)
+    if not len(pts) or not len(edges):
+        return np.ones(len(pts), bool)
+    a = np.asarray(origin, float)[None, None, :]
+    r = pts[:, None, :] - a                                     # (N,1,2)
+    c, s = edges[None, :, 0, :], edges[None, :, 1, :] - edges[None, :, 0, :]
+
+    def cross(u, v):
+        return u[..., 0] * v[..., 1] - u[..., 1] * v[..., 0]
+    den = cross(r, s)
+    ok = np.abs(den) > 1e-9
+    den = np.where(ok, den, 1.0)
+    t = cross(c - a, s) / den                                   # along the ray
+    u = cross(c - a, r) / den                                   # along the edge
+    return ~np.any(ok & (t > 0.0) & (t < 0.999) & (u >= 0.0) & (u <= 1.0), axis=1)
+
+
 # ----------------------------------------------------------------------------
 # Curves / polylines
 # ----------------------------------------------------------------------------

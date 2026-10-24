@@ -214,6 +214,7 @@ def worker(wid, args, quota, out_dir, counter):
     cfg.render_rgb = cfg.render_seg = False
     cfg.renderer = args.renderer
     cfg.keiview_roads = args.keiview_roads
+    cfg.expert_yield_visible = bool(args.yield_visible)
     if args.ego_cross_rate is not None:
         cfg.traffic.ego_cross_rate = args.ego_cross_rate
     if args.ped_spacing is not None:
@@ -395,6 +396,8 @@ def main():
                     help="town style (keisim/config.py); twophase: right turns wait for gaps in the oncoming traffic; "
                          "roadtypes: twophase with main roads, residential roads without sidewalks and alleys")
     ap.add_argument("--jam_fixes", type=int, default=0, choices=[0, 1], help="box rule + hidden jam release (long2/3)")
+    ap.add_argument("--yield_visible", type=int, default=0, choices=[0, 1],
+                    help="the expert gives way only to cars the camera sees (EnvConfig.expert_yield_visible)")
     ap.add_argument("--osm_towns", nargs="*", default=[], metavar="NAME[:S,W,N,E]",
                     help="drive real towns (keisim/realworld.py; boxes of OSM_BOXES or given) instead of procedural "
                          "ones; a town is picked per --episodes_per_town episodes. Use --jam_fixes 1 as evaluate.py does")
@@ -409,7 +412,8 @@ def main():
     write_meta(args.out, label_version=LABEL_VERSION, mode=args.mode, ckpt=args.ckpt, frames=args.frames, history=args.history,
                renderer=args.renderer, town_style=args.town_style, jam_fixes=args.jam_fixes, late_yield=True,
                **({"osm_towns": args.osm_towns, "osm_seed0": args.osm_seed0} if args.osm_towns else {}),
-               **({"keiview_roads": args.keiview_roads} if args.keiview_roads != "plain" else {}))
+               **({"keiview_roads": args.keiview_roads} if args.keiview_roads != "plain" else {}),
+               **({"yield_visible": 1} if args.yield_visible else {}))
     ctx = mp.get_context("spawn" if args.mode == "dagger" else "fork")
     counter = ctx.Value("i", 0)
     t0 = time.time()

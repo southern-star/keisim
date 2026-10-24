@@ -98,6 +98,7 @@ def run_route(job):
     cfg.render_rgb = args["agent"] == "model"
     cfg.renderer = args.get("renderer", "keisim")
     cfg.keiview_roads = args.get("keiview_roads", "plain")
+    cfg.expert_yield_visible = bool(args.get("yield_visible", False))
     if args.get("dense"):
         cfg.traffic.vehicle_spacing = (20.0, 28.0)
         cfg.traffic.ped_spacing = (14.0, 20.0)
@@ -306,6 +307,9 @@ def main():
     ap.add_argument("--keiview_roads", default="plain", choices=["plain", "detail"],
                     help="KeiView road surface: plain (as trained) or detail (markings, signs, ...)")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--yield_visible", type=int, default=0, choices=[0, 1],
+                    help="the expert gives way only to cars the camera sees (EnvConfig.expert_yield_visible): "
+                         "--agent expert, and the expert's reasons in the logs; tag suffix _yv")
     ap.add_argument("--brake_hold", action="store_true", help="safety layer: no throttle burst right after firm braking")
     ap.add_argument("--red_hold", action="store_true", help="safety layer: no creeping while the model sees red/yellow")
     ap.add_argument("--town_style", default=None, choices=list(TOWN_STYLES),
@@ -341,6 +345,8 @@ def main():
         tag += "_hold"
     if args.red_hold:
         tag += "_red"
+    if args.yield_visible:
+        tag += "_yv"
     if args.osm_town:
         jobs = [(args.osm_town, args.episode0 + e) for e in range(args.routes)]
     else:
@@ -361,7 +367,7 @@ def main():
          "dense": args.dense, "renderer": args.renderer, "keiview_roads": args.keiview_roads, "fail_dir": fail_dir,
          "brake_hold": args.brake_hold,
          "red_hold": args.red_hold, "town_style": args.town_style, "jam_fixes": bool(args.jam_fixes),
-         "blocked_timeout": args.blocked_timeout, "osm_bbox": args.osm_bbox}
+         "blocked_timeout": args.blocked_timeout, "osm_bbox": args.osm_bbox, "yield_visible": bool(args.yield_visible)}
     t0 = time.time()
     ctx = mp.get_context("spawn")
     with ctx.Pool(args.workers) as pool:

@@ -204,6 +204,15 @@ class Expert:
         yield_tta = math.nan          # label for the model's auxiliary head: earliest arrival of a car with priority
         if tr.has_yields:
             s_front = s + hl
+
+            def tables():
+                if not env.cfg.expert_yield_visible:
+                    return tr.yield_tables()
+                # only the cars the camera (on `pose`: a displaced camera's own view) shows right now
+                c = env.cfg.camera
+                x, y, yaw = float(pose[0]), float(pose[1]), float(pose[2])
+                cam = (x + c.x * math.cos(yaw) - c.y * math.sin(yaw), y + c.x * math.sin(yaw) + c.y * math.cos(yaw))
+                return tr.yield_tables(visible=tr.visible_from(cam, yaw, math.radians(c.fov_deg) / 2, c.max_dist, w.town))
             for jn in route.junctions:
                 if jn["s_out"] < s_front:
                     continue
@@ -218,14 +227,14 @@ class Expert:
                             v_x = math.sqrt(CROSSING_V ** 2 + 2 * CROSSING_B * max(d_wait, 0.0))
                             if v_x < target:
                                 target, reason = v_x, "crossing"
-                        tta = tr.min_arrival(conn, w.t, tr.yield_tables())
+                        tta = tr.min_arrival(conn, w.t, tables())
                         yield_tta = min(tta, YIELD_TTA_MAX)
                         if tta < YIELD_GAP:
                             v_y = stop_profile(max(d_wait, 0.0), self.B_COMF)
                             if v_y < target:
                                 target, reason = v_y, "yield"
                     elif d_cross > LATE_COMMIT:
-                        tta = tr.min_arrival(conn, w.t, tr.yield_tables(), moving_only=True)
+                        tta = tr.min_arrival(conn, w.t, tables(), moving_only=True)
                         yield_tta = min(tta, YIELD_TTA_MAX)
                         if tta < clear_time(d_cross, v, ego.LENGTH) + LATE_MARGIN:
                             target, reason = 0.0, "yield"

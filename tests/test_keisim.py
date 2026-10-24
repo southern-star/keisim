@@ -667,3 +667,70 @@ def test_lead_edge_focus_geometry():
     assert abs(route_turn_deg(arc) - np.degrees(1.6)) < 0.5
     line = np.stack([np.minimum(s, 12.0), np.zeros_like(s)], 1)
     assert route_turn_deg(line) == 0.0
+
+
+def test_visible_from_field_of_view_and_buildings():
+    """Traffic.visible_from: a car counts when a corner is inside the camera's horizontal field of view, within
+    range, and (given a town) the line to that corner does not pass through a building."""
+    import math
+    from keisim.geometry import rays_clear
+
+    sq = np.array([[[9, -1], [11, -1]], [[11, -1], [11, 1]], [[11, 1], [9, 1]], [[9, 1], [9, -1]]], float)
+    assert rays_clear((0, 0), [[20, 0], [20, 5], [9, 0]], sq).tolist() == [False, True, True]   # an edge at the end point
+
+    cfg = EnvConfig()
+    cfg.render_rgb = cfg.render_seg = False
+    env = KeiEnv(cfg)
+    for ep in range(20):
+        env.reset(town_seed=5, episode_seed=ep, route_length=500.0)
+        if env.world.traffic.n >= 5:
+            break
+    tr = env.world.traffic
+    tr.xy[:] = 1000.0                                           # everyone far away, then five cars around (0, 0)
+    tr.xy[:5] = [[20, 0], [-20, 0], [20, 30], [200, 0], [30, 0]]
+    tr.yaw[:5] = 0.0
+    tr.dims[:5, :2] = [4.0, 1.7]
+
+    class Walls:                                                # one building between the camera and car 4
+        buildings = [{"x": 25.0, "y": 0.0, "yaw": 0.0, "l": 2.0, "w": 6.0}]
+        _building_edges = None
+        building_edges = Town.building_edges
+
+    narrow = tr.visible_from((0, 0), 0.0, math.radians(50), 110.0)
+    assert narrow[:5].tolist() == [True, False, False, False, True]      # behind, 56 deg off, too far
+    assert tr.visible_from((0, 0), 0.0, math.radians(75), 110.0)[2]      # a 150 deg camera sees the side car
+    walls = tr.visible_from((0, 0), 0.0, math.radians(50), 110.0, Walls())
+    assert walls[:5].tolist() == [True, False, False, False, False]      # car 4 is behind the building
+    assert not narrow[5:].any()
+
+
+def test_expert_yield_visible_counts_only_cars_in_view():
+    """EnvConfig.expert_yield_visible: the give-way rule's tables hold only the cars Traffic.visible_from passes,
+    seen from the camera on the planned pose; without it, every car."""
+    import math
+    from keisim.config import town_config
+
+    cfg = EnvConfig()
+    cfg.render_rgb = cfg.render_seg = False
+    cfg.town = town_config("twophase")
+    env = KeiEnv(cfg)
+    for ep in range(40):                        # a route through a turn that gives way, with traffic
+        env.reset(town_seed=1012, episode_seed=ep, route_length=600.0)
+        jn = next((j for j in env.route.junctions if env.world.town.lanes[j["lane"]].yields), None)
+        if jn is not None and env.world.traffic.n >= 10:
+            break
+    conn = env.world.town.lanes[jn["lane"]]
+    tr, ego, hl = env.world.traffic, env.world.ego, env.world.ego.LENGTH / 2
+    seen = []
+    tr.min_arrival = lambda c, t, on_lane, moving_only=False: seen.append(sum(map(len, on_lane.values()))) or 9.0
+    s = jn["s_in"] + conn.wait_s - 3.0 - hl                    # 3 m before the wait point
+    p0, p1 = env.route.poly.interp(np.array([s, s + 0.5]))
+    pose = (float(p0[0]), float(p0[1]), float(np.arctan2(p1[1] - p0[1], p1[0] - p0[0])))
+    env.expert.plan(pose=pose, s=s)
+    assert seen[-1] == tr.n
+    env.cfg.expert_yield_visible = True
+    env.expert.plan(pose=pose, s=s)
+    c = cfg.camera
+    cam = (pose[0] + c.x * math.cos(pose[2]), pose[1] + c.x * math.sin(pose[2]))
+    vis = tr.visible_from(cam, pose[2], math.radians(c.fov_deg) / 2, c.max_dist, env.world.town)
+    assert seen[-1] == int(vis.sum()) < tr.n

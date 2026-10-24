@@ -6,7 +6,7 @@ import math
 import numpy as np
 
 from .config import TL_GREEN, TL_RED, TL_YELLOW, TrafficConfig
-from .geometry import wrap
+from .geometry import box_corners, rays_clear, wrap
 
 # ----------------------------------------------------------------------------
 # Lane-sequence lookahead
@@ -418,11 +418,14 @@ class Traffic:
         return False
 
     # ------------------------------------------------------------------- yielding (two-phase signals)
-    def yield_tables(self, ego_info=None):
+    def yield_tables(self, ego_info=None, visible=None):
         """Who is where, for must_yield: lane -> [(s, v, length, is_ego, next lane, the lane after it)], front first.
-        ego_info = (lane, s on lane, next lane, v, length[, the lane after the next]) adds the ego."""
+        ego_info = (lane, s on lane, next lane, v, length[, the lane after the next]) adds the ego.
+        visible: (n,) bool, only these NPCs are listed (see visible_from)."""
         on_lane = {}
         for j in range(self.n):
+            if visible is not None and not visible[j]:
+                continue
             r, k = self.route[j], self.ri[j]
             on_lane.setdefault(r[k], []).append((float(self.s[j]), float(self.v[j]), float(self.dims[j, 0]), False,
                                                  r[k + 1] if k + 1 < len(r) else None,
@@ -433,6 +436,27 @@ class Traffic:
         for lst in on_lane.values():
             lst.sort(key=lambda e: -e[0])
         return on_lane
+
+    def visible_from(self, cam, yaw, half_fov, max_dist, town=None):
+        """NPCs a camera at `cam` (x, y) looking along `yaw` can see -> bool (n,): a corner of the car within
+        +-half_fov (rad) of its axis and max_dist of it, and (given `town`) the line to that corner not through a
+        building (Town.building_edges, 2D: cars do not hide one another, nor walls and trees)."""
+        if self.n == 0:
+            return np.zeros(0, bool)
+        cam = np.asarray(cam, float)
+        cs = box_corners(self.xy[:, 0], self.xy[:, 1], self.yaw, self.dims[:, 0], self.dims[:, 1])    # (n, 4, 2)
+        rel = cs - cam
+        seen = (np.abs(wrap(np.arctan2(rel[..., 1], rel[..., 0]) - yaw)) < half_fov) & \
+            (np.hypot(*(self.xy - cam).T) < max_dist)[:, None]
+        if town is not None and seen.any() and len(town.buildings):
+            edges, centre, rad = town.building_edges()
+            i, k = np.nonzero(seen)
+            far = float(np.hypot(*(cs[i, k] - cam).T).max())
+            near = np.hypot(*(centre - cam).T) < far + rad + 0.5
+            ok = rays_clear(cam, cs[i, k], edges[np.repeat(near, 4)])
+            seen[:] = False
+            seen[i[ok], k[ok]] = True
+        return seen.any(axis=1)
 
     def must_yield(self, conn, t, on_lane):
         """True if a car with priority over connector `conn` (Lane) is in its crossing or reaches it within
