@@ -131,6 +131,24 @@ def test_procedural_export_unchanged():
     assert export(1000) == ref
 
 
+def test_bundled_sapporo_export_unchanged():
+    """The bundled real town web/towns/town_osm_sapporo.json (the browser demo's 札幌) must equal the export of the
+    bundled OpenStreetMap extract data/osm/osm_sapporo.json with the current importer and rules, so the browser's
+    town is the one evaluate.py --osm_town osm_sapporo drives. Regenerate with
+    `uv run scripts/import_osm.py --name osm_sapporo --out web/towns` after changing either."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, os.path.join(root, "scripts"))
+    from collect import OSM_BOXES
+    from export_town import export_town
+    with open(os.path.join(root, "web", "towns", "town_osm_sapporo.json")) as f:
+        ref = json.load(f)
+    town = osm_town(OSM_BOXES["osm_sapporo"], cache=os.path.join(root, "data", "osm", "osm_sapporo.json"), name="osm_sapporo")
+    assert town.max_vehicle_dims == (6.0, 2.0) and town.mirrored_turn_yield
+    out = json.loads(json.dumps(export_town(town)))          # the file's float rounding
+    assert out["attribution"].startswith("Map data") and out["source"]["osm_bbox"] == list(OSM_BOXES["osm_sapporo"])
+    assert out == ref
+
+
 def test_graph_duplicate_and_coincident_arms():
     """Two edges between the same nodes along the same line (OSM maps some streets twice; contractions can make such
     pairs too) are one road: drop_duplicates keeps one, and est_radius sizes a junction as if arms closer than

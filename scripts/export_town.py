@@ -328,7 +328,23 @@ def export_town(town: Town) -> dict:
         "buildings": buildings, "trees": trees,
         "parcels": make_parcels(town, buildings),
         **({"markings_yellow": [r2(simplify(p, LINE_EPS, True)) for p in town.markings_yellow]} if mixed else {}),
+        **real_town_fields(town),
     }
+
+
+def real_town_fields(town: Town) -> dict:
+    """Fields of a town from a road graph (keisim/realworld.py): the traffic rules the browser demo mirrors
+    (web/src/traffic.js) and, for OpenStreetMap towns, the source box and the ODbL attribution."""
+    out = {}
+    if getattr(town, "max_vehicle_dims", None):
+        out["max_vehicle_dims"] = [round(float(v), 2) for v in town.max_vehicle_dims]
+    if getattr(town, "mirrored_turn_yield", False):
+        out["mirrored_turn_yield"] = True
+    osm = getattr(town, "osm", None)
+    if osm:
+        out["source"] = {"osm_bbox": [round(float(v), 6) for v in osm["bbox"]]} if osm.get("bbox") else {"osm": True}
+        out["attribution"] = "Map data \u00a9 OpenStreetMap contributors (ODbL)"
+    return out
 
 
 def main():

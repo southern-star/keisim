@@ -296,6 +296,10 @@ OpenStreetMap の道路と建物から、KeiSim の街を作ります (`keisim/r
 * 生活道路は幅 6 m ほどで歩道がなく、人は路側帯を歩きます。交差点の半径は道幅から決めます (生活道路で 8 m)。
 * 右折は、対向の左折とすれ違えないとき、左折を先に行かせます。周りの車は、狭い道に入れる大きさまでにしています。
 * 600 m のルートを 20 本ずつ、3 組 (エピソード 100〜、200〜、300〜) の 60 ルートで評価します。学習には、この町の北・東・南の 1 km 角 (`osm_sapporo_n` / `_e` / `_s`) だけを使います。
+* 町は同梱しています。OpenStreetMap の抜き出し (Overpass API の答え) は `data/osm/` にあり、`import_osm.py` と `--osm_town` はネットなしで動きます。
+  KeiView 用の書き出し `web/towns/town_osm_sapporo.json` も同梱で、ブラウザでも走れます: <https://southern-star.github.io/keisim/?pilot=1&town=osm_sapporo>
+  (右上のメニューの「札幌」。周りの車も優先道路の規則で走ります。家が 1,500 軒あるので読み込みに 1 分ほどかかります)。
+  `data/osm/` と `web/towns/town_osm_*.json` は ODbL です ([data/osm/README.md](data/osm/README.md))。
 
 | 札幌 (60 ルート、約 35 km、安全層つき) | エキスパート | v0.8 | **v0.9** |
 |---|---|---|---|
