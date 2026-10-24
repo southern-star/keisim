@@ -9,9 +9,9 @@
 // skewed junction), one gives way (equalGivesWay). Real towns (keisim/realworld.py, e.g. town osm_sapporo) add
 // keisim's priority crossings: at an unsignalised junction of 3+ arms the minor road's cars give way to every
 // movement of the priority road (priorityGroups), a right turn also waits at its entry for the oncoming left turn
-// around the same corner (mirrored_turn_yield), and the NPC fleet is capped at max_vehicle_dims. Cars stuck for
-// long where the ego camera cannot see them are moved elsewhere. All coordinates are KeiSim's (x east, y north,
-// yaw counter-clockwise).
+// around the same corner (mirrored_turn_yield), the minor road's cars stop once at its 止まれ line before that, and
+// the NPC fleet is capped at max_vehicle_dims. Cars stuck for long where the ego camera cannot see them are moved
+// elsewhere. All coordinates are KeiSim's (x east, y north, yaw counter-clockwise).
 import { heading, pointOn, wrap } from './nav.js';
 
 const TL = { RED: 0, YELLOW: 1, GREEN: 2 };
@@ -23,6 +23,8 @@ const YIELD_CLEAR = 2.4;                                    // keisim/roadnet.py
 const RANK = { right: 0, left: 1, straight: 2 };            // the lower-ranked movement yields
 const MIRROR_PASS = 3.6;                                    // keisim/roadnet.py MIRROR_PASS
 const KIND_RANK = { alley: 0, residential: 1, street: 2, main: 3 };   // road types: the minor road gives way
+const STOP_SIGN_SETBACK = 2.0;                              // keisim/roadnet.py: 止まれ line before the minor approach's end
+const STOP_SIGN_NPC_AT = 1.0, STOP_SIGN_NPC_ZONE = 3.0;     // keisim/traffic.py: stop 1 m before it, once (standing within 3 m)
 const EGO = { L: 4.5, W: 1.85 };
 // keisim/traffic.py CAR_COLORS (BGR there) as RGB
 const COLORS = [[235, 235, 235], [238, 240, 240], [195, 190, 190], [32, 30, 30], [125, 120, 120], [25, 60, 140],
@@ -183,12 +185,13 @@ export function createTraffic(data, lanes, { count = 24, seed = 1 } = {}) {
   // real towns: unsignalised junctions of 3+ arms are priority crossings (keisim Town.from_graph)
   const priority = data.junctions.some((J) => !J.signalized && J.arms >= 3);
   const mirrored = !!data.mirrored_turn_yield;
+  const stopSigns = !!(data.stop_signs && data.stop_signs.length);   // real towns exported with their 止まれ signs
   const yielding = twoPhase || priority;
   if (yielding) makeYields();
   const roadLanes = lanes.filter((L) => L.len > 30);
   const totalLen = roadLanes.reduce((a, L) => a + L.len, 0);
   const cars = [];
-  let contacts = 0, lastContact = -1e9, npcContacts = 0;
+  let contacts = 0, lastContact = -1e9, npcContacts = 0, stopSignStops = 0;
   const touching = new Set();
 
   /** keisim Town._make_yields: inside every signalised junction, a connector yields to the connectors of the other
@@ -198,7 +201,8 @@ export function createTraffic(data, lanes, { count = 24, seed = 1 } = {}) {
    *  movements that cross (the right turns at a skewed junction), one gives way (equalGivesWay).
    *  Priority crossings (unsignalised, 3+ arms; real towns): the minor road's connectors give way to every movement
    *  of the priority road they would touch, whatever the turns; movements of the same road rank as above. With
-   *  mirrored_turn_yield a right turn also waits at its entry for the oncoming left turn around the same corner. */
+   *  mirrored_turn_yield a right turn also waits at its entry for the oncoming left turn around the same corner.
+   *  Towns with 止まれ signs: every approach of the minor road gets its stop line (lane.stopSign, arc length). */
   function makeYields() {
     const byJunction = new Map();
     for (const L of lanes) {
@@ -211,6 +215,9 @@ export function createTraffic(data, lanes, { count = 24, seed = 1 } = {}) {
       const J = junctions.get(jid);
       const prio = !J.signalized;
       const major = prio ? priorityGroups(J, conns) : null;
+      if (prio && stopSigns) {
+        for (const [id, grp] of major) if (grp === 1) lanes[id].stopSign = Math.max(0.5, lanes[id].len - STOP_SIGN_SETBACK);
+      }
       const equals = [];
       for (const a of conns) {
         const ga = phaseOf.get(a.from.id);
@@ -332,7 +339,7 @@ export function createTraffic(data, lanes, { count = 24, seed = 1 } = {}) {
       if (ego && Math.hypot(p[0] - ego.x, p[1] - ego.y) < avoidEgo) continue;
       if (cars.some((c) => c !== car && c.xy && Math.hypot(c.xy[0] - p[0], c.xy[1] - p[1]) < 12)) continue;
       route.extend(s + 80);
-      Object.assign(car, { route, s, seg: route.segAt(s), xy: p, yaw: route.headingAt(s), stuck: 0 });
+      Object.assign(car, { route, s, seg: route.segAt(s), xy: p, yaw: route.headingAt(s), stuck: 0, ssDone: null });
       return true;
     }
     return false;
@@ -485,6 +492,20 @@ export function createTraffic(data, lanes, { count = 24, seed = 1 } = {}) {
           if (stop && d - 0.6 < gap) { gap = d - 0.6; vl = 0; }
         }
       }
+      // 止まれ: on the minor road's approach (or the lane before it), stop once with the front bumper STOP_SIGN_NPC_AT
+      // before the line, then on to the connector's wait point (keisim Traffic._stop_sign_gaps)
+      if (stopSigns) {
+        for (const sg of [g, c.route.segs[k + 1]]) {
+          if (!sg) break;
+          if (sg.kind !== 'lane' || sg.lane.stopSign == null) continue;
+          const d = sg.s0 + sg.lane.stopSign - (c.s + c.L / 2);
+          if (c.ssDone === sg.lane.id || d < -0.5 || d > LOOK) break;
+          if (c.v < 0.05 && d <= STOP_SIGN_NPC_ZONE) { c.ssDone = sg.lane.id; stopSignStops++; break; }
+          const gs = d + IDM.s0 - STOP_SIGN_NPC_AT;          // the IDM stands still s0 behind the gap
+          if (gs < gap) { gap = gs; vl = 0; }
+          break;
+        }
+      }
       // turns that give way (two-phase signals, priority crossings): wait at the wait point while priority traffic
       // would arrive within YIELD_GAP s; past the wait point, or too close to stop gently, the movement goes on
       // (keisim Traffic._yield_gaps)
@@ -555,11 +576,12 @@ export function createTraffic(data, lanes, { count = 24, seed = 1 } = {}) {
 
   function reset(ego) {
     spawn(ego);
-    contacts = 0; npcContacts = 0; touching.clear();
+    contacts = 0; npcContacts = 0; stopSignStops = 0; touching.clear();
   }
 
   return {
     step, drawList, reset, cars, twoPhase, priority,
     get contacts() { return contacts; }, get npcContacts() { return npcContacts; }, get n() { return cars.length; },
+    get stopSignStops() { return stopSignStops; },             // full stops at 止まれ lines (tests)
   };
 }

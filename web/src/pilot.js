@@ -463,6 +463,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     idle: () => inflight || Promise.resolve(),             // the inference in flight (tests: window.__pilotRun)
     traffic, lanes,                                         // for tests (tools/pilot_check.mjs --yields)
     state: () => ({ car: { ...car }, plan, s: nav.s, inputs: nav.inputs(), inferMs, deviation, resets, t: ctx.time, standM, useStand,
-      traffic: trafficOn ? { n: traffic.n, contacts: traffic.contacts, npcContacts: traffic.npcContacts, twoPhase: traffic.twoPhase } : null }),
+      traffic: trafficOn ? { n: traffic.n, contacts: traffic.contacts, npcContacts: traffic.npcContacts, twoPhase: traffic.twoPhase,
+        stopSignStops: traffic.stopSignStops } : null }),
   };
 }
