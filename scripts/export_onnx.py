@@ -87,6 +87,7 @@ def main():
     torch.backends.mha.set_fastpath_enabled(False)          # export the plain attention ops
     model = load_model(src, "cpu").float().eval()
     assert not model.history, "history models are not exported (the browser demo feeds single frames)"
+    assert not model.mem_input, "memory-input models are not exported yet (web/src/pilot.js does not count stand_m)"
     net = Exported(model).eval()
     rng = np.random.default_rng(0)
     img = torch.from_numpy(rng.integers(0, 256, (1, 3, 160, 320)).astype(np.float32))

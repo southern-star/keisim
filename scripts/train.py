@@ -57,7 +57,8 @@ def evaluate(model, loader, device):
         b = {k: v.to(device, non_blocking=True) for k, v in b.items()}
         img = b["img"].contiguous(memory_format=torch.channels_last)
         with torch.autocast("cuda", dtype=torch.bfloat16):
-            out = model(img, b["cmd"], b["tp"], speed=b["v"], img_prev=b["img_prev"], has_prev=b["has_prev"])
+            out = model(img, b["cmd"], b["tp"], speed=b["v"], img_prev=b["img_prev"], has_prev=b["has_prev"],
+                        stand_m=b["stand_m"], stand_known=b["stand_known"])
             if model.speed_input:
                 blind = model(img, b["cmd"], b["tp"], with_seg=False, img_prev=b["img_prev"], has_prev=b["has_prev"])
         _, logs = compute_loss(model, out, b, w_aux=1.0)
@@ -119,6 +120,8 @@ def main():
     ap.add_argument("--cf_prob", type=float, default=0.0,
                     help="probability of relabelling a frame for a random ego speed (needs recorded light inputs)")
     ap.add_argument("--cf_weight", type=float, default=1.0, help="sampling weight of frames with light inputs")
+    ap.add_argument("--mem_input", action="store_true",
+                    help="speed models: also feed the distance since the ego last stood (stand_m; 止まれ lines)")
     ap.add_argument("--history", type=float, default=0.0, help="multi-frame model: also feed the frame this many s earlier")
     ap.add_argument("--history_drop", type=float, default=0.3, help="probability of hiding the previous frame in training")
     ap.add_argument("--history_mode", default="frame", choices=["frame", "diff"], help="feed the earlier frame or the change")
@@ -147,6 +150,8 @@ def main():
                            speed_drop=args.speed_drop if args.speed_input else 0.0, history_drop=args.history_drop)
     if args.speed_input:
         print(f"frames with light-decision inputs (counterfactual speeds): {int(data['cf_ok'][tr_idx].sum())}", flush=True)
+    if args.mem_input:
+        print(f"frames with stand_m: {int(np.isfinite(data['stand_m'][tr_idx]).sum())} / {len(tr_idx)}", flush=True)
     ds_va = DrivingDataset(data, va_idx, train=False)
     w = sample_weights(data, args.dagger_weight, args.kv_weight)
     w[data["cf_ok"]] *= args.cf_weight
@@ -175,6 +180,8 @@ def main():
     model_cfg = dict(sd.get("model_cfg", {})) if sd else {}
     if args.speed_input:
         model_cfg["speed_input"] = True
+    if args.mem_input:
+        model_cfg["mem_input"] = True
     if args.history:
         model_cfg.update(history=True, history_dt=args.history, history_mode=args.history_mode)
     if args.aux_weight > 0:
@@ -216,7 +223,8 @@ def main():
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 out = model(b["img"].contiguous(memory_format=torch.channels_last), b["cmd"], b["tp"],
                             speed=b["v"], speed_known=b["v_known"] if model.speed_input else None,
-                            img_prev=b["img_prev"], has_prev=b["has_prev"])
+                            img_prev=b["img_prev"], has_prev=b["has_prev"], stand_m=b["stand_m"],
+                            stand_known=b["stand_known"])
             loss, logs = compute_loss(model, out, b, w_aux=args.aux_weight)
             opt.zero_grad(set_to_none=True)
             loss.backward()

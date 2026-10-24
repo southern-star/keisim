@@ -223,3 +223,32 @@ def test_stop_sign_counterfactuals():
                     assert go == (0.0 if p["ss_go"] < 0.3 else p["ss_go"]) or not math.isnan(p["lt_d"])
             _, _, done, _ = env.step(env.expert_action())
     assert pending > 0 and near > 0, (pending, near)
+
+
+def test_stand_memory_tells_the_stop_apart():
+    """Just before and just after its stop at a 止まれ line the car sees nearly the same; the distance since it last
+    stood (stand_m, counted as KeiPilotAgent and collect.py count it) tells the two apart. Near a line the expert
+    counts the stop as made exactly when the car stood no farther back than STOP_SIGN_MARGIN + STOP_SIGN_ZONE, i.e.
+    when stand_m <= STOP_SIGN_MARGIN + STOP_SIGN_ZONE - d (d: the line ahead of the front bumper)."""
+    from keipilot.data import STAND_CAP, stand_update
+    from keisim.env import KeiEnv
+    from keisim.expert import STOP_SIGN_MARGIN, STOP_SIGN_OVER, STOP_SIGN_ZONE
+    town = osm_town(BBOX, osm=mini_osm(), name="mini")
+    env = KeiEnv(EnvConfig(town=town.cfg, render_rgb=False, render_seg=False))
+    dt = env.cfg.dt * env.cfg.action_repeat
+    seen = {True: 0, False: 0}
+    for ep in range(3):
+        env.reset(town, episode_seed=ep, route_length=300, render=False)
+        hl = env.world.ego.LENGTH / 2
+        m, done = STAND_CAP, False
+        while not done:
+            m = stand_update(m, env.world.ego.v, dt)
+            for s, _ in env.route.stop_signs:
+                d = s - (env.s_ego + hl)
+                if -STOP_SIGN_OVER < d <= STOP_SIGN_MARGIN + STOP_SIGN_ZONE:
+                    made = s in env.expert._ss_done
+                    room = STOP_SIGN_MARGIN + STOP_SIGN_ZONE - d
+                    assert (m <= room + 0.3) if made else (m > room - 0.3), (ep, d, m, made)
+                    seen[made] += 1
+            _, _, done, _ = env.step(env.expert_action())
+    assert seen[True] > 0 and seen[False] > 0, seen

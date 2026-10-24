@@ -8,6 +8,7 @@ import torch
 
 from keisim.control import PlanFollower
 
+from .data import STAND_CAP, stand_update
 from .model import KeiPilot
 
 
@@ -70,30 +71,35 @@ class KeiPilotAgent:
         self.hold = BrakeHold() if brake_hold else None
         self.red_hold = RedHold() if red_hold else None
         self.frames = None                 # history models: the last frames seen, one per control step
+        self.stand_m = STAND_CAP           # memory-input models: metres since the ego last stood
 
     def reset(self):
         self.follower.reset()
         if self.hold:
             self.hold.reset()
         self.frames = None
+        self.stand_m = STAND_CAP
 
     def _tensor(self, bgr):
         img = torch.from_numpy(np.ascontiguousarray(bgr[:, :, ::-1].transpose(2, 0, 1)))[None].to(self.device)
         return img.contiguous(memory_format=torch.channels_last)
 
     @torch.no_grad()
-    def plan(self, rgb_bgr, command, target_point, with_seg=False, speed=None, prev_bgr=None):
-        """prev_bgr: for history models, the frame `history_dt` s earlier (None: not available yet)."""
+    def plan(self, rgb_bgr, command, target_point, with_seg=False, speed=None, prev_bgr=None, stand_m=None):
+        """prev_bgr: for history models, the frame `history_dt` s earlier (None: not available yet).
+        stand_m: for memory-input models, metres since the ego last stood (None: unknown)."""
         img = self._tensor(rgb_bgr)
         cmd = torch.tensor([int(command)], device=self.device)
         tp = torch.tensor(np.asarray(target_point, np.float32)[None], device=self.device)
         spd = None if speed is None else torch.tensor([float(speed)], device=self.device)
+        stand = None if stand_m is None else torch.tensor([float(stand_m)], device=self.device)
         prev = has_prev = None
         if self.model.history:
             prev = self._tensor(prev_bgr) if prev_bgr is not None else torch.zeros_like(img)
             has_prev = torch.tensor([prev_bgr is not None], device=self.device)
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=self.amp):
-            out = self.model(img, cmd, tp, with_seg=with_seg, speed=spd, img_prev=prev, has_prev=has_prev)
+            out = self.model(img, cmd, tp, with_seg=with_seg, speed=spd, img_prev=prev, has_prev=has_prev,
+                             stand_m=stand)
         v, p = self.model.decode_speed(out["speed_logits"])
         res = {
             "path": out["path"][0].float().cpu().numpy(),
@@ -114,7 +120,9 @@ class KeiPilotAgent:
             self.frames.append(np.array(rgb_bgr, copy=True))
             if len(self.frames) == self.frames.maxlen:
                 prev = self.frames[0]
-        p = self.plan(rgb_bgr, command, target_point, with_seg=with_seg, speed=speed, prev_bgr=prev)
+        self.stand_m = stand_update(self.stand_m, speed, dt)
+        p = self.plan(rgb_bgr, command, target_point, with_seg=with_seg, speed=speed, prev_bgr=prev,
+                      stand_m=self.stand_m)
         if self.hold or self.red_hold:
             p["target_speed_raw"] = p["target_speed"]
         if self.hold:

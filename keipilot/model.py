@@ -55,7 +55,7 @@ def _resnet18_from_local_r34():
 
 class KeiPilot(nn.Module):
     def __init__(self, n_sem=13, d=256, n_layers=3, n_heads=8, pretrained=True, img_hw=(160, 320), speed_input=False,
-                 history=False, history_dt=0.4, history_mode="frame", aux_yield=False):
+                 history=False, history_dt=0.4, history_mode="frame", aux_yield=False, mem_input=False):
         super().__init__()
         if pretrained:
             r, self.init_info = _resnet18_from_local_r34()
@@ -96,6 +96,15 @@ class KeiPilot(nn.Module):
             nn.init.zeros_(self.speed_enc[2].weight)
             nn.init.zeros_(self.speed_enc[2].bias)
             self.speed_unknown = nn.Parameter(torch.zeros(d))
+        # optional memory: how far the ego has driven since it last stood (keipilot.data.stand_update), the one
+        # thing a single frame cannot show at a 止まれ line (still to stop, or moving off after the stop). Same
+        # zero start as the speed input
+        self.mem_input = mem_input
+        if mem_input:
+            self.mem_enc = nn.Sequential(nn.Linear(3, d), nn.GELU(), nn.Linear(d, d))
+            nn.init.zeros_(self.mem_enc[2].weight)
+            nn.init.zeros_(self.mem_enc[2].bias)
+            self.mem_unknown = nn.Parameter(torch.zeros(d))
         layer = nn.TransformerDecoderLayer(d, n_heads, 4 * d, dropout=0.1, batch_first=True, norm_first=True,
                                            activation="gelu")
         self.decoder = nn.TransformerDecoder(layer, n_layers)
@@ -128,10 +137,18 @@ class KeiPilot(nn.Module):
         v = v.float().clamp(0.0, 20.0)[:, None]
         return torch.cat([v / 10.0, (v / 10.0) ** 2, torch.log1p(v) / 2.5], -1)
 
-    def forward(self, img, cmd, tp, with_seg=True, speed=None, speed_known=None, img_prev=None, has_prev=None):
+    @staticmethod
+    def encode_mem(m):
+        """m (B,) metres driven since the ego last stood (saturates at 10)."""
+        m = m.float().clamp(0.0, 10.0)[:, None]
+        return torch.cat([m / 10.0, torch.exp(-m / 1.5), torch.exp(-m / 5.0)], -1)
+
+    def forward(self, img, cmd, tp, with_seg=True, speed=None, speed_known=None, img_prev=None, has_prev=None,
+                stand_m=None, stand_known=None):
         """img: (B,3,H,W) uint8/float RGB in [0,255]. speed (B,) m/s is used by speed-input models only;
         speed_known (B,) bool hides it per sample (False -> the learned 'unknown' embedding).
-        img_prev / has_prev (history models): the frame `history_dt` s earlier; missing frames enter as zeros."""
+        img_prev / has_prev (history models): the frame `history_dt` s earlier; missing frames enter as zeros.
+        stand_m / stand_known (memory-input models): metres since the ego last stood, hidden like the speed."""
         x = (img.float() / 255.0 - self.mean) / self.std
         if self.history:
             if img_prev is None:
@@ -168,6 +185,15 @@ class KeiPilot(nn.Module):
                 if speed_known is not None:
                     s = torch.where(speed_known[:, None], s, unknown)
                 cond = cond + s
+        if self.mem_input:
+            unknown = self.mem_unknown.to(cond.dtype)[None].expand_as(cond)
+            if stand_m is None:
+                cond = cond + unknown
+            else:
+                s = self.mem_enc(self.encode_mem(stand_m)).to(cond.dtype)
+                if stand_known is not None:
+                    s = torch.where(stand_known[:, None], s, unknown)
+                cond = cond + s
         q = self.queries[None].expand(img.shape[0], -1, -1) + cond[:, None]
         h = self.decoder(q, mem)
         out["path"] = self.path_prior[None] + self.path_head(h[:, :N_PATH]).float() * 2.0
@@ -178,8 +204,8 @@ class KeiPilot(nn.Module):
         return out
 
     def load_compatible(self, sd):
-        """Load a checkpoint from a model with fewer inputs (no speed / no history): new parameters keep their
-        neutral init (zero speed encoder output, zero weights for the previous frame). Returns the new keys."""
+        """Load a checkpoint from a model with fewer inputs (no speed / memory / history): new parameters keep their
+        neutral init (zero speed / memory encoder output, zero weights for the previous frame). Returns the new keys."""
         own = self.state_dict()
         sd = dict(sd)
         w = sd.get("stem.0.weight")
@@ -188,7 +214,7 @@ class KeiPilot(nn.Module):
             pad[:, :w.shape[1]] = w
             sd["stem.0.weight"] = pad
         missing, unexpected = self.load_state_dict(sd, strict=False)
-        assert not unexpected and all(k.startswith(("speed_", "aux_")) for k in missing), (missing, unexpected)
+        assert not unexpected and all(k.startswith(("speed_", "mem_", "aux_")) for k in missing), (missing, unexpected)
         return missing
 
     def decode_speed(self, logits):

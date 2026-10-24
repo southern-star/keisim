@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from keisim.config import TL_NONE, TL_RED, EnvConfig  # noqa: E402
 from keisim.env import KeiEnv  # noqa: E402
-from keipilot.data import ShardWriter, write_meta  # noqa: E402
+from keipilot.data import STAND_CAP, ShardWriter, stand_update, write_meta  # noqa: E402
 from keisim.config import TOWN_STYLES, town_config  # noqa: E402
 from keisim.expert import LABEL_VERSION  # noqa: E402
 
@@ -147,9 +147,11 @@ STAT_KEYS = ("steps", "steps_focus", "steps_lead_edge", "frames", "focus", "lead
              "lead_edge_tl_none", "lead_edge_tl_none_red")
 
 
-def record(env, writer, rng, v_prob, weather_id, virtual_prob, offset=False, rgb=None, seg=None, prev=None):
+def record(env, writer, rng, v_prob, weather_id, virtual_prob, offset=False, rgb=None, seg=None, prev=None,
+           stand_m=np.nan):
     """offset=False: draw a random virtual camera for this frame; else use the given one (None = real camera).
-    rgb/seg: an already rendered frame for that camera; prev: its frame `--history` s earlier."""
+    rgb/seg: an already rendered frame for that camera; prev: its frame `--history` s earlier.
+    stand_m: metres the ego has driven since it last stood (keipilot.data.stand_update)."""
     plan = env.plan
     e = env.world.ego
     if offset is False:
@@ -174,7 +176,9 @@ def record(env, writer, rng, v_prob, weather_id, virtual_prob, offset=False, rgb
                # auxiliary label: earliest arrival of a car with priority at the next right turn that gives way
                yield_tta=np.float32(plan.get("yield_tta", np.nan)),
                # 止まれ: the pending stop line ahead and the target without it (counterfactual standing frames)
-               ss_d=np.float32(plan.get("ss_d", np.nan)), ss_go=np.float32(plan.get("ss_go", np.nan)))
+               ss_d=np.float32(plan.get("ss_d", np.nan)), ss_go=np.float32(plan.get("ss_go", np.nan)),
+               # the ego's memory of its last stop (memory-input models)
+               stand_m=np.float32(stand_m))
 
 
 def worker(wid, args, quota, out_dir, counter):
@@ -263,7 +267,9 @@ def worker(wid, args, quota, out_dir, counter):
         hist = int(round(args.history / dt))
         assert hist % args.every == 0, "--history must be a multiple of the recording interval"
         frames, seg_off, seg_left = {}, None, 0
+        stand = STAND_CAP                                   # as KeiPilotAgent counts it (reset, then every step)
         while not done and n < quota:
+            stand = stand_update(stand, env.world.ego.v, dt)
             a_exp = env.expert_action()
             v_model = None                                  # the driving model's target speed this step (dagger)
             tl_model = None                                 # and its traffic-light class
@@ -312,10 +318,10 @@ def worker(wid, args, quota, out_dir, counter):
                     frames.pop(env._step - hist - args.every, None)
                     if keep:
                         record(env, writer, rng, None, weather_id, args.virtual_prob, offset=seg_off, rgb=rgb, seg=seg,
-                               prev=frames.get(env._step - hist))
+                               prev=frames.get(env._step - hist), stand_m=stand)
                         n += 1
                 elif keep:
-                    record(env, writer, rng, None, weather_id, args.virtual_prob)
+                    record(env, writer, rng, None, weather_id, args.virtual_prob, stand_m=stand)
                     n += 1
                 if writer.k != shards_saved:                        # a shard was written: its counts with it
                     shards_saved = writer.k
