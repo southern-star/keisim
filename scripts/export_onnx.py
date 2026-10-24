@@ -12,6 +12,8 @@ only holds plain tensor ops:
   img   (1,3,160,320) float32  RGB 0..255
   cond  (1,7)  float32  KeiPilot.encode_cond(cmd, target_point)
   speed (1,3)  float32  KeiPilot.encode_speed(v)        (speed-input models)
+  stand (1,3)  float32  KeiPilot.encode_mem(stand_m)    (memory-input models only: metres driven since the car last
+                        stood, keipilot.data.stand_update, counted by the caller every control step)
 outputs: path (1,10,2) ego-frame waypoints [m], speed_probs (1,12) over 0..11 m/s, tl_probs (1,4) red/yellow/green/none,
 seg (1,40,80) int64 class ids (quarter resolution).
 """
@@ -35,7 +37,7 @@ class Exported(nn.Module):
         super().__init__()
         self.m = m
 
-    def forward(self, img, cond, speed):
+    def forward(self, img, cond, speed, stand=None):
         m = self.m
         x = (img / 255.0 - m.mean) / m.std
         x = m.stem(x)
@@ -54,6 +56,8 @@ class Exported(nn.Module):
         c = m.cond(cond)
         if m.speed_input:
             c = c + m.speed_enc(speed)
+        if m.mem_input:
+            c = c + m.mem_enc(stand)
         q = m.queries[None] + c[:, None]
         h = m.decoder(q, mem)
         path = m.path_prior[None] + m.path_head(h[:, :N_PATH]) * 2.0
@@ -87,22 +91,27 @@ def main():
     torch.backends.mha.set_fastpath_enabled(False)          # export the plain attention ops
     model = load_model(src, "cpu").float().eval()
     assert not model.history, "history models are not exported (the browser demo feeds single frames)"
-    assert not model.mem_input, "memory-input models are not exported yet (web/src/pilot.js does not count stand_m)"
     net = Exported(model).eval()
     rng = np.random.default_rng(0)
     img = torch.from_numpy(rng.integers(0, 256, (1, 3, 160, 320)).astype(np.float32))
     cmd, tp, v = torch.tensor([1]), torch.tensor([[18.0, -3.0]]), torch.tensor([5.0])
-    cond, spd = model.encode_cond(cmd, tp), model.encode_speed(v)
+    inputs = {"img": img, "cond": model.encode_cond(cmd, tp), "speed": model.encode_speed(v)}
+    if model.mem_input:
+        inputs["stand"] = model.encode_mem(torch.tensor([3.0]))
     os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
-    torch.onnx.export(net, (img, cond, spd), dst, opset_version=17, dynamo=False,
-                      input_names=["img", "cond", "speed"], output_names=["path", "speed_probs", "tl_probs", "seg"])
+    torch.onnx.export(net, tuple(inputs.values()), dst, opset_version=17, dynamo=False,
+                      input_names=list(inputs), output_names=["path", "speed_probs", "tl_probs", "seg"])
     if "--fp32" not in sys.argv:
         print(f"float16 storage for {fp16_weights(dst)} weight tensors")
     # parity check against PyTorch (float32 weights)
     import onnxruntime as ort
     with torch.no_grad():
-        ref = [t.numpy() for t in net(img, cond, spd)]
-    out = ort.InferenceSession(dst).run(None, {"img": img.numpy(), "cond": cond.numpy(), "speed": spd.numpy()})
+        ref = [t.numpy() for t in net(*inputs.values())]
+        # ... and the wrapper against the model's own forward (an input left out of Exported would show here)
+        own = model(img, cmd, tp, with_seg=False, speed=v, stand_m=torch.tensor([3.0]) if model.mem_input else None)
+    print(f"Exported vs KeiPilot.forward: path {np.abs(own['path'].numpy() - ref[0]).max():.2e}, speed_probs "
+          f"{np.abs(own['speed_logits'].softmax(-1).numpy() - ref[1]).max():.2e}")
+    out = ort.InferenceSession(dst).run(None, {k: t.numpy() for k, t in inputs.items()})
     for name, a, b in zip(["path", "speed_probs", "tl_probs", "seg"], ref, out):
         err = float(np.abs(a.astype(np.float64) - b.astype(np.float64)).max()) if name != "seg" else float((a != b).mean())
         print(f"{name:12s} shape {tuple(b.shape)}  max |torch - onnx| {err:.2e}" + ("  (fraction of differing pixels)" if name == "seg" else ""))

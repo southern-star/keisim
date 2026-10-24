@@ -36,6 +36,13 @@ function speedFeatures(v) {
   v = clamp(v, 0, 20);
   return Float32Array.from([v / 10, (v / 10) ** 2, Math.log1p(v) / 2.5]);
 }
+// memory-input models (the ONNX has a 'stand' input): metres driven since the car last stood, counted every control
+// step as keipilot/data.py stand_update does (0 while standing, saturating at STAND_CAP)
+const STAND_V = 0.05, STAND_CAP = 10;
+function standFeatures(m) {
+  m = clamp(m, 0, 10);
+  return Float32Array.from([m / 10, Math.exp(-m / 1.5), Math.exp(-m / 5)]);
+}
 
 // ------------------------------------------------------------------ vehicle and controllers (keisim)
 const VEH = { L: 2.7, LF: 1.35, LR: 1.35, MAX_STEER: 0.6, STEER_TAU: 0.12, A_MAX: 3.5, B_MAX: 8.0 };
@@ -174,6 +181,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     try { session = await ort.InferenceSession.create(bytes, { executionProviders: [ep] }); backend = ep; break; } catch (e) { console.warn(`[pilot] ${ep} unavailable`, e); }
   }
   if (!session) throw new Error('推論エンジンを起動できませんでした');
+  const useStand = session.inputNames.includes('stand');
 
   // ---------------------------------------------------------------- page elements
   const overlay = document.createElement('canvas');
@@ -205,13 +213,13 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
   // ---------------------------------------------------------------- state
   const car = { x: 0, y: 0, yaw: 0, v: 0, steer: 0 };
   const speedCtl = createSpeedController(), safety = createSafety();
-  let plan = null, action = [0, 0, 1], tick = 0, acc = 0, stillT = 0, gen = 0;
+  let plan = null, action = [0, 0, 1], tick = 0, acc = 0, stillT = 0, gen = 0, standM = STAND_CAP;
   let busy = false, sinceModel = CONTROL_DT, paused = false, inferMs = 0, msg = '', msgT = 0, deviation = 0, resets = 0;
 
   function reset(why) {
     const p = nav.start();
     Object.assign(car, { x: p.x, y: p.y, yaw: p.yaw, v: 0, steer: 0 });
-    plan = null; action = [0, 0, 1]; tick = 0; acc = 0; stillT = 0; gen++;
+    plan = null; action = [0, 0, 1]; tick = 0; acc = 0; stillT = 0; gen++; standM = STAND_CAP;
     speedCtl.reset(); safety.reset();
     if (trafficOn) traffic.reset(car);
     if (why) { resets++; flash(`${why} — 最初から走り直します`); console.warn(`[pilot] ${why}`); }
@@ -272,6 +280,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
   }
 
   function controlStep() {
+    standM = car.v < STAND_V ? 0 : Math.min(standM + car.v * CONTROL_DT, STAND_CAP);
     if (!plan) { action = [0, 0, 1]; return; }
     plan.target = safety.apply(plan.raw, car.v, CONTROL_DT, plan.tl);
     action = [purePursuit(egoPath(plan), car.v), ...speedCtl.control(plan.target, car.v, CONTROL_DT)];
@@ -332,16 +341,16 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
       }
     }
     in2d.putImageData(inImg, 0, 0);
-    runModel({ x: car.x, y: car.y, yaw: car.yaw }, car.v, nav.inputs());
+    runModel({ x: car.x, y: car.y, yaw: car.yaw }, car.v, nav.inputs(), standM);
   }
 
   let inflight = null;
-  function runModel(pose, v, inp) {
-    inflight = infer(pose, v, inp);
+  function runModel(pose, v, inp, stand) {
+    inflight = infer(pose, v, inp, stand);
     return inflight;
   }
 
-  async function infer(pose, v, inp) {
+  async function infer(pose, v, inp, stand) {
     busy = true;
     const g = gen;
     const c = Math.cos(pose.yaw), s = Math.sin(pose.yaw), dx = inp.tp[0] - pose.x, dy = inp.tp[1] - pose.y;
@@ -353,6 +362,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
         cond: new ort.Tensor('float32', condFeatures(inp.cmd, tp), [1, 7]),
         speed: new ort.Tensor('float32', speedFeatures(v), [1, 3]),
       };
+      if (useStand) feeds.stand = new ort.Tensor('float32', standFeatures(stand), [1, 3]);
       const out = await session.run(feeds);
       inferMs = performance.now() - t0;
       const sp = out.speed_probs.data;
@@ -452,7 +462,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     adapter: backend === 'webgpu' && adapter && adapter.info ? `${adapter.info.vendor} ${adapter.info.architecture}`.trim() : '',
     idle: () => inflight || Promise.resolve(),             // the inference in flight (tests: window.__pilotRun)
     traffic, lanes,                                         // for tests (tools/pilot_check.mjs --yields)
-    state: () => ({ car: { ...car }, plan, s: nav.s, inputs: nav.inputs(), inferMs, deviation, resets, t: ctx.time,
+    state: () => ({ car: { ...car }, plan, s: nav.s, inputs: nav.inputs(), inferMs, deviation, resets, t: ctx.time, standM, useStand,
       traffic: trafficOn ? { n: traffic.n, contacts: traffic.contacts, npcContacts: traffic.npcContacts, twoPhase: traffic.twoPhase } : null }),
   };
 }
