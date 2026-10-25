@@ -22,7 +22,9 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from keisim.config import TL_NONE, TL_RED, EnvConfig  # noqa: E402
+from dataclasses import asdict  # noqa: E402
+
+from keisim.config import CAMERA_RIGS, TL_NONE, TL_RED, EnvConfig, set_camera_rig  # noqa: E402
 from keisim.env import KeiEnv  # noqa: E402
 from keipilot.data import STAND_CAP, ShardWriter, stand_update, write_meta  # noqa: E402
 from keisim.config import TOWN_STYLES, town_config  # noqa: E402
@@ -151,20 +153,23 @@ def record(env, writer, rng, v_prob, weather_id, virtual_prob, offset=False, rgb
            stand_m=np.nan):
     """offset=False: draw a random virtual camera for this frame; else use the given one (None = real camera).
     rgb/seg: an already rendered frame for that camera; prev: its frame `--history` s earlier.
-    stand_m: metres the ego has driven since it last stood (keipilot.data.stand_update)."""
+    stand_m: metres the ego has driven since it last stood (keipilot.data.stand_update).
+    Camera rigs: every camera of the rig is rendered on the same (displaced) rig and stored."""
     plan = env.plan
     e = env.world.ego
     if offset is False:
         offset = random_offset(rng, virtual_prob)
+    extra = ()
     if rgb is None:
-        rgb, seg = env.render_camera(offset=offset)
+        views = env.render_cameras(offset=offset)
+        (rgb, seg), extra = views[0], views[1:]
     if offset is None:
         path, tp = plan["path"], env.target_point()
     else:
         vp = env.virtual_pose(offset)
         path = env.expert.path_local(env.route, env.s_ego, vp)
         tp = env.target_point(vp)
-    writer.add(rgb, seg, prev=prev, cmd=np.int8(env.command()), tp=np.asarray(tp, np.float32),
+    writer.add(rgb, seg, prev=prev, extra=extra, cmd=np.int8(env.command()), tp=np.asarray(tp, np.float32),
                path=np.asarray(path, np.float32), speed=np.float32(plan["target_speed"]),
                tl=np.int8(plan["tl_state"]), v=np.float32(e.v), reason=np.int8(REASONS.get(plan["reason"], 0)),
                town=np.int32(env.town_seed), episode=np.int64(env.episode_seed), step=np.int32(env._step),
@@ -192,7 +197,7 @@ def worker(wid, args, quota, out_dir, counter):
     n0 = sum(len(np.load(f)["jpg_off"]) - 1 for f in have)
     if n0 >= quota:                                     # this worker's share is complete
         return n0
-    cfg = EnvConfig()
+    cfg = set_camera_rig(EnvConfig(), args.rig)
     cfg.town = town_config(args.town_style)
     cfg.traffic.box_rule = cfg.traffic.release_hidden = bool(args.jam_fixes)
     if args.town_style != "classic" or args.osm_towns:   # varied / real towns: twice the caps keep the classic density
@@ -277,7 +282,8 @@ def worker(wid, args, quota, out_dir, counter):
             if agent is None:
                 a = pert(a_exp, dt)
             else:
-                rgb, _ = env.render_camera(want_seg=False)
+                views = env.render_cameras(want_seg=False)
+                rgb = [v[0] for v in views] if len(views) > 1 else views[0][0]
                 a, p_model = agent.act(rgb, env.command(), env.target_point(), env.world.ego.v, dt)
                 v_model, tl_model = p_model["target_speed"], p_model["tl"]
                 # beta-mixture: short expert takeovers keep episodes progressing
@@ -405,15 +411,25 @@ def main():
     ap.add_argument("--allow_eval_town", action="store_true", help="let --osm_towns include osm_sapporo (tests only)")
     ap.add_argument("--history", type=float, default=0.0, help="also store the frame this many s earlier (multi-frame)")
     ap.add_argument("--segment", type=float, default=3.0, help="with --history: seconds a virtual camera is kept")
+    ap.add_argument("--rig", default="front", choices=list(CAMERA_RIGS),
+                    help="camera rig (keisim CAMERA_RIGS): every camera's image is stored (jpg_c1, ...); KeiSim only")
     args = ap.parse_args()
     if any(osm_spec(t)[0] == "osm_sapporo" for t in args.osm_towns) and not args.allow_eval_town:
         ap.error("osm_sapporo is the evaluation town (evaluate.py --osm_town): collect in other boxes")
+    if args.rig != "front" and (args.history or args.renderer != "keisim"):
+        ap.error("camera rigs: KeiSim's renderer, without --history")
+    if args.mode == "dagger":
+        from keipilot.agent import checkpoint_rig
+        if checkpoint_rig(args.ckpt) != args.rig:
+            ap.error(f"--ckpt drives with the camera rig {checkpoint_rig(args.ckpt)}: pass it as --rig")
     quota = [args.frames // args.workers + (1 if i < args.frames % args.workers else 0) for i in range(args.workers)]
     write_meta(args.out, label_version=LABEL_VERSION, mode=args.mode, ckpt=args.ckpt, frames=args.frames, history=args.history,
                renderer=args.renderer, town_style=args.town_style, jam_fixes=args.jam_fixes, late_yield=True,
                **({"osm_towns": args.osm_towns, "osm_seed0": args.osm_seed0} if args.osm_towns else {}),
                **({"keiview_roads": args.keiview_roads} if args.keiview_roads != "plain" else {}),
-               **({"yield_visible": 1} if args.yield_visible else {}))
+               **({"yield_visible": 1} if args.yield_visible else {}),
+               **({"rig": args.rig, "cameras": [asdict(c) for c in set_camera_rig(EnvConfig(), args.rig).cameras]}
+                  if args.rig != "front" else {}))
     ctx = mp.get_context("spawn" if args.mode == "dagger" else "fork")
     counter = ctx.Value("i", 0)
     t0 = time.time()

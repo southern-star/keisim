@@ -4,6 +4,7 @@ import os
 import sys
 
 import numpy as np
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -90,3 +91,69 @@ def test_cylinder_has_no_seams():
         near = np.concatenate([d[ground, u - 4:u - 1], d[ground, u + 2:u + 5]], 1).mean()
         assert d[ground, u].mean() < 1.5 * near + 1
     assert math.isclose(cam.cy, 80.0 - cam.f * math.tan(math.radians(8.0)))
+
+
+def _labels(i):
+    from keipilot.data import LABEL_KEYS
+    return {k: (np.zeros(2, np.float32) if k == "tp" else np.zeros((10, 2), np.float32) if k == "path" else i)
+            for k in LABEL_KEYS}
+
+
+def test_rig_shards_dataset_and_model(tmp_path):
+    """Shards of a rig hold every camera (jpg_c1, seg_c1); the dataset gives (K,3,H,W) images and (K,h,w)
+    segmentations; shards of different rigs do not mix; a two-camera KeiPilot starts from a one-camera checkpoint
+    (every camera with its position embeddings) and trains on the batch."""
+    import torch
+
+    from keipilot.data import DrivingDataset, ShardWriter, load_shards
+    from keipilot.model import KeiPilot, compute_loss
+
+    w = ShardWriter(str(tmp_path / "rig"), "expert", frames_per_shard=3)
+    for i in range(5):
+        cams = [np.full((160, 320, 3), 20 * i + 100 * c, np.uint8) for c in range(2)]
+        segs = [np.full((160, 320), c + 1, np.uint8) for c in range(2)]
+        w.add(cams[0], segs[0], extra=[(cams[1], segs[1])], **_labels(i))
+    w.flush()
+    data, files = load_shards([str(tmp_path / "rig")])
+    assert data["n_cams"] == 2 and len(files) == 2 and len(data["cmd"]) == 5
+    ds = DrivingDataset(data, np.arange(5), train=False)
+    s = ds[3]
+    assert s["img"].shape == (2, 3, 160, 320) and s["seg"].shape == (2, 80, 160)
+    assert abs(float(s["img"][1].float().mean()) - 160) <= 2 and s["seg"][1].unique().tolist() == [2]
+    assert DrivingDataset(data, np.arange(5), train=True)[0]["img"].shape == (2, 3, 160, 320)
+    one_cam = ShardWriter(str(tmp_path / "one"), "expert")
+    one_cam.add(cams[0], segs[0], **_labels(0))
+    one_cam.flush()
+    with pytest.raises(ValueError):
+        load_shards([str(tmp_path / "rig"), str(tmp_path / "one")])
+
+    torch.manual_seed(0)
+    one = KeiPilot(pretrained=False, speed_input=True, mem_input=True)
+    two = KeiPilot(pretrained=False, speed_input=True, mem_input=True, n_cams=2)
+    assert two.load_compatible(one.state_dict()) == []
+    assert torch.equal(two.pos3[1], one.pos3[0]) and torch.equal(two.pos4[0], one.pos4[0])
+    batch = torch.utils.data.default_collate([ds[i] for i in range(2)])
+    out = two(batch["img"], batch["cmd"], batch["tp"], speed=batch["v"], stand_m=batch["stand_m"])
+    assert out["path"].shape == (2, 10, 2) and out["seg"].shape[0] == 4
+    loss, logs = compute_loss(two, out, batch)
+    loss.backward()
+    assert np.isfinite(logs["seg"]) and float(two.pos3.grad[1].abs().sum()) > 0
+
+
+def test_agent_drives_a_rig_model(tmp_path):
+    """KeiPilotAgent feeds a rig model the images of every camera (obs["rgbs"]); one image is refused."""
+    import torch
+
+    from keipilot.agent import KeiPilotAgent, checkpoint_rig
+    from keipilot.model import KeiPilot
+
+    ck = tmp_path / "rig.pt"
+    cfg = {"speed_input": True, "mem_input": True, "n_cams": 2}
+    torch.save({"model": KeiPilot(pretrained=False, **cfg).state_dict(), "model_cfg": cfg, "rig": "wide_narrow"}, ck)
+    assert checkpoint_rig(str(ck)) == "wide_narrow"
+    agent = KeiPilotAgent(str(ck), device="cpu", brake_hold=True, red_hold=True)
+    env, obs = rig_env()
+    action, p = agent.act(obs["rgbs"], obs["command"], obs["target_point"], 0.0, 0.1, with_seg=True)
+    assert np.isfinite(action).all() and p["seg"].ndim == 2
+    with pytest.raises(ValueError):
+        agent.act(obs["rgb"], obs["command"], obs["target_point"], 0.0, 0.1)

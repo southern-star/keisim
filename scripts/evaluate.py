@@ -26,7 +26,7 @@ import time
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from keisim.config import TOWN_STYLES  # noqa: E402
+from keisim.config import CAMERA_RIGS, TOWN_STYLES  # noqa: E402
 
 SUITES = {
     # seen town layouts (towns used for data collection), new routes/traffic
@@ -79,9 +79,9 @@ def run_route(job):
     (town, ep), args, idx = job
     import cv2
     cv2.setNumThreads(1)
-    from keisim.config import EnvConfig, town_config
+    from keisim.config import EnvConfig, set_camera_rig, town_config
     from keisim.env import KeiEnv
-    cfg = EnvConfig()
+    cfg = set_camera_rig(EnvConfig(), args.get("rig", "front"))
     osm = None
     if isinstance(town, str):                        # a real town (keisim/realworld.py), built once per worker
         global _TOWN
@@ -151,7 +151,8 @@ def run_route(job):
             action = env.expert_action()
             mp_ = None
         else:
-            action, mp_ = agent.act(obs["rgb"], obs["command"], obs["target_point"], e.v, dt, with_seg=video is not None)
+            action, mp_ = agent.act(obs.get("rgbs", obs["rgb"]), obs["command"], obs["target_point"], e.v, dt,
+                                    with_seg=video is not None)
         plan = env.plan
         log.append((round(env.elapsed, 1), round(float(env.s_ego), 1), round(float(e.v), 2), plan["reason"],
                     int(plan["tl_state"]), None if mp_ is None else int(mp_["tl"]),
@@ -323,7 +324,12 @@ def main():
                     default=[43.088, 141.360, 43.097, 141.372], help="--osm_town's box (default: Sapporo Higashi-ku)")
     ap.add_argument("--routes", type=int, default=20, help="--osm_town: number of routes (episode seeds 100..)")
     ap.add_argument("--episode0", type=int, default=100, help="--osm_town: first episode seed")
+    ap.add_argument("--rig", default=None, choices=list(CAMERA_RIGS),
+                    help="camera rig (keisim CAMERA_RIGS); default: the model's (front for the expert)")
     args = ap.parse_args()
+    if args.rig is None:
+        from keipilot.agent import checkpoint_rig
+        args.rig = checkpoint_rig(args.ckpt) if args.agent == "model" else "front"
     if args.osm_town:                   # real towns: mixed road kinds, two-phase signals, the long3 traffic rules
         SUITE_DEFAULTS["osm"] = {"town_style": "twophase", "jam_fixes": True, "blocked_timeout": 180.0}
         args.suite = "osm"
@@ -367,7 +373,8 @@ def main():
          "dense": args.dense, "renderer": args.renderer, "keiview_roads": args.keiview_roads, "fail_dir": fail_dir,
          "brake_hold": args.brake_hold,
          "red_hold": args.red_hold, "town_style": args.town_style, "jam_fixes": bool(args.jam_fixes),
-         "blocked_timeout": args.blocked_timeout, "osm_bbox": args.osm_bbox, "yield_visible": bool(args.yield_visible)}
+         "blocked_timeout": args.blocked_timeout, "osm_bbox": args.osm_bbox, "yield_visible": bool(args.yield_visible),
+         "rig": args.rig}
     t0 = time.time()
     ctx = mp.get_context("spawn")
     with ctx.Pool(args.workers) as pool:

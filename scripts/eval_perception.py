@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from keipilot.agent import load_model  # noqa: E402
 from keipilot.data import DrivingDataset, load_shards  # noqa: E402
+from keipilot.model import channels_last  # noqa: E402
 from keisim.config import N_SEM, SEM_NAMES, TL_NAMES  # noqa: E402
 
 
@@ -39,7 +40,7 @@ def main():
     for b in dl:
         b = {k: v.cuda() for k, v in b.items()}
         with torch.autocast("cuda", dtype=torch.bfloat16):
-            out = model(b["img"].contiguous(memory_format=torch.channels_last), b["cmd"], b["tp"],
+            out = model(channels_last(b["img"]), b["cmd"], b["tp"],
                         speed=None if args.no_speed else b["v"], img_prev=b["img_prev"], has_prev=b["has_prev"])
         err = torch.linalg.norm(out["path"] - b["path"], dim=-1)
         ade += err.mean(-1).sum().item()

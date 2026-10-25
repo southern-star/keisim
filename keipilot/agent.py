@@ -18,7 +18,13 @@ def load_model(ckpt, device="cuda"):
     model = KeiPilot(pretrained=False, **cfg)
     model.load_state_dict(sd["model"])
     model.eval().to(device)
+    model.rig = sd.get("rig", "front")          # the camera rig it was trained on (keisim CAMERA_RIGS)
     return model
+
+
+def checkpoint_rig(ckpt):
+    """Camera rig of a checkpoint (scripts set the environment's cameras from it)."""
+    return torch.load(ckpt, map_location="cpu").get("rig", "front")
 
 
 class BrakeHold:
@@ -81,13 +87,18 @@ class KeiPilotAgent:
         self.stand_m = STAND_CAP
 
     def _tensor(self, bgr):
+        if isinstance(bgr, (list, tuple)):          # a camera rig: (1, K, 3, H, W)
+            return torch.stack([self._tensor(b)[0] for b in bgr])[None]
         img = torch.from_numpy(np.ascontiguousarray(bgr[:, :, ::-1].transpose(2, 0, 1)))[None].to(self.device)
         return img.contiguous(memory_format=torch.channels_last)
 
     @torch.no_grad()
     def plan(self, rgb_bgr, command, target_point, with_seg=False, speed=None, prev_bgr=None, stand_m=None):
-        """prev_bgr: for history models, the frame `history_dt` s earlier (None: not available yet).
+        """rgb_bgr: the camera image, or the list of a rig's images (obs["rgbs"]) for multi-camera models.
+        prev_bgr: for history models, the frame `history_dt` s earlier (None: not available yet).
         stand_m: for memory-input models, metres since the ego last stood (None: unknown)."""
+        if self.model.n_cams != (len(rgb_bgr) if isinstance(rgb_bgr, (list, tuple)) else 1):
+            raise ValueError(f"the model takes {self.model.n_cams} camera images")
         img = self._tensor(rgb_bgr)
         cmd = torch.tensor([int(command)], device=self.device)
         tp = torch.tensor(np.asarray(target_point, np.float32)[None], device=self.device)
@@ -108,7 +119,7 @@ class KeiPilotAgent:
             "tl": int(out["tl_logits"][0].argmax()),
             "tl_probs": out["tl_logits"][0].float().softmax(-1).cpu().numpy(),
         }
-        if with_seg:
+        if with_seg:        # (rigs: the first camera's)
             res["seg"] = out["seg"][0].float().argmax(0).cpu().numpy().astype(np.uint8)
         return res
 
