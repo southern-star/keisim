@@ -6,6 +6,7 @@
 //   node tools/pilot_check.mjs [--town 1000] [--sec 60] [--every 2] [--ep webgpu|wasm] [--gl hw|soft] [--shot out.png]
 //                              [--traffic 0] [--cars 20]   (no other cars / their number)
 //                              [--model models/keipilot_v24.onnx]   (another ONNX under web/; default models/keipilot.onnx)
+//                              [--tdir .towns]   (a town exported there by scripts/import_osm.py, not one under towns/)
 //                              [--url https://southern-star.github.io/keisim/]   (a deployed copy instead of web/)
 // Needs models/keipilot.onnx (scripts/export_onnx.py) and network access to cdn.jsdelivr.net (onnxruntime-web).
 import fs from 'node:fs';
@@ -36,7 +37,7 @@ try {
   const page = await browser.newPage();
   page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warn') console.log(`[${m.type()}] ${m.text().slice(0, 300)}`); });
   page.on('pageerror', (e) => console.log(`[pageerror] ${e.message}`));
-  const q = new URLSearchParams({ pilot: '1', town, ...(args.ep ? { ep: args.ep } : {}),
+  const q = new URLSearchParams({ pilot: '1', town, ...(args.ep ? { ep: args.ep } : {}), ...(args.tdir ? { tdir: args.tdir } : {}),
     ...(args.traffic ? { traffic: args.traffic } : {}), ...(args.cars ? { cars: args.cars } : {}),
     ...(args.model ? { model: args.model } : {}) });
   const t0 = Date.now();

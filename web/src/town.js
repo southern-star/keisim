@@ -33,6 +33,7 @@ export function prepareTown(data) {
     kind: r.kind || 'street', laneW: r.lane_width ?? cfg.lane_width, shoulder: r.shoulder ?? cfg.shoulder,
     sidewalk: r.sidewalk ?? cfg.sidewalk_width, hw: r.half_width ?? cfg.road_half_width, wo: r.walk_outer ?? cfg.walk_outer,
     speed: r.speed_limit ?? cfg.speed_limit,
+    oneway: !!r.oneway,                                    // real towns: a single lane on the centre line, a -> b
   });
   const roads = data.roads.map((r) => {
     const pts = r.center.map(P);

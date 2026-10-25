@@ -279,13 +279,19 @@ export function createTraffic(data, lanes, { count = 24, seed = 1 } = {}) {
 
   /** keisim Town._priority_groups: approach lane id -> 0 on the priority road, 1 on the minor road(s). The priority
    *  road is a pair of nearly opposite arms (the through road of a T-junction); with a choice, the pair of the higher
-   *  road kind, then the longer one. */
+   *  road kind, then the longer one. Every arm counts for the pair, also one that only leaves the junction (the
+   *  start of a one-way road); only the approaches are in the map. */
   function priorityGroups(J, conns) {
     const arms = [];
     for (const c of conns) {
       if (arms.some((a) => a.L === c.from)) continue;
       const L = c.from, p = L.pts[L.pts.length - 1], r = data.roads[L.road] || {};
       arms.push({ L, ang: Math.atan2(p[1] - J.pos[1], p[0] - J.pos[0]), rank: KIND_RANK[r.kind || 'street'], len: r.length || L.len });
+    }
+    for (const L of lanes) {
+      if (L.from !== J.id || arms.some((a) => a.L.road === L.road)) continue;
+      const p = L.pts[0], r = data.roads[L.road] || {};
+      arms.push({ L, out: true, ang: Math.atan2(p[1] - J.pos[1], p[0] - J.pos[0]), rank: KIND_RANK[r.kind || 'street'], len: r.length || L.len });
     }
     const greater = (u, v) => { for (let n = 0; n < u.length; n++) if (u[n] !== v[n]) return u[n] > v[n]; return false; };
     let best = null, pair = [0, 1];
@@ -296,7 +302,7 @@ export function createTraffic(data, lanes, { count = 24, seed = 1 } = {}) {
         if (!best || greater(key, best)) { best = key; pair = [i, k]; }
       }
     }
-    return new Map(arms.map((a, n) => [a.L.id, pair.includes(n) ? 0 : 1]));
+    return new Map(arms.map((a, n) => [a, pair.includes(n) ? 0 : 1]).filter(([a]) => !a.out).map(([a, g]) => [a.L.id, g]));
   }
 
   /** keisim Town._equal_gives_way: does connector a give way to b? If one of them already gives way to the other's
