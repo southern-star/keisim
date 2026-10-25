@@ -250,7 +250,8 @@ async function main() {
   }
   if (EGO) {
     const W = Number(params.get('w') || 320), H = Number(params.get('h') || 160);
-    installEgo({ ctx, renderer, scene, camera, pipeline, sky, sunDir, W, H });
+    installEgo({ ctx, renderer, scene, camera, pipeline, sky, sunDir, W, H,
+      makePipeline: () => createRenderPipeline(renderer, quality) });   // the cameras of a rig (q.cams), one per image size
     try { window.__egoWarmup(); } catch (e) { console.error(e); errors.push({ module: 'ego', message: String(e && e.stack || e) }); }
     document.body.classList.add('shot');
     window.__ready = true;

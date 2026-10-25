@@ -91,13 +91,11 @@ class KeiEnv:
         self._keiview = None
 
     def keiview(self):
-        """Lazily started KeiView renderer (one headless Chrome per env)."""
-        if self.cfg.extra_cameras or self.cfg.camera.projection != "pinhole" or self.cfg.camera.yaw_deg:
-            raise NotImplementedError("KeiView renders the front camera only; camera rigs need renderer='keisim'")
+        """Lazily started KeiView renderer (one headless Chrome per env, for every camera of the rig)."""
         if self._keiview is None:
             from .render.keiview import KeiViewRenderer
             self._keiview = KeiViewRenderer(self.cfg.camera, quality=self.cfg.keiview_quality, gl=self.cfg.keiview_gl,
-                                            roads=self.cfg.keiview_roads)
+                                            roads=self.cfg.keiview_roads, cameras=self.cfg.cameras)
         return self._keiview
 
     def close(self):
@@ -175,7 +173,8 @@ class KeiEnv:
         if not self.cfg.extra_cameras:
             return [self.render_camera(offset, want_rgb, want_seg)]
         if self.cfg.renderer == "keiview":
-            self.keiview()                     # raises: KeiView has no camera rigs yet
+            return self.keiview().render_rig(self.world.ego.pose, self.world.scene_state(), self.world.t,
+                                             want_rgb=want_rgb, want_seg=want_seg, offset=offset)
         state = self.world.scene_state()
         return [cam.render(self.world.ego.pose, state, self.weather, want_rgb=want_rgb, want_seg=want_seg,
                            offset=offset) for cam in self.assets.cameras]

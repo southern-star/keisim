@@ -1,6 +1,7 @@
 // Ego-camera mode (KeiSim driving data and closed-loop evaluation).
 //   index.html?shot=1&ego=1&town=<seed>&w=320&h=160
-// window.__ego(request) renders one KeiSim camera frame on demand (there is no animation loop):
+// window.__ego(request) renders one KeiSim camera frame, or one frame of every camera of a rig, on demand (there is no
+// animation loop):
 // the anime-styled RGB image through the normal pipeline, plus an optional pixel-exact semantic
 // label image with the same classes as KeiSim's own renderer (keisim/config.py SEM_NAMES).
 import * as THREE from 'three';
@@ -57,13 +58,17 @@ function b64(u8) {
   return btoa(s);
 }
 
-export function installEgo({ ctx, renderer, scene, camera, pipeline, sky, sunDir, W, H }) {
+export function installEgo({ ctx, renderer, scene, camera, pipeline, sky, sunDir, W, H, makePipeline }) {
   const T = ctx.town;
   const [ox, oy] = T.origin;
   const gl = renderer.getContext();
-  const rgba = new Uint8Array(W * H * 4), rgb = new Uint8Array(W * H * 3), sem = new Uint8Array(W * H);
-  const rtLabel = new THREE.WebGLRenderTarget(W, H, { type: THREE.UnsignedByteType, samples: 0,
+  const labelTarget = (w, h) => new THREE.WebGLRenderTarget(w, h, { type: THREE.UnsignedByteType, samples: 0,
     minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, generateMipmaps: false });
+  // a view: an image size with its pipeline, label target and readback buffers. `main` is the canvas-sized camera of
+  // q.cam; the cameras of a rig (q.cams) get one view per image size (viewOf below)
+  const main = { w: W, h: H, face: false, pipe: pipeline, rt: labelTarget(W, H),
+    rgba: new Uint8Array(W * H * 4), rgb: new Uint8Array(W * H * 3), sem: new Uint8Array(W * H) };
+  const pipes = [pipeline];
   const glassMats = new Set();
   for (const [k, m] of ctx.mat.cache) if (k.startsWith('glass|')) glassMats.add(m);
 
@@ -93,7 +98,8 @@ export function installEgo({ ctx, renderer, scene, camera, pipeline, sky, sunDir
   }
   const semOf = (o) => { for (let p = o; p; p = p.parent) if (p.userData.sem !== undefined) return p.userData.sem; return undefined; };
 
-  function renderLabels() {
+  /** Class ids (base64) of each shot [view, cam] (cam null: the camera as it is), with the materials swapped once. */
+  function renderLabels(shots) {
     const swaps = [], hidden = [];
     scene.traverseVisible((o) => {
       if (!(o.isMesh || o.isPoints || o.isLine || o.isSprite)) return;
@@ -114,34 +120,81 @@ export function installEgo({ ctx, renderer, scene, camera, pipeline, sky, sunDir
     scene.background = null; scene.fog = null;
     renderer.shadowMap.needsUpdate = false;
     camera.layers.enableAll();
-    renderer.setRenderTarget(rtLabel);
-    renderer.setClearColor(0x000000, 1.0);
-    renderer.clear();
-    renderer.render(scene, camera);
-    renderer.readRenderTargetPixels(rtLabel, 0, 0, W, H, rgba);
+    const out = [];
+    for (const [v, cam] of shots) {
+      if (cam) placeCamera(cam, v.w, v.h);
+      renderer.setRenderTarget(v.rt);
+      renderer.setClearColor(0x000000, 1.0);
+      renderer.clear();
+      renderer.render(scene, camera);
+      renderer.readRenderTargetPixels(v.rt, 0, 0, v.w, v.h, v.rgba);
+      for (let i = 0, k = 0; k < v.sem.length; i += 4, k++) v.sem[k] = v.rgba[i];
+      out.push(b64(v.sem));
+    }
     renderer.setRenderTarget(null);
     scene.background = bg; scene.fog = fog;
     for (const [o, mat, ic] of swaps) { o.material = mat; o.instanceColor = ic; }
     for (const o of hidden) o.visible = true;
-    for (let i = 0, k = 0; k < sem.length; i += 4, k++) sem[k] = rgba[i];
+    return out;
   }
 
   // ---------------------------------------------------------------- lighting (per episode)
   const base = { sun: sunDir.clone(), exposure: pipeline.compMat.uniforms.uExposure.value,
     fog: scene.fog ? scene.fog.density : 0 };
+  const setExposure = (e) => { for (const p of pipes) p.compMat.uniforms.uExposure.value = e; };
   /** light: {az, el} sun azimuth / elevation (deg, azimuth CCW from KeiSim +x), exposure, fog density. */
   function setLighting(light) {
-    if (!light) { sunDir.copy(base.sun); pipeline.compMat.uniforms.uExposure.value = base.exposure; if (scene.fog) scene.fog.density = base.fog; }
+    if (!light) { sunDir.copy(base.sun); setExposure(base.exposure); if (scene.fog) scene.fog.density = base.fog; }
     else {
       if (light.el !== undefined) {
         const az = light.az * Math.PI / 180, el = light.el * Math.PI / 180;
         sunDir.set(Math.cos(el) * Math.cos(az), Math.sin(el), -Math.cos(el) * Math.sin(az)).normalize();
       }
-      if (light.exposure !== undefined) pipeline.compMat.uniforms.uExposure.value = light.exposure;
+      if (light.exposure !== undefined) setExposure(light.exposure);
       if (light.fog !== undefined && scene.fog) scene.fog.density = light.fog;
     }
     ctx.shared.uSunDir.value.copy(sunDir);
     if (sky.uniforms && sky.uniforms.uSun) sky.uniforms.uSun.value.copy(sunDir);
+  }
+
+  // ---------------------------------------------------------------- cameras
+  /** Put cam ({pos, fwd, vfov} in KeiSim's world) on the three.js camera, for a w x h image. */
+  function placeCamera(cam, w, h) {
+    // KeiSim world (x east, y north, z up) -> three.js (X = x - ox, Y = z, Z = -(y - oy))
+    const [cx, cy, cz] = cam.pos, [fx, fy, fz] = cam.fwd;
+    camera.fov = cam.vfov; camera.aspect = w / h; camera.near = 0.1; camera.far = 2500;
+    camera.updateProjectionMatrix();
+    camera.position.set(cx - ox, cz, -(cy - oy));
+    camera.up.set(0, 1, 0);
+    camera.lookAt(camera.position.x + fx, camera.position.y + fz, camera.position.z - fy);
+    camera.updateMatrixWorld();
+  }
+
+  /** The view of a rig camera's image size. The faces of a stitched cylindrical camera (keisim/render/keiview.py) get
+   *  their own, without the vignette and the light leak: both are screen-space and would show the seams. */
+  const views = new Map();
+  function viewOf(w, h, face) {
+    const key = `${w}x${h}${face ? ' face' : ''}`;
+    let v = views.get(key);
+    if (!v) {
+      const pipe = makePipeline();
+      pipe.setSize(w, h, 1);
+      pipe.compMat.uniforms.uExposure.value = pipeline.compMat.uniforms.uExposure.value;
+      if (face) pipe.compMat.uniforms.uVignette.value = 0;
+      pipes.push(pipe);
+      v = { w, h, face, pipe, rt: labelTarget(w, h),
+        rgba: new Uint8Array(w * h * 4), rgb: new Uint8Array(w * h * 3), sem: new Uint8Array(w * h) };
+      views.set(key, v);
+    }
+    return v;
+  }
+
+  /** RGB (base64) of the w x h image just drawn to the canvas. */
+  function readRGB(v) {
+    const { rgba, rgb } = v;
+    gl.readPixels(0, 0, v.w, v.h, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+    for (let i = 0, j = 0; i < rgba.length; i += 4, j += 3) { rgb[j] = rgba[i]; rgb[j + 1] = rgba[i + 1]; rgb[j + 2] = rgba[i + 2]; }
+    return b64(rgb);
   }
 
   // ---------------------------------------------------------------- per-frame state
@@ -150,31 +203,40 @@ export function installEgo({ ctx, renderer, scene, camera, pipeline, sky, sunDir
     const t = q.t || 0;
     ctx.time = t; ctx.shared.uTime.value = t;
     ctx.shared.uGust.value = 0.5 + 0.28 * Math.sin(t * 0.37) + 0.14 * Math.sin(t * 1.13 + 1.7) + 0.08 * Math.sin(t * 2.9 + 0.4);
-    // camera: KeiSim world (x east, y north, z up) -> three.js (X = x - ox, Y = z, Z = -(y - oy))
-    const [cx, cy, cz] = q.cam.pos, [fx, fy, fz] = q.cam.fwd;
-    camera.fov = q.cam.vfov; camera.aspect = W / H; camera.near = 0.1; camera.far = 2500;
-    camera.updateProjectionMatrix();
-    camera.position.set(cx - ox, cz, -(cy - oy));
-    camera.up.set(0, 1, 0);
-    camera.lookAt(camera.position.x + fx, camera.position.y + fz, camera.position.z - fy);
-    camera.updateMatrixWorld();
+    placeCamera(q.cam, W, H);
     ctx.player.position.set(camera.position.x, 0, camera.position.z);
     if (ctx.services.actors) ctx.services.actors.update(q.veh || [], q.ped || []);
     for (const fn of ctx._updates) { try { fn(0, t); } catch (e) { console.error('update error', e); } }
-    sky.update(t, camera);
+    sky.update(t, camera);            // the sky dome and the sun's shadow box follow q.cam
   }
 
-  /** Render one ego frame. Images are bottom-up rows (OpenGL order), RGB / class id. */
+  /** Render one ego frame: the image of q.cam ({w, h, rgb, sem}), or with q.cams ([{pos, fwd, vfov, w, h, face}])
+   *  one image of each camera of a rig ({views: [{w, h, rgb, sem}]}), all in the scene state, sky and shadows of
+   *  q.cam. Images are bottom-up rows (OpenGL order), RGB / class id. */
   window.__ego = (q) => {
     const t0 = performance.now();
     if (q.reset && ctx.services.actors) ctx.services.actors.reset();
     setState(q);
     renderer.info.reset();
-    pipeline.render(scene, camera, sunDir, q.t || 0);
-    gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
-    for (let i = 0, j = 0; i < rgba.length; i += 4, j += 3) { rgb[j] = rgba[i]; rgb[j + 1] = rgba[i + 1]; rgb[j + 2] = rgba[i + 2]; }
-    const out = { w: W, h: H, rgb: b64(rgb), sem: null, calls: renderer.info.render.calls };
-    if (q.labels) { renderLabels(); out.sem = b64(sem); }
+    let out;
+    if (!q.cams) {
+      pipeline.render(scene, camera, sunDir, q.t || 0);
+      out = { w: W, h: H, rgb: readRGB(main), sem: null, calls: renderer.info.render.calls };
+      if (q.labels) out.sem = renderLabels([[main, null]])[0];
+    } else {
+      const shots = q.cams.map((c) => [viewOf(c.w, c.h, !!c.face), c]);
+      const imgs = shots.map(([v, c], i) => {
+        placeCamera(c, v.w, v.h);
+        renderer.setViewport(0, 0, v.w, v.h);            // the canvas is at least as large as every camera
+        ctx.wires.setResolution(v.w, v.h);
+        v.pipe.render(scene, camera, sunDir, q.t || 0, { shadows: i === 0, leak: !v.face });
+        return { w: v.w, h: v.h, rgb: readRGB(v), sem: null };
+      });
+      renderer.setViewport(0, 0, W, H);
+      ctx.wires.setResolution(pipeline.size.x, pipeline.size.y);
+      out = { views: imgs, calls: renderer.info.render.calls };
+      if (q.labels) renderLabels(shots).forEach((s, i) => { imgs[i].sem = s; });
+    }
     out.ms = +(performance.now() - t0).toFixed(2);
     return out;
   };

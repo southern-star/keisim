@@ -93,6 +93,31 @@ def test_cylinder_has_no_seams():
     assert math.isclose(cam.cy, 80.0 - cam.f * math.tan(math.radians(8.0)))
 
 
+def test_keiview_draws_the_rig():
+    """KeiView draws every camera of the rig in one request (the cylinder from the pinhole faces of KeiSim's
+    CylinderRenderer, stitched with the same maps), with the ground and the sky where KeiSim has them (the houses and
+    trees differ between the renderers). Skipped without KeiView (npm install in web/, a Chrome)."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if not os.path.isdir(os.path.join(root, "web", "node_modules", "puppeteer-core")):
+        pytest.skip("KeiView needs `npm install` in web/")
+    env = KeiEnv(set_camera_rig(EnvConfig(renderer="keiview"), "wide_narrow"))
+    try:
+        try:
+            obs = env.reset(town_seed=5, episode_seed=1, weather="noon")
+        except RuntimeError as e:
+            pytest.skip(f"KeiView did not start: {e}")
+        state = env.world.scene_state()
+        keisim = [cam.render(env.world.ego.pose, state, env.weather) for cam in env.assets.cameras]
+        for rgb, seg, (_, ks) in zip(obs["rgbs"], obs["segs"], keisim):
+            assert rgb.shape == (160, 320, 3) and seg.shape == (160, 320)
+            assert (np.isin(seg, GROUND) == np.isin(ks, GROUND)).mean() > 0.93
+            assert ((seg == SEM["sky"]) == (ks == SEM["sky"])).mean() > 0.85
+        # the first camera alone is the same image as in the whole rig
+        assert np.array_equal(env.render_camera()[1], obs["segs"][0])
+    finally:
+        env.close()
+
+
 def _labels(i):
     from keipilot.data import LABEL_KEYS
     return {k: (np.zeros(2, np.float32) if k == "tp" else np.zeros((10, 2), np.float32) if k == "path" else i)

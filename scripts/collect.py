@@ -412,12 +412,12 @@ def main():
     ap.add_argument("--history", type=float, default=0.0, help="also store the frame this many s earlier (multi-frame)")
     ap.add_argument("--segment", type=float, default=3.0, help="with --history: seconds a virtual camera is kept")
     ap.add_argument("--rig", default="front", choices=list(CAMERA_RIGS),
-                    help="camera rig (keisim CAMERA_RIGS): every camera's image is stored (jpg_c1, ...); KeiSim only")
+                    help="camera rig (keisim CAMERA_RIGS): every camera's image is stored (jpg_c1, ...)")
     args = ap.parse_args()
     if any(osm_spec(t)[0] == "osm_sapporo" for t in args.osm_towns) and not args.allow_eval_town:
         ap.error("osm_sapporo is the evaluation town (evaluate.py --osm_town): collect in other boxes")
-    if args.rig != "front" and (args.history or args.renderer != "keisim"):
-        ap.error("camera rigs: KeiSim's renderer, without --history")
+    if args.rig != "front" and args.history:
+        ap.error("camera rigs: no --history")
     if args.mode == "dagger":
         from keipilot.agent import checkpoint_rig
         if checkpoint_rig(args.ckpt) != args.rig:
