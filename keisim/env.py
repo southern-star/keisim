@@ -11,9 +11,10 @@ from .control import PlanFollower
 from .expert import Expert
 from .geometry import world_to_local
 from .render.bev import BEVRenderer
-from .render.camera import CameraRenderer, make_weather
+from .render.camera import make_weather
 from .render.maptex import MapTexture
 from .render.meshes import StaticScene
+from .render.rig import make_renderer
 from .roadnet import Town
 from .route import random_route
 from .world import World
@@ -26,7 +27,7 @@ class TownAssets:
         self.seed = seed
         self.cfg = cfg
         self.town = town if town is not None else Town(seed, cfg.town)
-        self._tex = self._static = self._cam = self._bev = None
+        self._tex = self._static = self._cams = self._bev = None
 
     @property
     def tex(self):
@@ -36,10 +37,15 @@ class TownAssets:
 
     @property
     def camera(self):
-        if self._cam is None:
+        return self.cameras[0]
+
+    @property
+    def cameras(self):
+        """Renderers of every camera of the rig (cfg.cameras)."""
+        if self._cams is None:
             self._static = StaticScene(self.town)
-            self._cam = CameraRenderer(self.town, self.tex, self._static, self.cfg.camera)
-        return self._cam
+            self._cams = [make_renderer(self.town, self.tex, self._static, c) for c in self.cfg.cameras]
+        return self._cams
 
     @property
     def bev(self):
@@ -54,11 +60,12 @@ _CACHE: "OrderedDict[tuple, TownAssets]" = OrderedDict()
 def get_assets(seed, cfg: EnvConfig, max_cache=3) -> TownAssets:
     """Assets of the procedural town `seed` (cfg.town), or of an explicit Town passed in its place (Town.from_graph)."""
     town = None
+    cams = tuple(map(id, cfg.cameras))
     if isinstance(seed, Town):
         town, seed = seed, seed.seed
-        key = (id(town), id(cfg.camera))
+        key = (id(town), cams)
     else:
-        key = (int(seed), id(cfg.town), id(cfg.camera))
+        key = (int(seed), id(cfg.town), cams)
     if key in _CACHE:
         _CACHE.move_to_end(key)
         return _CACHE[key]
@@ -85,6 +92,8 @@ class KeiEnv:
 
     def keiview(self):
         """Lazily started KeiView renderer (one headless Chrome per env)."""
+        if self.cfg.extra_cameras or self.cfg.camera.projection != "pinhole" or self.cfg.camera.yaw_deg:
+            raise NotImplementedError("KeiView renders the front camera only; camera rigs need renderer='keisim'")
         if self._keiview is None:
             from .render.keiview import KeiViewRenderer
             self._keiview = KeiViewRenderer(self.cfg.camera, quality=self.cfg.keiview_quality, gl=self.cfg.keiview_gl,
@@ -161,6 +170,16 @@ class KeiEnv:
         return cam.render(self.world.ego.pose, self.world.scene_state(), self.weather, want_rgb=want_rgb,
                           want_seg=want_seg, offset=offset)
 
+    def render_cameras(self, offset=None, want_rgb=True, want_seg=True):
+        """[(rgb, seg)] of every camera of the rig (cfg.cameras), all on the same (displaced) rig."""
+        if not self.cfg.extra_cameras:
+            return [self.render_camera(offset, want_rgb, want_seg)]
+        if self.cfg.renderer == "keiview":
+            self.keiview()                     # raises: KeiView has no camera rigs yet
+        state = self.world.scene_state()
+        return [cam.render(self.world.ego.pose, state, self.weather, want_rgb=want_rgb, want_seg=want_seg,
+                           offset=offset) for cam in self.assets.cameras]
+
     def virtual_pose(self, offset):
         """Pose of a vehicle whose camera rig is displaced by `offset` (lateral, yaw)."""
         x, y, yaw = self.world.ego.pose
@@ -181,8 +200,10 @@ class KeiEnv:
             "t": self.elapsed,
         }
         if self._render and (self.cfg.render_rgb or self.cfg.render_seg):
-            rgb, seg = self.render_camera(want_rgb=self.cfg.render_rgb, want_seg=self.cfg.render_seg)
-            obs["rgb"], obs["seg"] = rgb, seg
+            views = self.render_cameras(want_rgb=self.cfg.render_rgb, want_seg=self.cfg.render_seg)
+            obs["rgb"], obs["seg"] = views[0]
+            if len(views) > 1:
+                obs["rgbs"], obs["segs"] = [v[0] for v in views], [v[1] for v in views]
         return obs
 
     def expert_action(self):

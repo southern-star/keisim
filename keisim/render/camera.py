@@ -127,6 +127,7 @@ def camera_pose(cfg, x, y, yaw, offset=None):
     c, s = math.cos(cy_), math.sin(cy_)
     ox, oy = cfg.x, cfg.y
     C = np.array([x + c * ox - s * oy, y + s * ox + c * oy, cfg.z])
+    cy_ += math.radians(cfg.yaw_deg)          # the camera's mounting yaw
     p = math.radians(cfg.pitch_deg) + dpitch
     fwd = np.array([math.cos(cy_) * math.cos(p), math.sin(cy_) * math.cos(p), -math.sin(p)])
     right = np.array([math.sin(cy_), -math.cos(cy_), 0.0])
@@ -138,8 +139,11 @@ def camera_pose(cfg, x, y, yaw, offset=None):
 class CameraRenderer:
     NEAR = 0.12
 
-    def __init__(self, town, tex: MapTexture, static: StaticScene, cfg: CameraConfig):
+    def __init__(self, town, tex: MapTexture, static: StaticScene, cfg: CameraConfig, sky_tan_top=None):
+        """sky_tan_top: colour the sky by each pixel's elevation instead of its row, from sky_top at this tan(elevation)
+        to sky_horizon at the horizon (the faces of a cylindrical camera: keisim/render/rig.py)."""
         self.town, self.tex, self.static, self.cfg = town, tex, static, cfg
+        self.sky_tan_top = sky_tan_top
         self.W, self.H = cfg.width, cfg.height
         self.ss = max(1, int(cfg.supersample))
         self.f = (self.W / 2.0) / math.tan(math.radians(cfg.fov_deg) / 2.0)
@@ -202,7 +206,16 @@ class CameraRenderer:
             out[ground & far] = SEM["terrain"]
         else:
             rows = np.nonzero(~ground)[0]
-            if len(rows):
+            if len(rows) and self.sky_tan_top is not None:
+                # ray of every sky pixel in the world: R^T [(u - W/2) / f, (v - H/2) / f, 1]
+                a = (rows - H / 2.0) / f
+                b = (np.arange(W) - W / 2.0) / f
+                d = (b[None, :, None] * R[0][None, None] + a[:, None, None] * R[1][None, None] + R[2][None, None])
+                tan_e = d[..., 2] / np.hypot(d[..., 0], d[..., 1])
+                tt = np.clip(1.0 - tan_e / self.sky_tan_top, 0, 1) ** 0.7
+                col = weather.sky_top * (1 - tt[..., None]) + weather.sky_horizon * tt[..., None]
+                out[rows] = np.clip(col * weather.exposure, 0, 255).astype(np.uint8)
+            elif len(rows):
                 hz = rows.max() + 1
                 tt = np.clip(rows / max(hz, 1), 0, 1) ** 0.7
                 col = weather.sky_top[None] * (1 - tt[:, None]) + weather.sky_horizon[None] * tt[:, None]
