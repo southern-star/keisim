@@ -54,11 +54,15 @@ def main():
     ap.add_argument("--routes", type=int, default=0, help="drive the expert through this many routes first")
     ap.add_argument("--route_length", type=float, default=600.0)
     ap.add_argument("--no-buildings", action="store_true")
+    ap.add_argument("--oneway", choices=["auto", "on", "off"], default="auto",
+                    help="keep one-way roads (auto: on, except the towns built before the importer had them, "
+                         "keisim.realworld.TWO_WAY_TOWNS)")
     args = ap.parse_args()
 
     t0 = time.time()
     town = osm_town(tuple(args.bbox), cache=args.cache or f"data/osm/{args.name}.json", name=args.name, seed=args.seed,
-                    drop_kinds=tuple(args.drop), buildings=not args.no_buildings)
+                    drop_kinds=tuple(args.drop), buildings=not args.no_buildings,
+                    oneway={"auto": None, "on": True, "off": False}[args.oneway])
     print(town.summary(), f"[{time.time() - t0:.1f} s]")
     print(graph_report(town))
     if args.routes:

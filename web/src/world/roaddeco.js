@@ -356,11 +356,13 @@ export function build(ctx) {
   // ---------------------------------------------------------------- road surface: markings, covers, repairs
   for (const r of T.roads) {
     const narrow = r.kind === 'alley';
-    for (const dir of [1, -1]) {
+    // one-way roads (real towns): one lane on the centre line, driven a -> b; laneOut is the lanes' outer edge
+    const laneC = r.oneway ? 0 : r.laneW / 2, laneOut = r.oneway ? r.laneW / 2 : r.laneW;
+    for (const dir of (r.oneway ? [1] : [1, -1])) {
       const busy = [];                     // [d0, d1] distances along this lane holding lane-centre markings
       // speed numerals after the start of the road, in the lane
       if (r.len > 45) {
-        const d = 14.5, F = frame(r, sAt(r, dir, d), dir), [x, z] = side(F, r.laneW / 2);
+        const d = 14.5, F = frame(r, sAt(r, dir, d), dir), [x, z] = side(F, laneC);
         marks.add(x, 0.009, z, F.fx, F.fz, Math.min(2.0, r.laneW - 0.9), 4.5, A['n' + kmh(r)]);
         busy.push([d - 3, d + 3]); count('speed numerals');
       }
@@ -369,7 +371,7 @@ export function build(ctx) {
         for (const before of [30, 50]) {
           const d = r.len - 5 - before;
           if (d < 23) continue;
-          const F = frame(r, sAt(r, dir, d), dir), [x, z] = side(F, r.laneW / 2);
+          const F = frame(r, sAt(r, dir, d), dir), [x, z] = side(F, laneC);
           marks.add(x, 0.009, z, F.fx, F.fz, Math.min(1.5, r.laneW - 1.4), 3.0, A.diamond);
           busy.push([d - 2.5, d + 2.5]); count('diamonds');
         }
@@ -378,7 +380,7 @@ export function build(ctx) {
       if (r.sidewalk > 0) {
         for (let d = 9 + R() * 4; d < r.len - 9; d += 10) {
           if (busy.some(([a, b]) => d > a - 1 && d < b + 1)) continue;
-          const F = frame(r, sAt(r, dir, d), dir), [x, z] = side(F, r.laneW - 0.6);
+          const F = frame(r, sAt(r, dir, d), dir), [x, z] = side(F, laneOut - 0.6);
           marks.add(x, 0.009, z, F.fx, F.fz, 0.75, 1.5, A.chevron); count('chevrons');
         }
       }
@@ -399,21 +401,21 @@ export function build(ctx) {
       covers.add(x, 0.006, z, F.fx, F.fz, 0.72, 0.72, A.hydrant); count('hydrant covers');
     }
     for (let k = Math.floor(R() * 3); k > 0; k--) {
-      const F = frame(r, 8 + R() * Math.max(1, r.len - 16), 1), [x, z] = side(F, (R() < 0.5 ? 1 : -1) * (r.laneW - 0.35));
+      const F = frame(r, 8 + R() * Math.max(1, r.len - 16), 1), [x, z] = side(F, (R() < 0.5 ? 1 : -1) * (laneOut - 0.35));
       covers.add(x, 0.006, z, F.fx, F.fz, 0.3, 0.3, R() < 0.6 ? A.valve : A.gas); count('valve covers');
     }
     // patched and sealed asphalt
     for (let k = Math.floor(R() * 3.2); k > 0; k--) {
-      const F = frame(r, 8 + R() * Math.max(1, r.len - 16), 1), [x, z] = side(F, (R() - 0.5) * 2 * Math.max(0.2, r.laneW - 1.3));
+      const F = frame(r, 8 + R() * Math.max(1, r.len - 16), 1), [x, z] = side(F, (R() - 0.5) * 2 * Math.max(0.2, laneOut - 1.3));
       const a = (R() - 0.5) * 0.3, c = Math.cos(a), sn = Math.sin(a);
       soft.add(x, 0.005, z, F.fx * c - F.fz * sn, F.fz * c + F.fx * sn, 1.0 + R() * 1.6, 1.2 + R() * 2.2, A.patch); count('patches');
     }
     if (r.len > 25 && R() < 0.4) {        // a trench across one lane
-      const dir = R() < 0.5 ? 1 : -1, F = frame(r, 8 + R() * (r.len - 16), dir), [x, z] = side(F, r.laneW / 2);
+      const dir = R() < 0.5 ? 1 : -1, F = frame(r, 8 + R() * (r.len - 16), dir), [x, z] = side(F, laneC);
       soft.add(x, 0.005, z, F.lx, F.lz, 0.8, r.laneW * 0.92, A.trench); count('trenches');
     }
     for (let k = 1 + Math.floor(R() * 3); k > 0; k--) {
-      const F = frame(r, 6 + R() * Math.max(1, r.len - 12), 1), [x, z] = side(F, (R() - 0.5) * 2 * Math.max(0.3, r.laneW - 0.9));
+      const F = frame(r, 6 + R() * Math.max(1, r.len - 12), 1), [x, z] = side(F, (R() - 0.5) * 2 * Math.max(0.3, laneOut - 0.9));
       soft.add(x, 0.005, z, F.fx, F.fz, 1.4 + R(), 2.4 + R() * 1.6, A.crack); count('cracks');
     }
     // green 路側帯 (school route) on residential roads: over the gutter, out to the road edge
@@ -422,7 +424,7 @@ export function build(ctx) {
         const ring = [], back = [];
         for (let s = 6; s <= r.len - 6 + 1e-6; s += 2) {
           const f = r.at(Math.min(s, r.len - 6));
-          ring.push([f.x + f.nx * sgn * (r.laneW + 0.2), f.z + f.nz * sgn * (r.laneW + 0.2)]);
+          ring.push([f.x + f.nx * sgn * (laneOut + 0.2), f.z + f.nz * sgn * (laneOut + 0.2)]);
           back.push([f.x + f.nx * sgn * (r.hw - 0.04), f.z + f.nz * sgn * (r.hw - 0.04)]);
         }
         if (ring.length >= 2) { green.push({ outer: ring.concat(back.reverse()), holes: [] }); count('green belts'); }

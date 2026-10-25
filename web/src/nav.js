@@ -48,14 +48,19 @@ export function pointOn(pl, s) {
   return [pts[i - 1][0] + (pts[i][0] - pts[i - 1][0]) * t, pts[i - 1][1] + (pts[i][1] - pts[i - 1][1]) * t];
 }
 
-/** One lane per road and direction (left-hand traffic: left of the centre line), with the ways out of the
- *  junction at its end (no U-turns): {id, road, from, to, pts, len, h0, h1, next: [{lane, turn, conn}]}.
+/** One lane per road and direction (left-hand traffic: left of the centre line; one-way roads of real towns: one
+ *  lane on the centre line), with the ways out of the junction at its end (no U-turns): {id, road, from, to, pts,
+ *  len, h0, h1, next: [{lane, turn, conn}]}.
  *  conn is the junction connector (keisim/roadnet.py): {from, to, junction, turn, pts, cum, len, yields, wait},
  *  shared by every route that takes it; yields / wait are filled in for two-phase signals (src/traffic.js). */
 export function buildLanes(data) {
   const cfg = data.cfg;
   const lanes = [];
   for (const r of data.roads) {
+    if (r.oneway) {                                   // real towns: a single lane on the centre line, a -> b
+      lanes.push({ id: lanes.length, road: r.id, from: r.a, to: r.b, pts: r.center.map((p) => [p[0], p[1]]) });
+      continue;
+    }
     const off = (cfg.left_hand_traffic === false ? -1 : 1) * (r.lane_width || cfg.lane_width || 3.5) / 2;   // road types: per road
     lanes.push({ id: lanes.length, road: r.id, from: r.a, to: r.b, pts: offsetPolyline(r.center, off) });
     lanes.push({ id: lanes.length, road: r.id, from: r.b, to: r.a, pts: offsetPolyline(r.center, -off).reverse() });

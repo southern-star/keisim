@@ -68,24 +68,28 @@ class Lane:
 class RoadSpec:
     """Cross-section of a road. kind: street | main | residential | alley. shoulder: from the lane's outer edge to
     the edge of the road surface (the 路側帯 where people walk on roads without a sidewalk); sidewalk: width of the
-    raised sidewalk on each side (0: none). center / edge: paint (see config.ROAD_KINDS)."""
+    raised sidewalk on each side (0: none). center / edge: paint (see config.ROAD_KINDS). oneway: a single lane on
+    the centre line, driven from the road's junction a to b (Town.from_graph towns), no centre line paint."""
 
-    def __init__(self, kind, lane_width, shoulder, sidewalk, speed_limit, center="dashed", edge="classic"):
+    def __init__(self, kind, lane_width, shoulder, sidewalk, speed_limit, center="dashed", edge="classic",
+                 oneway=False):
         self.kind = kind
         self.lane_width, self.shoulder, self.sidewalk = lane_width, shoulder, sidewalk
         self.speed_limit = speed_limit
-        self.center, self.edge = center, edge
-        self.half_width = lane_width + shoulder       # road surface, centre line to edge
+        self.center, self.edge = (center, edge) if not oneway else ("none", edge)
+        self.oneway = bool(oneway)
+        self.lane_outer = lane_width / 2.0 if oneway else lane_width   # the lanes' outer edge, from the centre line
+        self.half_width = self.lane_outer + shoulder  # road surface, centre line to edge
         self.walk_outer = self.half_width + sidewalk  # outer edge of the sidewalk (= half_width without one)
 
     @classmethod
-    def street(cls, cfg):
+    def street(cls, cfg, oneway=False):
         """TownConfig's own road: every road of a uniform town, the streets of a mixed one."""
-        return cls("street", cfg.lane_width, cfg.shoulder, cfg.sidewalk_width, cfg.speed_limit)
+        return cls("street", cfg.lane_width, cfg.shoulder, cfg.sidewalk_width, cfg.speed_limit, oneway=oneway)
 
     @classmethod
-    def of_kind(cls, kind, cfg):
-        return cls.street(cfg) if kind == "street" else cls(kind, **ROAD_KINDS[kind])
+    def of_kind(cls, kind, cfg, oneway=False):
+        return cls.street(cfg, oneway) if kind == "street" else cls(kind, **ROAD_KINDS[kind], oneway=oneway)
 
     def walkway(self):
         """Where pedestrians walk along this road: (offset from the centre line, lateral spread factor, on the road
@@ -479,17 +483,20 @@ class Town:
         side = 1.0 if cfg.left_hand_traffic else -1.0
         for road in self.roads:
             rs = road.spec
-            off = side * rs.lane_width / 2.0
+            off = 0.0 if rs.oneway else side * rs.lane_width / 2.0     # one-way roads: a single lane on the centre line
             ab = Lane(len(self.lanes), offset_polyline(road.center, off), "road", rs.speed_limit, rs.lane_width)
             ab.road, ab.start_junction, ab.end_junction = road.id, road.a, road.b
             self.lanes.append(ab)
+            road.lane_ab, road.lane_ba = ab.id, -1
+            if rs.oneway:
+                continue
             ba = Lane(len(self.lanes), offset_polyline(road.center, -off)[::-1].copy(), "road", rs.speed_limit,
                       rs.lane_width)
             ba.road, ba.start_junction, ba.end_junction = road.id, road.b, road.a
             self.lanes.append(ba)
-            road.lane_ab, road.lane_ba = ab.id, ba.id
+            road.lane_ba = ba.id
 
-        # arms: which lanes come in / go out
+        # arms: which lanes come in / go out (-1: none, the far end of a one-way road)
         for J in self.junctions:
             for arm in J.arms:
                 road = self.roads[arm["spec"]]
@@ -500,15 +507,17 @@ class Town:
                 else:
                     arm["in"], arm["out"] = road.lane_ab, road.lane_ba
                     arm["pt"], arm["dir"] = road.center[-1], unit(arm["angle"])
-            J.incoming = [a["in"] for a in J.arms]
-            J.outgoing = [a["out"] for a in J.arms]
+            J.incoming = [a["in"] for a in J.arms if a["in"] >= 0]
+            J.outgoing = [a["out"] for a in J.arms if a["out"] >= 0]
 
         # ---- junction connectors + polygons + signals
         for J in self.junctions:
             for ia, arm_in in enumerate(J.arms):
+                if arm_in["in"] < 0:
+                    continue
                 lin = self.lanes[arm_in["in"]]
                 for ib, arm_out in enumerate(J.arms):
-                    if ia == ib:
+                    if ia == ib or arm_out["out"] < 0:
                         continue
                     lout = self.lanes[arm_out["out"]]
                     h0, h1 = lin.heading[-1], lout.heading[0]
@@ -547,6 +556,8 @@ class Town:
                     J.allred = cfg.signal_allred
                 J.offset = float(rng.uniform(0, J.cycle))
                 for k, arm in enumerate(J.arms):
+                    if arm["in"] < 0:
+                        continue
                     lin = self.lanes[arm["in"]]
                     lin.signal = (J.id, group[k])
                     lin.stop_s = max(1.0, lin.length - cfg.stop_line_setback)
@@ -655,7 +666,8 @@ class Town:
             return np.concatenate([a, b[::-1]])
 
         def stop_line(lane, s, rs):
-            """Stop line across incoming `lane` at arc length `s` (centre-line side to edge), 0.45 m deep."""
+            """Stop line across incoming `lane` at arc length `s` (centre-line side to edge; one-way roads: edge to
+            edge), 0.45 m deep."""
             p = lane.poly.interp(s)
             h = float(lane.poly.heading(s))
             u, n = unit(h), unit(h + math.pi / 2)
@@ -664,6 +676,8 @@ class Town:
                 outer = side * (rs.lane_width / 2.0 + rs.shoulder - 0.35)
             else:                                    # up to the edge line
                 outer = side * (rs.lane_width / 2.0 + 0.2)
+            if rs.oneway:
+                inner = -outer
             a0 = p + n * inner
             a1 = p + n * outer
             w = 0.45
@@ -715,7 +729,7 @@ class Town:
                     self.markings.append(strip(c, sgn * (hw - 0.35), mw))
             elif rs.edge == "lane":                 # just outside the lane (the 路側帯 line on residential roads)
                 for sgn in (1, -1):
-                    self.markings.append(strip(c, sgn * (rs.lane_width + mw / 2 + 0.05), mw))
+                    self.markings.append(strip(c, sgn * (rs.lane_outer + mw / 2 + 0.05), mw))
             # centre line: solid near junctions, dashed elsewhere (main roads: solid yellow, no overtaking)
             if rs.center == "yellow":
                 self.markings_yellow.append(strip(c, 0.0, mw))
@@ -737,21 +751,23 @@ class Town:
                 if m.sum() >= 2:
                     self.markings.append(strip(c[m], 0.0, mw))
             # stop lines and crosswalks at signalised ends; a stop line only at the minor road's 止まれ
+            # (one-way roads: no lane arrives at their start, so no stop line there; the crosswalk stays)
             for end, J in (("a", self.junctions[road.a]), ("b", self.junctions[road.b])):
                 if end == "b":
                     lane = self.lanes[road.lane_ab]
                     s_end = L
                     direction = 1.0
                 else:
-                    lane = self.lanes[road.lane_ba]
+                    lane = self.lanes[road.lane_ba] if road.lane_ba >= 0 else None
                     s_end = 0.0
                     direction = -1.0
                 if not J.signalized:
-                    if lane.stop_sign_s is not None:
+                    if lane is not None and lane.stop_sign_s is not None:
                         self.markings.append(stop_line(lane, lane.stop_sign_s, rs))
                         self.markings.extend(tomare_text(lane, lane.stop_sign_s, rs.lane_width))
                     continue
-                self.markings.append(stop_line(lane, lane.stop_s, rs))
+                if lane is not None:
+                    self.markings.append(stop_line(lane, lane.stop_s, rs))
                 # crosswalk (zebra) between stop line and junction
                 cs0 = s_end - direction * 4.2
                 cs1 = s_end - direction * 0.8
@@ -800,7 +816,7 @@ class Town:
             major = self._priority_groups(J) if prio else None
             if prio and self.stop_signs:
                 for arm in J.arms:
-                    if major[arm["in"]] == 1:
+                    if arm["in"] >= 0 and major[arm["in"]] == 1:
                         lin = self.lanes[arm["in"]]
                         lin.stop_sign_s = max(0.5, lin.length - STOP_SIGN_SETBACK)
             conns = [self.lanes[c] for c in J.connectors]
@@ -889,7 +905,7 @@ class Town:
                 key = (opp > math.radians(120), min(ri, rk), ri + rk, li + lk, opp)
                 if best is None or key > best:
                     best, pair = key, (i, k)
-        return {arm["in"]: 0 if k in pair else 1 for k, arm in enumerate(arms)}
+        return {arm["in"]: 0 if k in pair else 1 for k, arm in enumerate(arms) if arm["in"] >= 0}
 
     def _equal_gives_way(self, J, a, b, ranked):
         """True if connector `a` gives way to `b` (equal movements whose paths cross; see _make_yields)."""
@@ -943,6 +959,8 @@ class Town:
             if not J.signalized:
                 continue
             for k, arm in enumerate(J.arms):
+                if arm["in"] < 0:
+                    continue
                 lane = self.lanes[arm["in"]]
                 h_in = float(lane.heading[-1])
                 straight = [c for c in lane.succ if self.lanes[c].turn == "straight"]

@@ -38,7 +38,7 @@ if (PILOT) {                                      // the intro board describes t
   set('#loadlabel', '読み込み中…');
 }
 const TDIR = (params.get('tdir') || 'towns').replace(/[^\w.-]/g, '');
-const TOWN_LABELS = { osm_sapporo: '札幌' };       // real towns: the name on the intro board (others: the seed)
+const TOWN_LABELS = { osm_sapporo: '札幌', osm_nishioi: '西大井' };       // real towns: the name on the intro board (others: the seed)
 const $ = (id) => document.getElementById(id);
 
 const isTouch = matchMedia('(pointer: coarse)').matches;

@@ -10,7 +10,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from keisim.config import EnvConfig  # noqa: E402
-from keisim.realworld import Projection, osm_town, road_kind, town_config  # noqa: E402
+from keisim.realworld import Graph, Projection, oneway_of, osm_town, road_kind, town_config  # noqa: E402
 
 LAT0, LON0 = 43.09, 141.366
 BBOX = (LAT0 - 0.0025, LON0 - 0.0035, LAT0 + 0.0025, LON0 + 0.0035)
@@ -19,8 +19,9 @@ BBOX = (LAT0 - 0.0025, LON0 - 0.0035, LAT0 + 0.0025, LON0 + 0.0035)
 def mini_osm():
     """A 3 x 3 grid of 90 m blocks (residential, the middle row a tertiary street with signals at its centre), a
     bend road around the north-east corner, a side road leaving the x = 0 road 20 m from a junction (the two
-    junctions get contracted into one), and what the importer must drop: a one-way link, a dead-end stub, a service
-    road. Three buildings, one of them on a road."""
+    junctions get contracted into one), a one-way link around the south-east corner (mapped against its direction
+    of travel, oneway=-1: it is driven from grid (1, 0) to grid (2, 0)), and what the importer must drop: a dead-end
+    stub, a service road. Three buildings, one of them on a road."""
     proj = Projection(LAT0, LON0)
     nodes, ways, nid, wid = {}, [], [1], [100]
 
@@ -47,7 +48,7 @@ def mini_osm():
     bend = node(130.0, 50.0)
     way([grid[(2, 2)], node(130.0, 90.0), bend, grid[(2, 1)]], {"highway": "residential"})
     way([grid[(0, 0)], node(-90.0, -140.0)], {"highway": "residential"})                   # dead-end stub
-    way([grid[(1, 0)], node(0.0, -140.0), grid[(2, 0)]], {"highway": "residential", "oneway": "yes"})
+    way([grid[(2, 0)], node(90.0, -140.0), node(0.0, -140.0), grid[(1, 0)]], {"highway": "residential", "oneway": "-1"})
     way([grid[(0, 1)], node(-140.0, 0.0)], {"highway": "service"})
     for cx, cy in ((45.0, 45.0), (-45.0, 45.0), (0.0, 30.0)):                             # the last one is on a road
         ring = [node(cx + dx, cy + dy) for dx, dy in ((-5, -4), (5, -4), (5, 4), (-5, 4))]
@@ -59,27 +60,44 @@ def test_road_kind_filters():
     assert road_kind({"highway": "residential"}) == "residential"
     assert road_kind({"highway": "tertiary", "lanes": "2"}) == "street"
     assert road_kind({"highway": "secondary", "lanes": "4"}) is None
-    assert road_kind({"highway": "residential", "oneway": "yes"}) is None
+    assert road_kind({"highway": "residential", "oneway": "yes"}) == "residential"      # one-way: a single lane
+    assert road_kind({"highway": "residential", "oneway": "yes"}, oneway=False) is None   # (the old Sapporo rules)
+    assert road_kind({"highway": "tertiary", "oneway": "yes", "lanes": "2"}) is None      # two lanes one way: no
+    assert road_kind({"highway": "tertiary", "oneway": "-1", "lanes": "1"}) == "street"
+    assert oneway_of({"oneway": "-1"}) == -1 and oneway_of({"oneway": "yes"}) == 1 and oneway_of({}) == 0
     assert road_kind({"highway": "service"}) is None
     assert road_kind({"highway": "primary"}, drop_kinds=("primary",)) is None
 
 
 def test_mini_town_builds_and_expert_drives():
     town = osm_town(BBOX, osm=mini_osm(), name="mini")
-    # the grid (its south-middle junction moved 10 m north: contracted with the side road's node) and the two bend
-    # vertices; the dead end, the one-way link and the service road are gone
+    # the grid (its south-middle junction moved 10 m north: contracted with the side road's node), the two bend
+    # vertices and the one-way link's two corners; the dead end and the service road are gone
     pos = sorted((round(float(J.pos[0])), round(float(J.pos[1]))) for J in town.junctions)
     want = sorted([(90 * (i - 1), 90 * (j - 1)) for i in range(3) for j in range(3) if (i, j) != (1, 0)]
-                  + [(0, -80), (130, 90), (130, 50)])
+                  + [(0, -80), (130, 90), (130, 50), (0, -140), (90, -140)])
     assert pos == want, pos
     arms = {(round(float(J.pos[0])), round(float(J.pos[1]))): len(J.arms) for J in town.junctions}
-    assert arms[(0, -80)] == 4 and arms[(90, 0)] == 4 and arms[(0, 0)] == 4 and arms[(130, 90)] == 2, arms
+    assert arms[(0, -80)] == 5 and arms[(90, 0)] == 4 and arms[(0, 0)] == 4 and arms[(130, 90)] == 2 \
+        and arms[(90, -90)] == 3, arms
     assert sum(J.signalized for J in town.junctions) == 1
     centre = next(J for J in town.junctions if J.signalized)
     assert tuple(centre.pos) == (0.0, 0.0) and centre.phases == 2
-    assert dict(town.graph.dropped) == {"dead end": 1, "short edge (contracted)": 1}, dict(town.graph.dropped)   # one-way, service: never added
+    assert dict(town.graph.dropped) == {"dead end": 1, "short edge (contracted)": 1}, dict(town.graph.dropped)   # service: never added
     assert all(len(J.arms) >= 2 for J in town.junctions)
-    assert all(l.succ for l in town.lanes if l.kind == "road")
+    assert all(l.succ and l.pred for l in town.lanes if l.kind == "road")
+    # the one-way link: three roads (two bends) of a single lane on the centre line, driven from (0, -80) round to
+    # (90, -90) (oneway=-1 reversed the way); the junctions at its ends have an arm without an approach / an exit
+    one = [r for r in town.roads if r.spec.oneway]
+    assert len(one) == 3 and all(r.lane_ba == -1 and r.lane_ab >= 0 for r in one) and abs(sum(r.length for r in one) - 150) < 5
+    assert all(abs(r.half_width - (3.0 / 2 + 0.75)) < 1e-9 and r.spec.center == "none" for r in one)
+    for r in one:
+        lane = town.lanes[r.lane_ab]
+        assert np.abs(lane.pts[: len(r.center)] - r.center).max() < 1e-6 and lane.succ and lane.pred
+    by_pos = {(round(float(J.pos[0])), round(float(J.pos[1]))): J for J in town.junctions}
+    assert [a["in"] for a in by_pos[(0, -80)].arms].count(-1) == 1 and [a["out"] for a in by_pos[(90, -90)].arms].count(-1) == 1
+    assert len(by_pos[(0, -80)].incoming) == 4 and len(by_pos[(0, -80)].outgoing) == 5
+    assert any(r.a == by_pos[(0, -80)].id for r in one) and any(r.b == by_pos[(90, -90)].id for r in one)
     kinds = {r.kind for r in town.roads}
     assert kinds == {"residential", "street"}
     # unsignalised crossings are priority crossings: minor approaches give way
@@ -96,6 +114,95 @@ def test_mini_town_builds_and_expert_drives():
     while not done:
         _, _, done, info = env.step(env.expert_action())
     assert info["status"] == "success" and info["DS"] > 0.99, info
+    # ... and one through the one-way link
+    one_lanes = {r.lane_ab for r in one}
+    for ep in range(40):
+        env.reset(town, episode_seed=100 + ep, route_length=300, render=False)
+        if one_lanes & set(env.route.lanes):
+            break
+    else:
+        raise AssertionError("no route through the one-way link")
+    done = False
+    while not done:
+        _, _, done, info = env.step(env.expert_action())
+    assert info["status"] == "success" and info["DS"] > 0.99, info
+
+
+def test_graph_one_way_rules():
+    """The clean-up on one-way edges: two opposite one-way edges along the same line (a road with a median) become
+    one two-way edge, a one-way duplicate of a two-way edge goes, a one-way edge nobody can leave by (into a sink) is
+    a dead end, and a one-way edge nobody can reach (from a source) falls out of the strongly connected component;
+    a one-way lane out of a two-way road's end stays, although nothing feeds that road's far lane."""
+    def square(G):
+        for k, (x, y) in enumerate([(0, 0), (100, 0), (100, 100), (0, 100)]):
+            G.nodes[k] = (float(x), float(y))
+        for k in range(4):
+            a, b = k, (k + 1) % 4
+            G.add_edge(a, b, [G.nodes[a], G.nodes[b]], "residential", k)
+    G = Graph()
+    square(G)
+    G.nodes[4], G.nodes[5] = (200.0, 0.0), (200.0, 100.0)
+    G.add_edge(1, 4, [(100, 0), (200, 0.5)], "residential", 10, oneway=True)       # east, one way
+    G.add_edge(4, 1, [(200, 0), (100, -0.5)], "residential", 11, oneway=True)      # ... and back: a median
+    G.add_edge(2, 5, [(100, 100), (200, 100)], "residential", 12)
+    G.add_edge(5, 2, [(200, 100.5), (100, 100.5)], "residential", 13, oneway=True)  # a one-way copy of a two-way edge
+    G.add_edge(4, 5, [(200, 0), (200, 100)], "residential", 14)
+    G.drop_duplicates()
+    assert dict(G.dropped) == {"carriageway (merged)": 1, "duplicate way": 1}, dict(G.dropped)
+    assert not any(e["oneway"] for e in G.edges.values()) and len(G.edges) == 7
+    G = Graph()
+    square(G)
+    G.nodes[4], G.nodes[5], G.nodes[6] = (200.0, 0.0), (-100.0, 0.0), (200.0, 100.0)
+    G.add_edge(1, 4, [(100, 0), (200, 0)], "residential", 10, oneway=True)         # into a sink: nowhere to go
+    G.add_edge(5, 0, [(-100, 0), (0, 0)], "residential", 11, oneway=True)          # from a source: unreachable
+    G.add_edge(2, 6, [(100, 100), (200, 100)], "residential", 12)                  # a two-way road ...
+    G.add_edge(6, 1, [(200, 100), (100, 0)], "residential", 13, oneway=True)       # ... with a one-way back: kept
+    G.prune_dead_ends()
+    assert dict(G.dropped) == {"dead end": 1} and 4 not in G.adj, dict(G.dropped)
+    G.largest_component()
+    assert dict(G.dropped) == {"dead end": 1, "other component": 1} and 5 not in G.adj, dict(G.dropped)
+    assert sorted(G.adj) == [0, 1, 2, 3, 6] and len(G.edges) == 6
+    # merge_straight joins one-way edges only along their direction of travel
+    G = Graph()
+    for k, x in enumerate([0.0, 50.0, 100.0]):
+        G.nodes[k] = (x, 0.0)
+    G.add_edge(0, 1, [(0, 0), (50, 0)], "residential", 1, oneway=True)
+    G.add_edge(2, 1, [(100, 0), (50, 0)], "residential", 2, oneway=True)           # head on: two one-ways meet
+    G.merge_straight()
+    assert len(G.edges) == 2
+    G = Graph()
+    for k, x in enumerate([0.0, 50.0, 100.0]):
+        G.nodes[k] = (x, 0.0)
+    G.add_edge(2, 1, [(100, 0), (50, 0)], "residential", 2, oneway=True)
+    G.add_edge(1, 0, [(50, 0), (0, 0)], "residential", 1, oneway=True)
+    G.merge_straight()
+    (e,) = G.edges.values()
+    assert e["n"] == [2, 0] and e["oneway"] and e["pts"][0][0] == 100 and e["pts"][-1][0] == 0
+
+
+def test_graph_carriageways_fold():
+    """A road with a median, mapped as one one-way way per carriageway 10 m apart and cut at different side streets
+    (one joins each carriageway), folds into one two-way road along the midline, with both side streets meeting
+    it; then merge_straight joins its pieces into a single edge between the side streets."""
+    G = Graph()
+    pts = {"a": (0.0, -5.0), "b": (120.0, -5.0), "c": (200.0, -5.0), "d": (200.0, 5.0), "e": (80.0, 5.0), "f": (0.0, 5.0),
+           "s": (120.0, -100.0), "n": (80.0, 100.0)}
+    for k, v in pts.items():
+        G.nodes[k] = v
+    G.add_edge("a", "b", [pts["a"], pts["b"]], "street", 1, oneway=True)          # eastbound carriageway, two pieces
+    G.add_edge("b", "c", [pts["b"], pts["c"]], "street", 1, oneway=True)
+    G.add_edge("d", "e", [pts["d"], pts["e"]], "street", 2, oneway=True)          # westbound carriageway, two pieces
+    G.add_edge("e", "f", [pts["e"], pts["f"]], "street", 2, oneway=True)
+    G.add_edge("b", "s", [pts["b"], pts["s"]], "residential", 3)                  # side streets
+    G.add_edge("e", "n", [pts["e"], pts["n"]], "residential", 4)
+    G.merge_carriageways()
+    assert not any(e["oneway"] for e in G.edges.values()), [e["n"] for e in G.edges.values()]
+    assert G.dropped["carriageway (merged)"] == 3 and len(G.edges) == 5, dict(G.dropped)   # piece by piece
+    ends = sorted(G.nodes[n] for n in G.adj if G.degree(n) == 3)
+    assert [round(x) for x, _ in ends] == [80, 120] and all(abs(y) < 2.0 for _, y in ends), ends   # pieces fold one after another: within the median
+    assert all(abs(p[1]) < 2.0 for e in G.edges.values() if e["kind"] == "street" for p in e["pts"])
+    G.merge_straight()
+    assert len(G.edges) == 5 and len(G.adj) == 6
 
 
 def test_graph_junction_radius_follows_road_width():
@@ -144,6 +251,7 @@ def test_bundled_sapporo_export_unchanged():
         ref = json.load(f)
     town = osm_town(OSM_BOXES["osm_sapporo"], cache=os.path.join(root, "data", "osm", "osm_sapporo.json"), name="osm_sapporo")
     assert town.max_vehicle_dims == (6.0, 2.0) and town.mirrored_turn_yield
+    assert not any(r.spec.oneway for r in town.roads)                   # built without one-way roads (TWO_WAY_TOWNS)
     out = json.loads(json.dumps(export_town(town)))          # the file's float rounding
     assert out["attribution"].startswith("Map data") and out["source"]["osm_bbox"] == list(OSM_BOXES["osm_sapporo"])
     assert out == ref
