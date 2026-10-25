@@ -12,7 +12,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from keisim.expert import target_for_speed
+from keisim.expert import STOP_SIGN_MARGIN, STOP_SIGN_V, STOP_SIGN_ZONE, target_for_speed
 
 LABEL_KEYS = ("cmd", "tp", "path", "speed", "tl", "v", "reason", "town", "episode", "step", "weather", "virtual")
 # inputs of the expert's traffic-light decision (keisim.expert.target_for_speed); shards recorded before
@@ -23,6 +23,24 @@ AUX_KEYS = ("yield_tta",)        # earliest arrival [s] of a car with priority a
 AUX_DEFAULTS = {"yield_tta": np.float32(np.nan)}
 CF_DEFAULTS = {"target_nolight": np.float32(np.nan), "lt_over": False, "lt_d": np.float32(np.nan), "lt_st": np.int8(3),
                "lt_trem": np.float32(np.nan), "lt_blocked": False}
+# 止まれ (keisim.expert.target_for_speed): the pending stop line ahead [m] and the target without it; recorded since
+# 2026-10-24, NaN where missing (older shards keep their light counterfactuals: these keys are optional)
+SS_KEYS = ("ss_d", "ss_go")
+SS_DEFAULTS = {"ss_d": np.float32(np.nan), "ss_go": np.float32(np.nan)}
+SS_STAND_PROB = 0.5     # counterfactual frames before a pending stop line: chance of the speed 0 (standing at it)
+# the ego's one piece of memory (memory-input models): how far it has driven since it last stood (v < STAND_V), as
+# the expert remembers a stop made at a 止まれ line. Without it a single frame cannot tell a car that is still to stop
+# from one moving off after its stop, a few metres on. Recorded since 2026-10-24 (stand_m); for older shards it is
+# rebuilt as 0 (standing) / STAND_CAP (moving) where that cannot change a label (towns without stop lines), else
+# unknown (NaN)
+MEM_KEYS = ("stand_m",)
+STAND_V = STOP_SIGN_V
+STAND_CAP = 10.0        # [m]: "not stood within the last 10 m"; the distance saturates here
+
+
+def stand_update(m, v, dt):
+    """stand_m after a control step at speed v [m/s] (dt s): 0 while standing, else the distance since then."""
+    return 0.0 if v < STAND_V else min(m + v * dt, STAND_CAP)
 
 
 class ShardWriter:
@@ -53,7 +71,7 @@ class ShardWriter:
         self.prev.append(np.zeros(0, np.uint8) if prev is None else prev)
         for k in LABEL_KEYS:
             self.lab[k].append(labels[k])
-        for k in CF_KEYS + AUX_KEYS:
+        for k in CF_KEYS + AUX_KEYS + SS_KEYS + MEM_KEYS:
             if k in labels:
                 self.lab.setdefault(k, []).append(labels[k])
         if len(self.jpg) >= self.fps:
@@ -134,7 +152,7 @@ def load_shards(dirs, with_prev=True):
     buf = {k: np.empty(int(n), np.uint8) for k, n in zip(("jpg", "seg", "jpg_prev"), total)}
     jo, so, src = [], [], []
     po, pbase = [], 0
-    lab = {k: [] for k in LABEL_KEYS + CF_KEYS + AUX_KEYS}
+    lab = {k: [] for k in LABEL_KEYS + CF_KEYS + AUX_KEYS + SS_KEYS + MEM_KEYS}
     cf_ok = []
     jbase = sbase = 0
     for fi, f in enumerate(files):
@@ -162,16 +180,25 @@ def load_shards(dirs, with_prev=True):
             lab[k].append(z[k] if has_cf else np.full(n_f, CF_DEFAULTS[k]))
         for k in AUX_KEYS:
             lab[k].append(z[k] if k in z else np.full(n_f, AUX_DEFAULTS[k]))
+        for k in SS_KEYS:
+            lab[k].append(z[k] if k in z else np.full(n_f, SS_DEFAULTS[k]))
+        lab["stand_m"].append(z["stand_m"].astype(np.float32) if "stand_m" in z else np.full(n_f, np.nan, np.float32))
         cf_ok.append(np.full(n_f, has_cf))
     data = {
         "jpg": buf["jpg"], "jpg_off": np.concatenate(jo + [np.array([jbase])]),
         "seg": buf["seg"], "seg_off": np.concatenate(so + [np.array([sbase])]),
         "jpg_prev": buf["jpg_prev"], "jpg_prev_off": np.concatenate(po + [np.array([pbase])]),
     }
-    for k in LABEL_KEYS + CF_KEYS + AUX_KEYS:
+    for k in LABEL_KEYS + CF_KEYS + AUX_KEYS + SS_KEYS + MEM_KEYS:
         data[k] = np.concatenate(lab[k])
     data["cf_ok"] = np.concatenate(cf_ok)
     data["src"] = np.concatenate(src)
+    # stand_m of shards recorded without it: where no label depends on it (no 止まれ line in the whole directory),
+    # 0 when standing, else "not stood lately"; before stop lines it stays unknown
+    file_dir = np.array([os.path.dirname(os.path.abspath(f)) for f in files])
+    stop_dirs = set(file_dir[np.unique(data["src"][data["reason"] == 8])])
+    rebuild = np.isnan(data["stand_m"]) & ~np.isin(data["src"], [i for i, d in enumerate(file_dir) if d in stop_dirs])
+    data["stand_m"][rebuild] = np.where(data["v"][rebuild] < STAND_V, 0.0, STAND_CAP)
     version = np.array([dir_version[f] for f in files])[data["src"]]
     v1 = version < 2
     if v1.any():
@@ -225,6 +252,7 @@ class DrivingDataset(Dataset):
         img = cv2.imdecode(d["jpg"][d["jpg_off"][i]:d["jpg_off"][i + 1]], cv2.IMREAD_COLOR)
         seg = cv2.imdecode(d["seg"][d["seg_off"][i]:d["seg_off"][i + 1]], cv2.IMREAD_UNCHANGED)
         v, speed, known = float(d["v"][i]), float(d["speed"][i]), True
+        stand = float(d["stand_m"][i])
         cf = bool(d["cf_ok"][i])
         a, b = d["jpg_prev_off"][i], d["jpg_prev_off"][i + 1]
         prev = cv2.imdecode(d["jpg_prev"][a:b], cv2.IMREAD_COLOR) if b > a else None
@@ -235,11 +263,18 @@ class DrivingDataset(Dataset):
             if prev is not None:
                 prev = None if rng.random() < self.history_drop else self._augment(prev, rng, p)
             if cf and self.cf_prob > 0 and rng.random() < self.cf_prob:
-                v = float(rng.uniform(0.0, self.cf_vmax))
+                ss_d = float(d["ss_d"][i])
+                if math.isfinite(ss_d) and ss_d <= STOP_SIGN_MARGIN + STOP_SIGN_ZONE and rng.random() < SS_STAND_PROB:
+                    v = 0.0                     # standing at the 止まれ line: the stop is made, the label says go on
+                else:
+                    v = float(rng.uniform(0.0, self.cf_vmax))
+                if v < STAND_V:                 # standing now; moving, the frame keeps its recorded past
+                    stand = 0.0
             elif rng.random() < self.speed_drop:
                 known = False
         if cf:          # label from the recorded decision inputs with the current rule (and the chosen speed)
-            speed = target_for_speed(v, {k: d[k][i] for k in CF_KEYS})
+            speed = target_for_speed(v, {k: d[k][i] for k in CF_KEYS + SS_KEYS})
+        stand_known = known and math.isfinite(stand)    # a hidden speed hides the memory too (it would give v = 0 away)
         img = img[:, :, ::-1].transpose(2, 0, 1).copy()  # BGR -> RGB, CHW, uint8
         has_prev = prev is not None
         prev = prev[:, :, ::-1].transpose(2, 0, 1).copy() if has_prev else np.zeros_like(img)
@@ -253,6 +288,8 @@ class DrivingDataset(Dataset):
             "tl": torch.tensor(int(d["tl"][i])),
             "v": torch.tensor(v, dtype=torch.float32),                     # ego speed (input of speed models)
             "v_known": torch.tensor(known),
+            "stand_m": torch.tensor(stand if stand_known else 0.0, dtype=torch.float32),   # memory-input models
+            "stand_known": torch.tensor(stand_known),
             "img_prev": torch.from_numpy(prev),                            # frame `history` s earlier (or zeros)
             "has_prev": torch.tensor(has_prev),
             "yield_tta": torch.tensor(float(d["yield_tta"][i]), dtype=torch.float32),   # NaN: no label

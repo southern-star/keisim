@@ -19,6 +19,7 @@ import numpy as np
 from .config import ROAD_KINDS, TL_GREEN, TL_RED, TL_YELLOW, TownConfig
 from .geometry import (Polyline, arc_bezier, box_corners, cubic_bezier, curvature_of,
                        headings_of, offset_polyline, resample, unit, wrap)
+from .glyphs import TOMARE
 
 LANE_DS = 0.5
 TURN_RADIUS_MIN = 6.5     # m, the lane-centre arc of a right-angle turn in a Town.from_graph junction (graph_min_radius)
@@ -26,6 +27,9 @@ TURN_RADIUS_DRIVABLE = 4.5   # m, the tightest arc any junction connector may as
 NARROW_LANE = 3.0        # m: lanes narrower than this keep trucks out, and their bends are taken one at a time
 NARROW_PASS = 2.9        # m: two turns in an unsignalised bend whose centre lines come closer than this give way
 MIRROR_PASS = 3.6        # m: a right turn whose centre line runs this close to the oncoming left turn's gives way to it
+STOP_SIGN_SETBACK = 2.0  # m: the 止まれ stop line of a minor road's approach to a priority crossing, before its lane's end
+TOMARE_GAP, TOMARE_LEN = 0.8, 2.6   # m: the painted 止まれ ends this far before the stop line and is this long
+TOMARE_CHAR_W, TOMARE_SPACE = 0.72, 0.12   # m: width of each of its three characters across the lane, and between them
 NARROW_CLEAR = 1.9       # m: ... and the outer one waits with its front corners and sides this far from the inner
                          # one's centre line (its half width + the swing of its body in the turn + a margin)
 
@@ -54,6 +58,7 @@ class Lane:
         self.speed_limit = speed_limit
         self.width = width                # lane width (connectors: the wider of the two roads' lanes)
         self.stop_s = None                # arc length of the stop line
+        self.stop_sign_s = None           # arc length of a 止まれ stop line (minor road before a priority crossing)
         self.signal = None                # (junction id, phase index)
 
     def __repr__(self):
@@ -306,6 +311,8 @@ class Town:
         for J in self.junctions:
             J.arms.sort(key=lambda x: x["angle"])
         self.mirrored_turn_yield = True
+        self.stop_signs = True
+        self.yield_lookback = True
         self._build_from_graph(buildings)
         return self
 
@@ -338,6 +345,10 @@ class Town:
         self.markings_yellow: list[np.ndarray] = []   # yellow paint (centre lines of main roads)
         self.crosswalks: list[np.ndarray] = []
         self.mirrored_turn_yield = False     # Town.from_graph: right turns give way to the oncoming left turn
+        self.stop_signs = False              # Town.from_graph: 止まれ on the minor roads' approaches to priority crossings
+        self.yield_lookback = False          # Town.from_graph: Traffic.min_arrival looks into the junction before
+        self.stop_sign_posts: list[dict] = []   # 止まれ signs: {lane, pole (x, y), yaw (facing the driver), z}
+        self._building_edges = None          # building_edges(), built on first use
         self.max_vehicle_dims = None         # (length, width) cap of the NPC cars (keisim.realworld: narrow roads)
 
     # ------------------------------------------------------------------ build
@@ -557,6 +568,7 @@ class Town:
         self._make_raster()
         self._make_markings()
         self._make_signal_heads()
+        self._make_stop_sign_posts()
         self._make_buildings_and_trees(buildings)
         self._finalize_static()
 
@@ -642,6 +654,55 @@ class Town:
             b = offset_polyline(pts, off - width / 2)
             return np.concatenate([a, b[::-1]])
 
+        def stop_line(lane, s, rs):
+            """Stop line across incoming `lane` at arc length `s` (centre-line side to edge), 0.45 m deep."""
+            p = lane.poly.interp(s)
+            h = float(lane.poly.heading(s))
+            u, n = unit(h), unit(h + math.pi / 2)
+            inner = -side * (rs.lane_width / 2.0)   # towards road centre
+            if rs.edge == "classic":
+                outer = side * (rs.lane_width / 2.0 + rs.shoulder - 0.35)
+            else:                                    # up to the edge line
+                outer = side * (rs.lane_width / 2.0 + 0.2)
+            a0 = p + n * inner
+            a1 = p + n * outer
+            w = 0.45
+            return np.array([a0 - u * w / 2, a1 - u * w / 2, a1 + u * w / 2, a0 + u * w / 2])
+
+        def tomare_text(lane, s_line, lane_width):
+            """The 止まれ painted before a stop line: its three characters side by side across the lane (left to
+            right as the driver reads them), stretched along it, row 0 of the glyphs at the far end. Rectangles
+            from runs of paint, merged down the rows (no holes, so both renderers fill them alike)."""
+            cw = min(TOMARE_CHAR_W, (lane_width - 0.5 - 2 * TOMARE_SPACE) / 3)
+            total = 3 * cw + 2 * TOMARE_SPACE
+            s_far = s_line - TOMARE_GAP
+            if s_far - TOMARE_LEN < 0.5:
+                return []
+            rects = []
+            for k, glyph in enumerate(TOMARE):
+                rows = [np.frombuffer(r.encode(), np.uint8) == ord("#") for r in glyph]
+                nr, nc = len(rows), len(rows[0])
+                left = total / 2 - k * (cw + TOMARE_SPACE)          # lateral of the character's left edge (+ = left)
+                open_runs = {}                                       # (c0, c1) -> first row
+                for r in range(nr + 1):
+                    runs = set()
+                    if r < nr:
+                        m = np.concatenate([[False], rows[r], [False]])
+                        d = np.diff(m.astype(np.int8))
+                        runs = set(zip(np.nonzero(d == 1)[0].tolist(), np.nonzero(d == -1)[0].tolist()))
+                    for run in list(open_runs):
+                        if run not in runs:                          # the rectangle ends above row r
+                            r0 = open_runs.pop(run)
+                            sa, sb = s_far - r0 * TOMARE_LEN / nr, s_far - r * TOMARE_LEN / nr
+                            la, lb = left - run[0] * cw / nc, left - run[1] * cw / nc
+                            pa, pb = lane.poly.interp(sa), lane.poly.interp(sb)
+                            na = unit(float(lane.poly.heading(sa)) + math.pi / 2)
+                            nb = unit(float(lane.poly.heading(sb)) + math.pi / 2)
+                            rects.append(np.array([pa + na * la, pa + na * lb, pb + nb * lb, pb + nb * la]))
+                    for run in runs:
+                        open_runs.setdefault(run, r)
+            return rects
+
         for road in self.roads:
             rs = road.spec
             hw = rs.half_width
@@ -675,10 +736,8 @@ class Town:
                 m = (s >= s0) & (s <= s1)
                 if m.sum() >= 2:
                     self.markings.append(strip(c[m], 0.0, mw))
-            # stop lines and crosswalks at signalised ends
+            # stop lines and crosswalks at signalised ends; a stop line only at the minor road's 止まれ
             for end, J in (("a", self.junctions[road.a]), ("b", self.junctions[road.b])):
-                if not J.signalized:
-                    continue
                 if end == "b":
                     lane = self.lanes[road.lane_ab]
                     s_end = L
@@ -687,20 +746,12 @@ class Town:
                     lane = self.lanes[road.lane_ba]
                     s_end = 0.0
                     direction = -1.0
-                # stop line across incoming lane (centre-line side to edge)
-                sl_s = lane.stop_s
-                p = lane.poly.interp(sl_s)
-                h = float(lane.poly.heading(sl_s))
-                u, n = unit(h), unit(h + math.pi / 2)
-                inner = -side * (rs.lane_width / 2.0)   # towards road centre
-                if rs.edge == "classic":
-                    outer = side * (rs.lane_width / 2.0 + rs.shoulder - 0.35)
-                else:                                    # up to the edge line
-                    outer = side * (rs.lane_width / 2.0 + 0.2)
-                a0 = p + n * inner
-                a1 = p + n * outer
-                w = 0.45
-                self.markings.append(np.array([a0 - u * w / 2, a1 - u * w / 2, a1 + u * w / 2, a0 + u * w / 2]))
+                if not J.signalized:
+                    if lane.stop_sign_s is not None:
+                        self.markings.append(stop_line(lane, lane.stop_sign_s, rs))
+                        self.markings.extend(tomare_text(lane, lane.stop_sign_s, rs.lane_width))
+                    continue
+                self.markings.append(stop_line(lane, lane.stop_s, rs))
                 # crosswalk (zebra) between stop line and junction
                 cs0 = s_end - direction * 4.2
                 cs1 = s_end - direction * 0.8
@@ -734,16 +785,24 @@ class Town:
         左折車の進行も妨げない). On the 3 m lanes of real residential roads the two bodies pass within decimetres
         (concentric arcs 3 m apart; the car's corners and its tracking error eat the rest), which cost the expert
         two collisions in the Sapporo town at junction radius 6 m; the procedural towns' 3.5 m streets and 9.5 m
-        junctions leave more room and keep the old rules."""
+        junctions leave more room and keep the old rules.
+        Towns from a graph (stop_signs) also put a 止まれ stop line on every approach of the minor road to a priority
+        crossing, STOP_SIGN_SETBACK before the end of its lane (Lane.stop_sign_s; _make_markings paints it): the
+        expert stops there once, then goes on to its connector's wait point and gives way from there."""
         rank = {"right": 0, "left": 1, "straight": 2}
         for lane in self.lanes:
-            lane.yields, lane.wait_s = [], None
+            lane.yields, lane.wait_s, lane.stop_sign_s = [], None, None
         for J in self.junctions:
             narrow = not J.signalized and self.cfg.road_types == "mixed" and len(J.arms) < 3
             prio = not J.signalized and len(J.arms) >= 3
             if not (J.signalized or narrow or prio):
                 continue
             major = self._priority_groups(J) if prio else None
+            if prio and self.stop_signs:
+                for arm in J.arms:
+                    if major[arm["in"]] == 1:
+                        lin = self.lanes[arm["in"]]
+                        lin.stop_sign_s = max(0.5, lin.length - STOP_SIGN_SETBACK)
             conns = [self.lanes[c] for c in J.connectors]
             equals = []
             for a in conns:
@@ -922,6 +981,25 @@ class Town:
                     "head": head, "pole": pole, "yaw": h_in + math.pi, "z": 5.4,
                 })
 
+    def _make_stop_sign_posts(self):
+        """止まれ signs (Town.from_graph): a red inverted triangle on a post at the curb side of every approach with a
+        stop line (Lane.stop_sign_s), level with the line, pushed outwards until it stands clear of the drivable
+        surface. No random draws: the trees and buildings after it come out as before."""
+        side = 1.0 if self.cfg.left_hand_traffic else -1.0
+        ring = np.array([[0.35, 0], [-0.35, 0], [0, 0.35], [0, -0.35], [0, 0]])
+        self.stop_sign_posts = []
+        for lane in self.lanes:
+            if lane.stop_sign_s is None:
+                continue
+            rs = self.roads[lane.road].spec
+            p = lane.poly.interp(lane.stop_sign_s)
+            h = float(lane.poly.heading(lane.stop_sign_s))
+            n = unit(h + math.pi / 2) * side                  # towards the curb
+            d = rs.lane_width / 2 + 0.7
+            while d < rs.lane_width / 2 + 5.0 and np.any(self.surface(p + n * d + ring) == 1):
+                d += 0.25
+            self.stop_sign_posts.append({"lane": lane.id, "pole": p + n * d, "yaw": h + math.pi, "z": 2.1})
+
     def _make_buildings_and_trees(self, buildings=None):
         """Procedural buildings along the roads (or the given boxes {x, y, yaw, l, w, h}, minus those over a road or
         sidewalk) and trees along the sidewalks."""
@@ -1007,14 +1085,29 @@ class Town:
                         n = unit(h + math.pi / 2) * sgn
                         pos = p + n * (wo - 0.55)
                         g = rng.uniform(0.75, 1.15)
-                        self.trees.append({
+                        tree = {
                             "x": float(pos[0]), "y": float(pos[1]),
                             "trunk_h": float(rng.uniform(1.9, 2.8)),
                             "r": float(rng.uniform(1.2, 2.0)),
                             "ch": float(rng.uniform(2.2, 3.6)),
                             "color": np.array([40 * g, 125 * g, 60 * g]) * rng.uniform(0.8, 1.2, 3),
-                        })
+                        }
+                        if not any(math.hypot(*(pos - sp["pole"])) < 1.5 for sp in self.stop_sign_posts):
+                            self.trees.append(tree)
                     s += float(rng.uniform(9.0, 16.0))
+
+    def building_edges(self):
+        """The buildings' outlines for line-of-sight tests: segments (4B, 2, 2), building centres (B, 2) and radii (B,)
+        (for a quick distance cut; the edges of building i are rows 4i..4i+3). Built on first use."""
+        if self._building_edges is None:
+            b = self.buildings
+            c = box_corners(np.array([x["x"] for x in b]), np.array([x["y"] for x in b]), np.array([x["yaw"] for x in b]),
+                            np.array([x["l"] for x in b]), np.array([x["w"] for x in b])).reshape(-1, 4, 2)
+            edges = np.stack([c, np.roll(c, -1, axis=1)], axis=2).reshape(-1, 2, 2)
+            centre = c.mean(axis=1)
+            self._building_edges = (edges, centre, np.linalg.norm(c - centre[:, None], axis=2).max(axis=1)
+                                    if len(b) else np.zeros(0))
+        return self._building_edges
 
     def _finalize_static(self):
         """Arrays of static collision boxes: (x, y, yaw, l, w)."""

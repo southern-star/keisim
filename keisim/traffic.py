@@ -6,7 +6,7 @@ import math
 import numpy as np
 
 from .config import TL_GREEN, TL_RED, TL_YELLOW, TrafficConfig
-from .geometry import wrap
+from .geometry import box_corners, rays_clear, wrap
 
 # ----------------------------------------------------------------------------
 # Lane-sequence lookahead
@@ -80,6 +80,9 @@ def vehicle_circles(xy, yaw, length, width):
 GRID_MIN_PAIRS = 40000      # corridor_gaps: below this many (path, circle) pairs the dense test is faster
 YIELD_GAP = 5.0             # s: a yielding turn goes only if no car with priority reaches the crossing sooner
 PASS_SPEED = 3.0            # m/s: passing someone who walks in the 路側帯 beside the lane (road types)
+LOOKBACK_LANE = 60.0        # m: min_arrival's look into the junction before a short approach lane (yield_lookback)
+STOP_SIGN_NPC_AT = 1.0      # m: 止まれ: NPCs stop with the front bumper this far before the line (as the expert)
+STOP_SIGN_NPC_ZONE = 3.0    # m: ... and the stop counts when they stand within this much of it
 
 
 def near_pairs(origin, radius, cxy):
@@ -198,6 +201,7 @@ class Traffic:
         self.n = 0
         self.route: list[list[int]] = []
         self.ri = np.zeros(0, int)
+        self.ss_done = {}       # car -> lane whose 止まれ line it has stopped at (Town.from_graph)
         self.s = np.zeros(0)
         self.v = np.zeros(0)
         self.acc = np.zeros(0)
@@ -331,6 +335,7 @@ class Traffic:
             self.xy[i] = p
             self.yaw[i] = float(lane.poly.heading(s))
             self.stuck[i] = 0.0
+            self.ss_done.pop(i, None)
             return
 
     # ------------------------------------------------------------------- step
@@ -413,20 +418,45 @@ class Traffic:
         return False
 
     # ------------------------------------------------------------------- yielding (two-phase signals)
-    def yield_tables(self, ego_info=None):
-        """Who is where, for must_yield: lane -> [(s, v, length, is_ego, next lane)], front first.
-        ego_info = (lane, s on lane, next lane, v, length) adds the ego."""
+    def yield_tables(self, ego_info=None, visible=None):
+        """Who is where, for must_yield: lane -> [(s, v, length, is_ego, next lane, the lane after it)], front first.
+        ego_info = (lane, s on lane, next lane, v, length[, the lane after the next]) adds the ego.
+        visible: (n,) bool, only these NPCs are listed (see visible_from)."""
         on_lane = {}
         for j in range(self.n):
+            if visible is not None and not visible[j]:
+                continue
             r, k = self.route[j], self.ri[j]
             on_lane.setdefault(r[k], []).append((float(self.s[j]), float(self.v[j]), float(self.dims[j, 0]), False,
-                                                 r[k + 1] if k + 1 < len(r) else None))
+                                                 r[k + 1] if k + 1 < len(r) else None,
+                                                 r[k + 2] if k + 2 < len(r) else None))
         if ego_info is not None:
-            lid, s, nxt, v, L = ego_info
-            on_lane.setdefault(lid, []).append((s, v, L, True, nxt))
+            lid, s, nxt, v, L, *more = ego_info
+            on_lane.setdefault(lid, []).append((s, v, L, True, nxt, more[0] if more else None))
         for lst in on_lane.values():
             lst.sort(key=lambda e: -e[0])
         return on_lane
+
+    def visible_from(self, cam, yaw, half_fov, max_dist, town=None):
+        """NPCs a camera at `cam` (x, y) looking along `yaw` can see -> bool (n,): a corner of the car within
+        +-half_fov (rad) of its axis and max_dist of it, and (given `town`) the line to that corner not through a
+        building (Town.building_edges, 2D: cars do not hide one another, nor walls and trees)."""
+        if self.n == 0:
+            return np.zeros(0, bool)
+        cam = np.asarray(cam, float)
+        cs = box_corners(self.xy[:, 0], self.xy[:, 1], self.yaw, self.dims[:, 0], self.dims[:, 1])    # (n, 4, 2)
+        rel = cs - cam
+        seen = (np.abs(wrap(np.arctan2(rel[..., 1], rel[..., 0]) - yaw)) < half_fov) & \
+            (np.hypot(*(self.xy - cam).T) < max_dist)[:, None]
+        if town is not None and seen.any() and len(town.buildings):
+            edges, centre, rad = town.building_edges()
+            i, k = np.nonzero(seen)
+            far = float(np.hypot(*(cs[i, k] - cam).T).max())
+            near = np.hypot(*(centre - cam).T) < far + rad + 0.5
+            ok = rays_clear(cam, cs[i, k], edges[np.repeat(near, 4)])
+            seen[:] = False
+            seen[i[ok], k[ok]] = True
+        return seen.any(axis=1)
 
     def must_yield(self, conn, t, on_lane):
         """True if a car with priority over connector `conn` (Lane) is in its crossing or reaches it within
@@ -438,13 +468,19 @@ class Traffic:
         inf: none coming). Cars that will stop at a red or yellow light do not count, nor do cars queued behind
         one that is standing still to go elsewhere (e.g. an oncoming car waiting to turn right itself).
         moving_only: standing cars (and the ones queued behind them) do not count either: for a turn that is already
-        past its wait point, a standing car with priority is waiting for it."""
+        past its wait point, a standing car with priority is waiting for it.
+        Towns with yield_lookback (Town.from_graph) at unsignalised junctions: when the approach lane before the
+        crossing is shorter than LOOKBACK_LANE and holds nobody bound for it, a car still inside the junction before
+        (on one of the approach lane's predecessors) whose route then takes the crossing counts too. Real blocks are
+        short (25 m in Sapporo): a car with priority 3 s away was often still in the previous junction, so the minor
+        road did not see it until it was too close to stop, and drove into it (one expert collision in 60 routes)."""
         town = self.town
         lanes = town.lanes
         best = math.inf
+        lookback = town.yield_lookback and not town.junctions[conn.junction].signalized
         for b, _, s2 in conn.yields:
             vmax = 1.05 * lanes[b].speed_limit
-            for s, v, L, ego, _ in on_lane.get(b, ()):
+            for s, v, L, ego, *_ in on_lane.get(b, ()):
                 if s - L / 2 > s2 + 1.5 or (moving_only and v < 0.5):
                     continue                                    # its rear is past the crossing (or it waits)
                 d = s2 - (s + L / 2)
@@ -455,17 +491,29 @@ class Traffic:
                 continue
             stop_s = lanes[pred].stop_s
             st = town.signal_state_for_lane(pred, t)
-            for s, v, L, ego, nxt in on_lane.get(pred, ()):    # front first
+            seen = False                                        # someone on pred decides for the cars behind
+            for s, v, L, ego, nxt, *_ in on_lane.get(pred, ()):    # front first
                 if nxt != b:
                     if v < 0.5:
+                        seen = True
                         break                                   # standing to go elsewhere: the rest queue behind
                     continue
+                seen = True
                 if moving_only and v < 0.5:
                     break                                       # waits, and the cars behind queue behind it
                 front = s + L / 2
                 if not (st != TL_GREEN and stop_s is not None and self._will_stop(st, stop_s - front, v, ego)):
                     best = min(best, self._arrival(lanes[pred].length - front + s2, v, vmax, ego))
                 break                                           # the cars behind it arrive later
+            if lookback and not seen and lanes[pred].length < LOOKBACK_LANE:
+                for c in lanes[pred].pred:                      # inside the junction before pred
+                    for s, v, L, ego, nxt, *more in on_lane.get(c, ()):
+                        if nxt != pred or not more or more[0] != b or (moving_only and v < 0.5):
+                            continue
+                        front = s + L / 2
+                        best = min(best, self._arrival(lanes[c].length - front + lanes[pred].length + s2, v, vmax,
+                                                       ego))
+                        break                                   # the cars behind it on c arrive later
         return best
 
     @staticmethod
@@ -498,6 +546,34 @@ class Traffic:
         if st == TL_RED:
             return d + 0.5 >= v * v / 16.0                      # the line counts until 0.5 m past it
         return d > v * v / 7.0 + 1.0
+
+    def _stop_sign_gaps(self, stop_gap, hl):
+        """止まれ: a car on a minor road's approach to a priority crossing (Lane.stop_sign_s), or on the lane before
+        it, stops once with its front bumper about STOP_SIGN_NPC_AT before the line (the line is an obstacle
+        idm_s0 - STOP_SIGN_NPC_AT beyond it), like the expert; standing within STOP_SIGN_NPC_ZONE of the line counts.
+        Then _yield_gaps takes it on to its connector's wait point. Without the stop, cars of the minor road reached
+        the junction mouth at speed, where a car leaving its left turn into that road swings out (one expert
+        collision in 60 Sapporo routes)."""
+        lanes = self.town.lanes
+        s0 = self.cfg.idm_s0
+        for i in range(self.n):
+            r, k = self.route[i], self.ri[i]
+            front = self.s[i] + hl[i]
+            base = 0.0
+            for kk in (k, k + 1):
+                if kk >= len(r):
+                    break
+                ln = lanes[r[kk]]
+                if ln.stop_sign_s is not None:
+                    d = base + ln.stop_sign_s - front
+                    if self.ss_done.get(i) == ln.id or d < -0.5 or d > 45.0:
+                        break
+                    if self.v[i] < 0.05 and d <= STOP_SIGN_NPC_ZONE:
+                        self.ss_done[i] = ln.id
+                        break
+                    stop_gap[i] = min(stop_gap[i], d + s0 - STOP_SIGN_NPC_AT)
+                    break
+                base += ln.length
 
     def _yield_gaps(self, stop_gap, t, ego_info, hl):
         """Turns that give way wait at their connector's wait point while must_yield holds."""
@@ -609,6 +685,8 @@ class Traffic:
                     if self.exit_blocked(r[k + 1], r[k + 2], self.dims[i, 0] + 3.0, occ, (ego_xy, ego_v)) or \
                             (box is not None and self.box_busy(r[k + 1], box)):
                         stop_gap[i] = d - 0.6
+        if town.stop_signs:          # 止まれ (Town.from_graph): stop once at the minor road's stop line
+            self._stop_sign_gaps(stop_gap, hl)
         if self.has_yields:          # two-phase signals: turns wait for a gap in the oncoming traffic
             self._yield_gaps(stop_gap, t, ego_info, hl)
         # obstacles: other NPCs + external

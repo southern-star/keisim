@@ -303,6 +303,8 @@ def export_town(town: Town) -> dict:
     signals = [{"junction": sh["junction"], "phase": sh["phase"], "head": r2(sh["head"]),
                 "pole": r2(sh["pole"]), "yaw": round(float(sh["yaw"]), 4), "z": sh["z"]}
                for sh in town.signal_heads]
+    stop_signs = [{"lane": sp["lane"], "pole": r2(sp["pole"]), "yaw": round(float(sp["yaw"]), 4), "z": sp["z"]}
+                  for sp in town.stop_sign_posts]
     buildings, samples = [], road_samples(town)
     for b in town.buildings:
         d = {"x": round(b["x"], 2), "y": round(b["y"], 2), "yaw": round(float(b["yaw"]), 4),
@@ -322,7 +324,7 @@ def export_town(town: Town) -> dict:
         "surfaces": {"road": trace_shapes(road_mask, R), "sidewalk": trace_shapes(walk_mask, R)},
         "markings": [r2(simplify(p, LINE_EPS, True)) for p in town.markings],
         "crosswalks": [r2(simplify(p, LINE_EPS, True)) for p in town.crosswalks],
-        "roads": roads, "junctions": junctions, "signals": signals,
+        "roads": roads, "junctions": junctions, "signals": signals, **({"stop_signs": stop_signs} if stop_signs else {}),
         "buildings": buildings, "trees": trees,
         "parcels": make_parcels(town, buildings),
         **({"markings_yellow": [r2(simplify(p, LINE_EPS, True)) for p in town.markings_yellow]} if mixed else {}),

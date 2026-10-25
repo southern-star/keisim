@@ -112,7 +112,7 @@ KeiPilot の学習データ収集とクローズドループ評価で使いま�
 
 ```bash
 cd web && npm install && cd ..
-uv run scripts/demo.py --agent model --ckpt runs/keipilot.pt --renderer keiview --town 1001 --episode 3 --out runs/demo_kv.mp4   # Release v0.9.0 の重み
+uv run scripts/demo.py --agent model --ckpt runs/keipilot.pt --renderer keiview --town 1001 --episode 3 --out runs/demo_kv.mp4   # Release v0.10.0 の重み
 ```
 
 ## ブラウザで KeiPilot を走らせる（パイロットモード）
@@ -121,8 +121,8 @@ uv run scripts/demo.py --agent model --ckpt runs/keipilot.pt --renderer keiview 
 公開版: <https://southern-star.github.io/keisim/?pilot=1>
 
 ```bash
-uv run --with onnx --with onnxruntime scripts/export_onnx.py runs/keipilot_v18/last.pt web/models/keipilot.onnx
-#   （または Release v0.9.0 の keipilot.onnx を web/models/ に置く）
+uv run --with onnx --with onnxruntime scripts/export_onnx.py runs/keipilot_v24/last.pt web/models/keipilot.onnx
+#   （または Release v0.10.0 の keipilot.onnx を web/models/ に置く）
 cd web && node tools/serve.mjs                    # → http://localhost:5174/?pilot=1&town=1000
 ```
 
@@ -132,6 +132,7 @@ cd web && node tools/serve.mjs                    # → http://localhost:5174/?p
   - 車は KeiSim と同じ制御器（Pure Pursuit と PI 速度制御、`keisim/control.py`）と車両モデル（`keisim/vehicle.py`、20 Hz）で走ります。
   - 安全層 BrakeHold / RedHold も `keipilot/agent.py` と同じものが入っています。
   - ルートとモデルへの 2 つの入力（次の信号交差点で曲がる方向と、その交差点を出て 4 m 先の目標点）は、`src/nav.js` が `keisim/route.py` と同じ規則で作ります。
+  - v0.10 のモデルには、最後に止まってから走った距離（10 m で頭打ち）も入れます。止まれの線の手前で「まだ止まっていない」のか「止まったあとで発進した」のかは、1 枚の画像では分からないためです。`src/pilot.js` が `keipilot/data.py` の `stand_update` と同じく制御のたびに数えます（ONNX に `stand` 入力があるときだけ。前の版のモデルもそのまま動きます）。
 - 曲がる方向はキー ← ↑ →（または画面のボタン）で、次の交差点について指定します。
   - 指定しなければランダムに曲がります。
   - Space で一時停止、R で最初から、T で周りの車の表示を切り替えます。
@@ -146,7 +147,7 @@ cd web && node tools/serve.mjs                    # → http://localhost:5174/?p
   - 台数は車線の長さに合わせて決めます（車線 1 km あたり 12 台、最大 40 台。town 1000 では 28 台）。
   - 動きは `keisim/traffic.py` の NPC を軽くしたものです。交差点ごとにランダムに曲がり、IDM で前の車（と自車）との車間を取り、赤と黄色で止まります（黄色は止まれるときだけ）。交差点の中に別の現示の車がいるときと、出口が詰まっているときは、停止線で待ちます。
   - 二段階の信号の町では、KeiSim と同じ右折のルールで動きます。
-  - 実在の町「札幌」（`?town=osm_sapporo`、[../README.md](../README.md) 2 章の「実在の町」）では、信号のない交差点で KeiSim と同じ優先道路の規則で動きます（細い道から来た車が優先道路のすべての動きに譲る、右折は対向の左折を先に行かせる、車は 6 m まで）。地図データは © OpenStreetMap contributors (ODbL) で、画面の右下に出典を出します。
+  - 実在の町「札幌」（`?town=osm_sapporo`、[../README.md](../README.md) 2 章の「実在の町」）では、信号のない交差点で KeiSim と同じ優先道路の規則で動きます（細い道から来た車が優先道路のすべての動きに譲る、右折は対向の左折を先に行かせる、車は 6 m まで）。細い道の入口には止まれの標識と停止線があり、周りの車はそこで一度止まってから譲ります。地図データは © OpenStreetMap contributors (ODbL) で、画面の右下に出典を出します。
     - 進路が交わる・合流する動きは、直進 > 左折 > 右折 の順に優先します。
     - 同じ向きの動きどうしが交わるとき（斜めの交差点の右折どうし）は、片方が譲ります。決め方も KeiSim と同じです（`Town._equal_gives_way`）。
       town 1015 と 1018 にはこの交差はありません。
@@ -174,6 +175,7 @@ URL パラメータ: `?town=1001`（二段階の信号の町は `?town=1015-9878
 ```bash
 node tools/pilot_check.mjs --town 1000 --sec 60   # headless Chrome で 60 秒（シミュレーション時間）走らせて記録を表示
 node tools/pilot_check.mjs --url https://southern-star.github.io/keisim/ --sec 10   # 公開版を確かめる
+node tools/pilot_check.mjs --town osm_sapporo --sec 120 --model models/keipilot_v24.onnx   # 札幌で、別の ONNX（web/ の下）を走らせる
 ```
 
 `pilot_check.mjs` は、モデルの計算を毎ステップ待つので、KeiSim と同じく推論の遅れがない状態で走ります。

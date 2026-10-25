@@ -168,3 +168,105 @@ def test_graph_duplicate_and_coincident_arms():
     G.add_edge(1, 5, [(0.0, 0.0), (60.0, 1.0)], "residential", 14)                   # 1 deg from the edge to node 2
     r = G.est_radius(1)
     assert math.isfinite(r) and r < 12.0, r
+
+
+def test_stop_signs():
+    """止まれ (Town.from_graph): every approach of the minor road to a priority crossing, and no other lane, gets a
+    stop line, the painted 止まれ (markings) and a sign beside the road; the expert stands still at each one it passes, with its front bumper about
+    STOP_SIGN_MARGIN before the line, and still completes the route. Signalised junctions keep their own lines."""
+    from keisim.expert import STOP_SIGN_MARGIN, STOP_SIGN_V
+    town = osm_town(BBOX, osm=mini_osm(), name="mini")
+    assert town.stop_signs and town.yield_lookback
+    want = set()
+    for J in town.junctions:
+        if not J.signalized and len(J.arms) >= 3:
+            want |= {lid for lid, g in town._priority_groups(J).items() if g == 1}
+    have = {l.id for l in town.lanes if l.stop_sign_s is not None}
+    assert want and have == want, (want, have)
+    assert all(town.lanes[l].stop_s is None for l in have)                    # never a signal's approach
+    signal_lines = sum(l.stop_s is not None for l in town.lanes)
+    town2 = osm_town(BBOX, osm=mini_osm(), name="mini2")
+    town2.stop_signs = False
+    town2._make_yields()
+    town2.markings = []
+    town2._make_markings()
+    extra = len(town.markings) - len(town2.markings)                          # a stop line + the painted 止まれ each
+    assert extra > 10 * len(have) and signal_lines > 0, extra
+    assert sorted(sp["lane"] for sp in town.stop_sign_posts) == sorted(have)  # one sign per stop line, off the road
+    assert all(town.surface(sp["pole"][None])[0] != 1 for sp in town.stop_sign_posts)
+    from keisim.env import KeiEnv
+    env = KeiEnv(EnvConfig(town=town.cfg, render_rgb=False, render_seg=False))
+    passed = 0
+    for ep in range(3):
+        env.reset(town, episode_seed=ep, route_length=300, render=False)
+        lines = [s for s, _ in env.route.stop_signs]
+        vmin = {s: 99.0 for s in lines}
+        hl = env.world.ego.LENGTH / 2
+        done = False
+        while not done:
+            front = env.s_ego + hl
+            for s in lines:
+                if s - STOP_SIGN_MARGIN - 2.0 <= front <= s + 0.5:
+                    vmin[s] = min(vmin[s], env.world.ego.v)
+            _, _, done, info = env.step(env.expert_action())
+        assert info["status"] == "success", info
+        gone = [s for s in lines if s < env.s_ego]
+        assert all(vmin[s] < STOP_SIGN_V for s in gone), vmin
+        passed += len(gone)
+    assert passed > 0
+
+
+def test_stop_sign_counterfactuals():
+    """The expert's recorded 止まれ inputs (ss_d, ss_go) let target_for_speed rebuild its label at the recorded speed,
+    and give "go on" (ss_go) for the same frame standing at the line: the pairs that teach a single-frame model when
+    the stop is made."""
+    from keisim.expert import STOP_SIGN_MARGIN, STOP_SIGN_ZONE, target_for_speed
+    town = osm_town(BBOX, osm=mini_osm(), name="mini")
+    from keisim.env import KeiEnv
+    env = KeiEnv(EnvConfig(town=town.cfg, render_rgb=False, render_seg=False))
+    keys = ("target_nolight", "lt_over", "lt_d", "lt_st", "lt_trem", "lt_blocked", "ss_d", "ss_go")
+    pending = near = 0
+    for ep in range(3):
+        env.reset(town, episode_seed=ep, route_length=300, render=False)
+        done = False
+        while not done:
+            p = env.plan
+            lab = {k: p[k] for k in keys}
+            assert abs(target_for_speed(env.world.ego.v, lab) - p["target_speed"]) < 1e-6, (lab, p["target_speed"])
+            if math.isfinite(p["ss_d"]):
+                pending += 1
+                if p["ss_d"] <= STOP_SIGN_MARGIN + STOP_SIGN_ZONE:
+                    near += 1
+                    go = target_for_speed(0.0, lab)
+                    assert go == (0.0 if p["ss_go"] < 0.3 else p["ss_go"]) or not math.isnan(p["lt_d"])
+            _, _, done, _ = env.step(env.expert_action())
+    assert pending > 0 and near > 0, (pending, near)
+
+
+def test_stand_memory_tells_the_stop_apart():
+    """Just before and just after its stop at a 止まれ line the car sees nearly the same; the distance since it last
+    stood (stand_m, counted as KeiPilotAgent and collect.py count it) tells the two apart. Near a line the expert
+    counts the stop as made exactly when the car stood no farther back than STOP_SIGN_MARGIN + STOP_SIGN_ZONE, i.e.
+    when stand_m <= STOP_SIGN_MARGIN + STOP_SIGN_ZONE - d (d: the line ahead of the front bumper)."""
+    from keipilot.data import STAND_CAP, stand_update
+    from keisim.env import KeiEnv
+    from keisim.expert import STOP_SIGN_MARGIN, STOP_SIGN_OVER, STOP_SIGN_ZONE
+    town = osm_town(BBOX, osm=mini_osm(), name="mini")
+    env = KeiEnv(EnvConfig(town=town.cfg, render_rgb=False, render_seg=False))
+    dt = env.cfg.dt * env.cfg.action_repeat
+    seen = {True: 0, False: 0}
+    for ep in range(3):
+        env.reset(town, episode_seed=ep, route_length=300, render=False)
+        hl = env.world.ego.LENGTH / 2
+        m, done = STAND_CAP, False
+        while not done:
+            m = stand_update(m, env.world.ego.v, dt)
+            for s, _ in env.route.stop_signs:
+                d = s - (env.s_ego + hl)
+                if -STOP_SIGN_OVER < d <= STOP_SIGN_MARGIN + STOP_SIGN_ZONE:
+                    made = s in env.expert._ss_done
+                    room = STOP_SIGN_MARGIN + STOP_SIGN_ZONE - d
+                    assert (m <= room + 0.3) if made else (m > room - 0.3), (ep, d, m, made)
+                    seen[made] += 1
+            _, _, done, _ = env.step(env.expert_action())
+    assert seen[True] > 0 and seen[False] > 0, seen

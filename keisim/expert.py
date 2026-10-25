@@ -25,6 +25,11 @@ LATE_COMMIT = 1.0                        # m: past its wait point, a right turn 
 LATE_MARGIN = 1.0                        # s: ... if a moving car with priority arrives sooner than it clears + this
 CROSSING_V = 10.0 / 3.6                  # m/s: 徐行 at the wait point of an unsignalised crossing the ego gives way at
 CROSSING_B = 1.6                         # m/s^2: ... slowing down towards it (the curve envelope's deceleration)
+STOP_SIGN_MARGIN = 1.0                   # m: 止まれ: the front bumper stops this far before the stop line (still in view)
+STOP_SIGN_ZONE = 1.5                     # m: ... and the stop counts when the ego stands within this much more of it
+STOP_SIGN_V = 0.05                       # m/s: standing (a full stop: 一時停止)
+STOP_SIGN_OVER = 1.5                     # m: a car that rolled this far past the line without stopping stops there;
+                                         # further in, the junction's own rules take over
 
 
 def clear_time(d_cross, v, length):
@@ -69,8 +74,16 @@ def light_stop(v, d, st, t_rem, exit_blocked):
 def target_for_speed(v, lab):
     """The expert's target speed had the ego been driving at `v`, from the speed-independent parts of its plan
     (target_nolight, lt_over, lt_d, lt_st, lt_trem, lt_blocked; see Expert.plan). Relabels recorded frames with
-    counterfactual ego speeds, so a speed-input model learns how the speed changes the decision."""
+    counterfactual ego speeds, so a speed-input model learns how the speed changes the decision.
+    止まれ (optional ss_d, ss_go: the pending stop line ahead and the target without it): standing (v < STOP_SIGN_V)
+    within STOP_SIGN_MARGIN + STOP_SIGN_ZONE of the line, the stop is made and the ego goes on (ss_go); at any other
+    speed the line still binds (target_nolight). A single frame cannot tell "stopped here already" from "about to
+    stop", except by the speed: these pairs, from the same images, are what teaches it (models trained only on the
+    states their DAgger visited either froze at the line or rolled over it)."""
     target = float(lab["target_nolight"])
+    ss_d, ss_go = float(lab.get("ss_d", math.nan)), float(lab.get("ss_go", math.nan))
+    if math.isfinite(ss_d) and math.isfinite(ss_go) and v < STOP_SIGN_V and ss_d <= STOP_SIGN_MARGIN + STOP_SIGN_ZONE:
+        target = ss_go
     if lab["lt_over"] and v < 3.0:
         target = 0.0
     d = float(lab["lt_d"])
@@ -87,6 +100,7 @@ class Expert:
 
     def __init__(self, env):
         self.env = env
+        self._ss_route, self._ss_done = None, set()    # 止まれ lines (route s) the ego has stopped at on this route
 
     def path_local(self, route, s, pose):
         pts = route.poly.interp(np.minimum(s + PATH_S, route.poly.length))
@@ -97,6 +111,7 @@ class Expert:
         w = env.world
         route = env.route
         ego = w.ego
+        real = pose is None and s is None           # the ego itself (not a displaced camera): updates the 止まれ memory
         if pose is None:
             pose = ego.pose
         if s is None:
@@ -189,6 +204,15 @@ class Expert:
         yield_tta = math.nan          # label for the model's auxiliary head: earliest arrival of a car with priority
         if tr.has_yields:
             s_front = s + hl
+
+            def tables():
+                if not env.cfg.expert_yield_visible:
+                    return tr.yield_tables()
+                # only the cars the camera (on `pose`: a displaced camera's own view) shows right now
+                c = env.cfg.camera
+                x, y, yaw = float(pose[0]), float(pose[1]), float(pose[2])
+                cam = (x + c.x * math.cos(yaw) - c.y * math.sin(yaw), y + c.x * math.sin(yaw) + c.y * math.cos(yaw))
+                return tr.yield_tables(visible=tr.visible_from(cam, yaw, math.radians(c.fov_deg) / 2, c.max_dist, w.town))
             for jn in route.junctions:
                 if jn["s_out"] < s_front:
                     continue
@@ -203,17 +227,45 @@ class Expert:
                             v_x = math.sqrt(CROSSING_V ** 2 + 2 * CROSSING_B * max(d_wait, 0.0))
                             if v_x < target:
                                 target, reason = v_x, "crossing"
-                        tta = tr.min_arrival(conn, w.t, tr.yield_tables())
+                        tta = tr.min_arrival(conn, w.t, tables())
                         yield_tta = min(tta, YIELD_TTA_MAX)
                         if tta < YIELD_GAP:
                             v_y = stop_profile(max(d_wait, 0.0), self.B_COMF)
                             if v_y < target:
                                 target, reason = v_y, "yield"
                     elif d_cross > LATE_COMMIT:
-                        tta = tr.min_arrival(conn, w.t, tr.yield_tables(), moving_only=True)
+                        tta = tr.min_arrival(conn, w.t, tables(), moving_only=True)
                         yield_tta = min(tta, YIELD_TTA_MAX)
                         if tta < clear_time(d_cross, v, ego.LENGTH) + LATE_MARGIN:
                             target, reason = 0.0, "yield"
+                break
+
+        # --- 止まれ (Town.from_graph: the minor road's approaches to priority crossings, Lane.stop_sign_s). The ego
+        # stops with its front bumper STOP_SIGN_MARGIN before the painted line (the line stays in the camera's view),
+        # once: after standing there (or up to STOP_SIGN_OVER past the line, if it rolled over it) the line no longer
+        # binds, and the 徐行 and give-way rules above take the ego on to its connector's wait point. The memory of
+        # the stops made is per route and only the ego itself updates it (not the plan of a displaced camera). The
+        # rule depends on the ego speed only through that memory, so it is part of target_nolight.
+        # ss_d / ss_go: the pending line and the target without it, recorded for target_for_speed's counterfactuals
+        ss_d, ss_go = math.nan, target
+        if route.stop_signs:
+            if self._ss_route is not route:
+                self._ss_route, self._ss_done = route, set()
+            s_front = s + hl
+            for s_line, lid in route.stop_signs:
+                d = s_line - s_front
+                if d < -STOP_SIGN_OVER or s_line in self._ss_done:
+                    continue
+                if d > 45.0:
+                    break
+                if v < STOP_SIGN_V and d <= STOP_SIGN_MARGIN + STOP_SIGN_ZONE:
+                    if real:
+                        self._ss_done.add(s_line)
+                    continue
+                ss_d = d
+                v_s = stop_profile(d - STOP_SIGN_MARGIN, self.B_COMF)
+                if v_s < target:
+                    target, reason = v_s, "stop_sign"
                 break
 
         # --- traffic light. The speed-independent inputs of the decision are returned too (lt_*), so recorded
@@ -261,7 +313,7 @@ class Expert:
         # lead_owner: what the gap is to (>= 0: NPC vehicle index in world.traffic, <= -2: pedestrian, -1: nothing)
         return {"path": path, "target_speed": float(target), "tl_state": int(tl), "reason": reason,
                 "gap": g, "lead_owner": int(lead_o[0]), "target_nolight": float(target_nolight),
-                "yield_tta": float(yield_tta), **lt}
+                "yield_tta": float(yield_tta), "ss_d": float(ss_d), "ss_go": float(ss_go), **lt}
 
     def act(self, plan=None):
         env = self.env

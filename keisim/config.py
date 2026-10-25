@@ -208,3 +208,7 @@ class EnvConfig:
     keiview_quality: str = "medium"
     keiview_gl: str = "auto"          # auto (GPU, else SwiftShader on the CPU) | hw | soft
     keiview_roads: str = "plain"      # plain (the look of every KeiView dataset so far) | detail (markings, signs, ...)
+    # The expert's give-way rule counts only the cars with priority that the ego camera can see right now (inside its
+    # horizontal field of view, not behind a building; Traffic.visible_from), so its labels follow from the image:
+    # with all of them, a car outside the 100 deg view made the expert wait where the image looked clear.
+    expert_yield_visible: bool = False

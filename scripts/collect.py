@@ -24,12 +24,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from keisim.config import TL_NONE, TL_RED, EnvConfig  # noqa: E402
 from keisim.env import KeiEnv  # noqa: E402
-from keipilot.data import ShardWriter, write_meta  # noqa: E402
+from keipilot.data import STAND_CAP, ShardWriter, stand_update, write_meta  # noqa: E402
 from keisim.config import TOWN_STYLES, town_config  # noqa: E402
 from keisim.expert import LABEL_VERSION  # noqa: E402
 
 REASONS = {"cruise": 0, "curve": 1, "vehicle": 2, "pedestrian": 3, "red_light": 4, "junction_blocked": 5, "yield": 6,
-           "crossing": 7}
+           "crossing": 7, "stop_sign": 8}
 WEATHERS = {"noon": 0, "cloudy": 1, "sunset": 2, "fog": 3}
 
 
@@ -147,9 +147,11 @@ STAT_KEYS = ("steps", "steps_focus", "steps_lead_edge", "frames", "focus", "lead
              "lead_edge_tl_none", "lead_edge_tl_none_red")
 
 
-def record(env, writer, rng, v_prob, weather_id, virtual_prob, offset=False, rgb=None, seg=None, prev=None):
+def record(env, writer, rng, v_prob, weather_id, virtual_prob, offset=False, rgb=None, seg=None, prev=None,
+           stand_m=np.nan):
     """offset=False: draw a random virtual camera for this frame; else use the given one (None = real camera).
-    rgb/seg: an already rendered frame for that camera; prev: its frame `--history` s earlier."""
+    rgb/seg: an already rendered frame for that camera; prev: its frame `--history` s earlier.
+    stand_m: metres the ego has driven since it last stood (keipilot.data.stand_update)."""
     plan = env.plan
     e = env.world.ego
     if offset is False:
@@ -172,7 +174,11 @@ def record(env, writer, rng, v_prob, weather_id, virtual_prob, offset=False, rgb
                lt_d=np.float32(plan["lt_d"]), lt_st=np.int8(plan["lt_st"]), lt_trem=np.float32(plan["lt_trem"]),
                lt_blocked=np.bool_(plan["lt_blocked"]),
                # auxiliary label: earliest arrival of a car with priority at the next right turn that gives way
-               yield_tta=np.float32(plan.get("yield_tta", np.nan)))
+               yield_tta=np.float32(plan.get("yield_tta", np.nan)),
+               # 止まれ: the pending stop line ahead and the target without it (counterfactual standing frames)
+               ss_d=np.float32(plan.get("ss_d", np.nan)), ss_go=np.float32(plan.get("ss_go", np.nan)),
+               # the ego's memory of its last stop (memory-input models)
+               stand_m=np.float32(stand_m))
 
 
 def worker(wid, args, quota, out_dir, counter):
@@ -208,6 +214,7 @@ def worker(wid, args, quota, out_dir, counter):
     cfg.render_rgb = cfg.render_seg = False
     cfg.renderer = args.renderer
     cfg.keiview_roads = args.keiview_roads
+    cfg.expert_yield_visible = bool(args.yield_visible)
     if args.ego_cross_rate is not None:
         cfg.traffic.ego_cross_rate = args.ego_cross_rate
     if args.ped_spacing is not None:
@@ -261,7 +268,9 @@ def worker(wid, args, quota, out_dir, counter):
         hist = int(round(args.history / dt))
         assert hist % args.every == 0, "--history must be a multiple of the recording interval"
         frames, seg_off, seg_left = {}, None, 0
+        stand = STAND_CAP                                   # as KeiPilotAgent counts it (reset, then every step)
         while not done and n < quota:
+            stand = stand_update(stand, env.world.ego.v, dt)
             a_exp = env.expert_action()
             v_model = None                                  # the driving model's target speed this step (dagger)
             tl_model = None                                 # and its traffic-light class
@@ -310,10 +319,10 @@ def worker(wid, args, quota, out_dir, counter):
                     frames.pop(env._step - hist - args.every, None)
                     if keep:
                         record(env, writer, rng, None, weather_id, args.virtual_prob, offset=seg_off, rgb=rgb, seg=seg,
-                               prev=frames.get(env._step - hist))
+                               prev=frames.get(env._step - hist), stand_m=stand)
                         n += 1
                 elif keep:
-                    record(env, writer, rng, None, weather_id, args.virtual_prob)
+                    record(env, writer, rng, None, weather_id, args.virtual_prob, stand_m=stand)
                     n += 1
                 if writer.k != shards_saved:                        # a shard was written: its counts with it
                     shards_saved = writer.k
@@ -387,6 +396,8 @@ def main():
                     help="town style (keisim/config.py); twophase: right turns wait for gaps in the oncoming traffic; "
                          "roadtypes: twophase with main roads, residential roads without sidewalks and alleys")
     ap.add_argument("--jam_fixes", type=int, default=0, choices=[0, 1], help="box rule + hidden jam release (long2/3)")
+    ap.add_argument("--yield_visible", type=int, default=0, choices=[0, 1],
+                    help="the expert gives way only to cars the camera sees (EnvConfig.expert_yield_visible)")
     ap.add_argument("--osm_towns", nargs="*", default=[], metavar="NAME[:S,W,N,E]",
                     help="drive real towns (keisim/realworld.py; boxes of OSM_BOXES or given) instead of procedural "
                          "ones; a town is picked per --episodes_per_town episodes. Use --jam_fixes 1 as evaluate.py does")
@@ -401,7 +412,8 @@ def main():
     write_meta(args.out, label_version=LABEL_VERSION, mode=args.mode, ckpt=args.ckpt, frames=args.frames, history=args.history,
                renderer=args.renderer, town_style=args.town_style, jam_fixes=args.jam_fixes, late_yield=True,
                **({"osm_towns": args.osm_towns, "osm_seed0": args.osm_seed0} if args.osm_towns else {}),
-               **({"keiview_roads": args.keiview_roads} if args.keiview_roads != "plain" else {}))
+               **({"keiview_roads": args.keiview_roads} if args.keiview_roads != "plain" else {}),
+               **({"yield_visible": 1} if args.yield_visible else {}))
     ctx = mp.get_context("spawn" if args.mode == "dagger" else "fork")
     counter = ctx.Value("i", 0)
     t0 = time.time()

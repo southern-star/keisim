@@ -28,6 +28,7 @@ class Route:
         self.s_end = float(min(self.poly.length - 1.0, s_end if s_end is not None else self.poly.length - 5.0))
         self.junctions = []
         self.stops = []
+        self.stop_signs = []            # (s, lane id) of the 止まれ stop lines along the route (Town.from_graph)
         for k, lid in enumerate(self.lanes):
             lane = town.lanes[lid]
             if lane.kind == "conn":
@@ -37,6 +38,8 @@ class Route:
                                        "decision": len(J.arms) >= 3})
             if lane.stop_s is not None:
                 self.stops.append((offs[k] + lane.stop_s, lid))
+            if lane.stop_sign_s is not None:
+                self.stop_signs.append((offs[k] + lane.stop_sign_s, lid))
         # curvature along the flattened path
         curv = np.concatenate([town.lanes[l].curv if k == 0 else town.lanes[l].curv[1:]
                                for k, l in enumerate(self.lanes)])
