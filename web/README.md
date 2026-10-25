@@ -112,7 +112,7 @@ KeiPilot の学習データ収集とクローズドループ評価で使いま�
 
 ```bash
 cd web && npm install && cd ..
-uv run scripts/demo.py --agent model --ckpt runs/keipilot.pt --renderer keiview --town 1001 --episode 3 --out runs/demo_kv.mp4   # Release v0.9.0 の重み
+uv run scripts/demo.py --agent model --ckpt runs/keipilot.pt --renderer keiview --town 1001 --episode 3 --out runs/demo_kv.mp4   # Release v0.10.0 の重み
 ```
 
 ## ブラウザで KeiPilot を走らせる（パイロットモード）
