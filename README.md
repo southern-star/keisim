@@ -344,8 +344,23 @@ OpenStreetMap の道路と建物から、KeiSim の街を作ります (`keisim/r
 * 町は 西大井・二葉 の約 1.2 km 角 (北緯 35.612〜35.623°、東経 139.719〜139.732°、山手通りの南西側) で、道路 12.5 km (交差点の円を除く)、交差点 156 か所 (信号 1、止まれのある優先道路の交差点 107)、一方通行 25 本 1.4 km、家 3,400 軒。
   山手通り (片側 2〜3 車線) の向こう側は、山手通りを表現できないので入れていません。`web/.towns` に書き出せばブラウザでも走れます (`?tdir=.towns&town=osm_nishioi`。家が 3,400 軒と札幌の 2 倍あり、読み込みは数分かかります)。
 * 札幌の町は一方通行を入れる前のまま固定しています (`keisim.realworld.TWO_WAY_TOWNS`: 箱の中の 屯田通 は上下線が別の way で、入れると町と学習・評価の基準が変わるため)。
-* エキスパートは 600 m のルート 8 本を無事故で完走します (`import_osm.py --routes 8`)。札幌で学習した v0.10 をそのまま走らせると (20 ルート、`runs/eval/osm_nishioi/keipilot_v10_zero_shot.json`)、DS 0.869、完走 16、車との衝突 3、経路逸脱 1 でした。
-  中央線のない 4.5 m の一方通行は学習に無い見え方なので、東京の学習データを集めてからの比較が本番です。
+* 札幌と同じ手順で評価しました (600 m × 20 ルート × 3 組 = 60 ルート、安全層つき、`evaluate.py --osm_town osm_nishioi`。ゼロショット: 東京のデータは学習に使っていません)。
+
+| 西大井 (60 ルート、約 32 km、止まれのある町、安全層つき、ゼロショット) | エキスパート | v0.9 | **v0.10** |
+|---|---|---|---|
+| KeiSim: DS / 完走 / 衝突 | 0.972 / 57 / 1 | **0.863 / 47 / 5** | 0.833 / 46 / 10 |
+| KeiView: DS / 完走 / 衝突 | — | 0.742 / 38 / 7 | **0.786 / 40** / 10 |
+| モデルの迷いで動けず (KeiSim + KeiView) | — | 6 + 13 | **0 + 8** |
+| 止まれで完全に止まる (エキスパートが止まる 91 か所、KeiSim / KeiView) | 100 % | 25 % / 28 % | **100 % / 97 %** |
+
+* 札幌 (v0.10: KeiSim 0.928、KeiView 0.977) より 1 割ほど低く、札幌で学んだ運転が東京の町にもある程度は移ることと、足りないものの両方が見えます。
+  v0.10 の衝突 20 件は、ほぼすべて優先道路の交差点 (止まれで止まったあとに出て、優先道路の車とぶつかる。札幌と同じ弱点) で、信号 (4 回通過) と一方通行そのものの違反はありません。
+  v0.9 の衝突が少ないのは札幌と同じ理由で、止まれの 7 割を止まらずに通り、迷って動けなくなる (KeiSim 6、KeiView 13) ことで交差点の中にいる時間が短いためです。
+  KeiView の迷い (v0.10 で 8) は、中央線のない 4.5 m の一方通行や家の密度が学習に無い見え方だからで、東京の学習データを集めてからの比較が本番です。
+* エキスパートの失敗 3 件 (60 ルート) はシミュレーターの弱点で、`docs/report/nishioi-town.md` に書きました。
+  立ち往生 2 件は、交差点の口の 10 m に満たない短い路側帯を往復し続ける歩行者 (エキスパートは 5 m 手前で待ち続ける)。衝突 1 件は、右折する周りの車が対向直進のエゴに譲らなかったもので、
+  譲る判定が今の車線と次の車線しか見ないため、手前の交差点の連結路にいる間は判定されず、9 m の短い道に入った時点では制動距離 (約 11 m) を切っています (札幌でエゴ側に入れた lookback の、周りの車側の抜け)。
+  どちらも直すと札幌の評価も変わるので、学習が一巡してからにします。
 
 ### 見つけた弱点と対処（開発ログ）
 
@@ -777,7 +792,7 @@ uv run --with matplotlib python tools/follow_analyze.py runs/follow/v11_test.jso
 uv run tools/red_fp.py runs/red_fp_long3.json 6 --ckpts runs/keipilot_v10/last.pt runs/keipilot_v11/last.pt --suite long3
 
 # v0.9: 実在の町 (札幌、OpenStreetMap)。学習は評価用の町 (osm_sapporo) の北・東・南の 1 km 角だけで行う
-#       (collect.py の OSM_BOXES。Overpass API の答えは data/osm/<name>.json にキャッシュ)
+#       (keisim/realworld.py の OSM_BOXES。Overpass API の答えは data/osm/<name>.json にキャッシュ)
 uv run scripts/import_osm.py --bbox 43.088 141.360 43.097 141.372 --name osm_sapporo --routes 4   # 評価用の町をエキスパートで確かめ、KeiView 用に書き出す
 OSM="--osm_towns osm_sapporo_n osm_sapporo_e osm_sapporo_s --jam_fixes 1 --ego_cross_rate 0.3"
 W9="--dir_weight data/tp3_dagger_v7=5 data/tp3_kv_dagger_v7=5 data/ped_dagger_v8=2 data/vped_dagger_v8=2 data/ped_kv_dagger_v8=2 data/vped_kv_dagger_v8=2 \
@@ -840,6 +855,10 @@ E="uv run scripts/evaluate.py --agent model --ckpt runs/keipilot.pt --brake_hold
 $E && $E --renderer keiview          # runs/eval/osm_sapporo/keipilot_hold_red[_keiview].json
 $E --episode0 200 --out runs/eval/osm_sapporo/keipilot_hold_red_ep200.json
 uv run scripts/osm_report.py runs/eval/osm_sapporo/keipilot_hold_red.json   # 交差点の種類ごとの表
+# 西大井 (品川区): 町は data/osm/osm_nishioi.json から、箱は keisim.realworld.OSM_BOXES。v0.9 / v0.10 のゼロショットは runs/eval/osm_nishioi/
+N="uv run scripts/evaluate.py --osm_town osm_nishioi --routes 20 --brake_hold --red_hold"
+$N --agent expert && $N --agent model --ckpt runs/keipilot.pt && $N --agent model --ckpt runs/keipilot.pt --renderer keiview
+uv run python tools/stop_lines.py --dir runs/eval/osm_nishioi --expert expert keipilot_hold_red   # 止まれで止まった割合
 ```
 
 学習データは全部メモリに読み込みます。v0.9 の全データ (2.40M フレーム) で約 40 GB (v0.8 は 2.20M フレームで約 38 GB)、2 枚入力のモデルは前の画像も読むので約 50 GB です。足りない分はスワップに入ります。

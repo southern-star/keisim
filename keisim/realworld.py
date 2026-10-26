@@ -52,6 +52,16 @@ DEFAULT_HEIGHT = 7.0     # m, buildings without height / levels
 # web/towns/town_osm_sapporo.json, the training data of KeiPilot v0.9 / v0.10 and their evaluations keep one town
 # (the box's 屯田通 is mapped as two one-way carriageways; taking it in is a later change)
 TWO_WAY_TOWNS = ("osm_sapporo",)
+# the real towns: name -> box (south, west, north, east); the Overpass answer is cached at data/osm/<name>.json.
+# osm_sapporo and osm_nishioi are evaluation towns (evaluate.py --osm_town, episodes 100..); the _n/_e/_s boxes are
+# Sapporo's training squares (collect.py --osm_towns).
+OSM_BOXES = {
+    "osm_sapporo": (43.088, 141.360, 43.097, 141.372),
+    "osm_sapporo_n": (43.097, 141.360, 43.106, 141.372),
+    "osm_sapporo_e": (43.088, 141.372, 43.097, 141.384),
+    "osm_sapporo_s": (43.079, 141.360, 43.088, 141.372),
+    "osm_nishioi": (35.612, 139.719, 35.623, 139.732),       # 品川区 西大井・二葉: one-way streets, 止まれ, few signals
+}
 
 
 # ----------------------------------------------------------------------------- OSM data

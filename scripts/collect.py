@@ -27,6 +27,7 @@ from keisim.env import KeiEnv  # noqa: E402
 from keipilot.data import STAND_CAP, ShardWriter, stand_update, write_meta  # noqa: E402
 from keisim.config import TOWN_STYLES, town_config  # noqa: E402
 from keisim.expert import LABEL_VERSION  # noqa: E402
+from keisim.realworld import OSM_BOXES  # real towns: name -> box (south, west, north, east)  # noqa: E402
 
 REASONS = {"cruise": 0, "curve": 1, "vehicle": 2, "pedestrian": 3, "red_light": 4, "junction_blocked": 5, "yield": 6,
            "crossing": 7, "stop_sign": 8}
@@ -123,17 +124,6 @@ def lead_at_edge(env, plan, max_gap):
     if corners_outside_fov(env.cfg.camera, (e.x, e.y, e.yaw), tr.xy[o], tr.yaw[o], tr.dims[o, 0] / 2, tr.dims[o, 1] / 2):
         return True
     return abs(route_turn_deg(plan["path"])) >= LEAD_TURN_DEG
-
-
-# real towns (keisim/realworld.py, scripts/import_osm.py): name -> box (south, west, north, east); the Overpass answer is
-# cached at data/osm/<name>.json. osm_sapporo is the evaluation town (evaluate.py --osm_town, episodes 100-119).
-OSM_BOXES = {
-    "osm_sapporo": (43.088, 141.360, 43.097, 141.372),
-    "osm_sapporo_n": (43.097, 141.360, 43.106, 141.372),
-    "osm_sapporo_e": (43.088, 141.372, 43.097, 141.384),
-    "osm_sapporo_s": (43.079, 141.360, 43.088, 141.372),
-    "osm_nishioi": (35.612, 139.719, 35.623, 139.732),       # 品川区 西大井・二葉: one-way streets, 止まれ, few signals
-}
 
 
 def osm_spec(spec):
