@@ -18,7 +18,7 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from keisim.config import EnvConfig  # noqa: E402
-from keisim.realworld import graph_report, osm_town  # noqa: E402
+from keisim.realworld import OSM_BOXES, graph_report, osm_town  # noqa: E402
 
 
 def drive(town, routes, route_length, seed0=100, max_steps=12000):
@@ -44,8 +44,8 @@ def drive(town, routes, route_length, seed0=100, max_steps=12000):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--bbox", type=float, nargs=4, metavar=("S", "W", "N", "E"),
-                    default=[43.088, 141.360, 43.097, 141.372], help="Sapporo Higashi-ku's residential grid by default")
+    ap.add_argument("--bbox", type=float, nargs=4, metavar=("S", "W", "N", "E"), default=None,
+                    help="the box (default: --name's entry in keisim.realworld.OSM_BOXES)")
     ap.add_argument("--name", default="osm_sapporo")
     ap.add_argument("--cache", default=None, help="Overpass JSON cache (default data/osm/<name>.json)")
     ap.add_argument("--out", default="web/.towns")
@@ -58,6 +58,10 @@ def main():
                     help="keep one-way roads (auto: on, except the towns built before the importer had them, "
                          "keisim.realworld.TWO_WAY_TOWNS)")
     args = ap.parse_args()
+    if args.bbox is None:
+        if args.name not in OSM_BOXES:
+            ap.error(f"--name {args.name}: not in keisim.realworld.OSM_BOXES, give --bbox S W N E")
+        args.bbox = list(OSM_BOXES[args.name])
 
     t0 = time.time()
     town = osm_town(tuple(args.bbox), cache=args.cache or f"data/osm/{args.name}.json", name=args.name, seed=args.seed,

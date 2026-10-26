@@ -67,11 +67,14 @@
 
 ![ブラウザ版](nishioi-pilot.png)
 
+### ブラウザ公開版 (2026-10-26)
+
+`web/towns/town_osm_nishioi.json` (1.65 MB、`import_osm.py --name osm_nishioi --out web/towns`) を同梱し、右上のメニューに「西大井」を足した: <https://southern-star.github.io/keisim/?pilot=1&town=osm_nishioi>。説明板の文は町ごと (`main.js` の `about`)。
+
 ## 残していること
 
 - 上の 2 つのシミュレーターの弱点 (短い路側帯の歩行者、周りの車の右折の譲り判定)。
 
-- 町の公開 (web/towns への同梱と Pages のメニュー) は学習後の判断。今は `web/.towns` と `data/osm/osm_nishioi.json` (同梱、ODbL) だけ。
 - 二車線で `lanes=1` の 4 m 道路 (A で 1.6 km) はまだ 6 m の residential のまま。
 - 上下線の畳み込みで動かした交差点は中央線から 2 m 以内にずれることがある (合流点ごとに畳むため)。
 - PLATEAU 道路 LOD3 の幅員の取り込みは次の段階。

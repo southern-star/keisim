@@ -34,7 +34,8 @@ if (PILOT) {                                      // the intro board describes t
     <li>ピンクはモデルが描いた走行経路、水色はナビのルート。右下はモデルへの入力画像と、モデルの領域分割です。</li>
     <li>周りの車は「周りの車」ボタン、T キー、<code>?traffic=0</code> で消せます（描画が重いとき。選んだ設定はこのブラウザに残ります）。</li>
     <li>町は右上のメニューで選べます。town 1015 と 1018 は日本でふつうの二段階の信号で、右折は交差点の中で対向車の切れ目を待ちます。
-    「札幌」は OpenStreetMap から作った実在の町（札幌市東区の 1 km 角）で、ほとんどの交差点に信号がなく、細い道の車が優先道路に譲ります。</li></ul>`);
+    「札幌」と「西大井」は OpenStreetMap から作った実在の町です。札幌（東区の 1 km 角）はほとんどの交差点に信号がなく、細い道の車が優先道路に譲ります。
+    西大井（品川区）は一方通行と止まれの多い東京の住宅地で、モデルは東京のデータなしで走ります（ゼロショット）。</li></ul>`);
   set('#loadlabel', '読み込み中…');
 }
 const TDIR = (params.get('tdir') || 'towns').replace(/[^\w.-]/g, '');
@@ -122,8 +123,13 @@ async function build() {
   if (PILOT && real) {
     const kana = document.querySelector('#intro .kana'); if (kana) kana.textContent = 'KeiPilot · 実在の町';
     const sum = $('townsum');
-    if (sum) sum.insertAdjacentHTML('afterbegin', '<p class="tp">実在の町です（札幌市東区、OpenStreetMap の道路と建物）。' +
-      'ほとんどの交差点に信号はなく、細い道から来た車が優先道路の車に譲ります。周りの車も同じ規則で走ります。</p>');
+    const about = {                                                        // per real town: where it is, what is special
+      osm_sapporo: '実在の町です（札幌市東区、OpenStreetMap の道路と建物）。' +
+        'ほとんどの交差点に信号はなく、細い道から来た車が優先道路の車に譲ります。周りの車も同じ規則で走ります。',
+      osm_nishioi: '実在の町です（品川区 西大井・二葉、OpenStreetMap の道路と建物）。' +
+        '一方通行と止まれの多い東京の住宅地で、信号は 1 か所だけです。モデルは東京のデータを見ずに走ります（ゼロショット）。',
+    };
+    if (sum) sum.insertAdjacentHTML('afterbegin', `<p class="tp">${about[SEED] || '実在の町です（OpenStreetMap の道路と建物）。'}</p>`);
   } else if (PILOT && town.data && town.data.cfg && town.data.cfg.signal_mode === 'two_phase') {
     const kana = document.querySelector('#intro .kana'); if (kana) kana.textContent = 'KeiPilot · 二段階の信号の町';
     const sum = $('townsum');
