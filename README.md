@@ -342,7 +342,9 @@ OpenStreetMap の道路と建物から、KeiSim の街を作ります (`keisim/r
 * 中央分離帯のある道路は、OpenStreetMap では上下線が別々の一方通行の way です。並んで走る逆向きの一方通行の対は 1 本の二車線道路に畳みます (`Graph.merge_carriageways`、合流点ごとに少しずつ)。
   片側 2 車線以上の一方通行 (幹線の上下線) はこれまでどおり落とします。
 * 町は 西大井・二葉 の約 1.2 km 角 (北緯 35.612〜35.623°、東経 139.719〜139.732°、山手通りの南西側) で、道路 12.5 km (交差点の円を除く)、交差点 156 か所 (信号 1、止まれのある優先道路の交差点 107)、一方通行 25 本 1.4 km、家 3,400 軒。
-  山手通り (片側 2〜3 車線) の向こう側は、山手通りを表現できないので入れていません。`web/.towns` に書き出せばブラウザでも走れます (`?tdir=.towns&town=osm_nishioi`。家が 3,400 軒と札幌の 2 倍あり、読み込みは数分かかります)。
+  山手通り (片側 2〜3 車線) の向こう側は、山手通りを表現できないので入れていません。
+* 町は同梱しています (`data/osm/osm_nishioi.json`、`web/towns/town_osm_nishioi.json`、ODbL)。ブラウザでも走れます: <https://southern-star.github.io/keisim/?pilot=1&town=osm_nishioi>
+  (右上のメニューの「西大井」。家が 3,400 軒と札幌の 2 倍あるので、読み込みに 2 分ほどかかります)。
 * 札幌の町は一方通行を入れる前のまま固定しています (`keisim.realworld.TWO_WAY_TOWNS`: 箱の中の 屯田通 は上下線が別の way で、入れると町と学習・評価の基準が変わるため)。
 * 札幌と同じ手順で評価しました (600 m × 20 ルート × 3 組 = 60 ルート、安全層つき、`evaluate.py --osm_town osm_nishioi`。ゼロショット: 東京のデータは学習に使っていません)。
 
@@ -856,6 +858,7 @@ $E && $E --renderer keiview          # runs/eval/osm_sapporo/keipilot_hold_red[_
 $E --episode0 200 --out runs/eval/osm_sapporo/keipilot_hold_red_ep200.json
 uv run scripts/osm_report.py runs/eval/osm_sapporo/keipilot_hold_red.json   # 交差点の種類ごとの表
 # 西大井 (品川区): 町は data/osm/osm_nishioi.json から、箱は keisim.realworld.OSM_BOXES。v0.9 / v0.10 のゼロショットは runs/eval/osm_nishioi/
+uv run scripts/import_osm.py --name osm_nishioi --out web/towns   # KeiView 用の書き出し (ブラウザ版の町)
 N="uv run scripts/evaluate.py --osm_town osm_nishioi --routes 20 --brake_hold --red_hold"
 $N --agent expert && $N --agent model --ckpt runs/keipilot.pt && $N --agent model --ckpt runs/keipilot.pt --renderer keiview
 uv run python tools/stop_lines.py --dir runs/eval/osm_nishioi --expert expert keipilot_hold_red   # 止まれで止まった割合
