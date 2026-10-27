@@ -146,7 +146,8 @@ def osm_spec(spec):
 # per-worker counts (stats_wNN.json, saved with every shard so a resumed run keeps them): every recording step
 # (steps_*) and the kept frames
 STAT_KEYS = ("steps", "steps_focus", "steps_lead_edge", "frames", "focus", "lead_edge", "lead_edge_vehicle",
-             "lead_edge_tl_none", "lead_edge_tl_none_red")
+             "lead_edge_tl_none", "lead_edge_tl_none_red", "steps_freeze", "freeze", "freezes")
+FREEZE_REASONS = ("curve", "cruise")    # --freeze_takeover: the expert drives on along the road, no one to wait for
 
 
 def record(env, writer, rng, v_prob, weather_id, virtual_prob, offset=False, rgb=None, seg=None, prev=None,
@@ -264,6 +265,7 @@ def worker(wid, args, quota, out_dir, counter):
         pert = Perturbation(rng) if args.mode == "expert" else None
         beta_on = False
         beta_t = 0.0
+        frozen_t = 0.0                                      # --freeze_takeover: s the model has stood against the expert
         if agent is not None:
             agent.reset()
         done = False
@@ -294,6 +296,17 @@ def worker(wid, args, quota, out_dir, counter):
                     v_model = None
                     beta_t -= dt
                     beta_on = beta_t > 0
+                # --freeze_takeover: the model asks to stand while the expert drives on (the look-based freezes in
+                # curves and left turns, which never end by themselves). After that many s the expert drives for a
+                # while: a freeze adds a few frames of the standing car with the expert's "go", not blocked_timeout's
+                # worth of the same picture, and the episode goes on
+                if args.freeze_takeover > 0:
+                    frozen = v_model is not None and v_model < 0.5 and env.plan["target_speed"] > 2.0 and \
+                        env.plan["reason"] in FREEZE_REASONS
+                    frozen_t = frozen_t + dt if frozen else 0.0
+                    if frozen_t >= args.freeze_takeover:
+                        beta_on, beta_t, frozen_t = True, rng.uniform(3.0, 5.0), 0.0
+                        stats["freezes"] += 1
             if env._step % args.every == 0:
                 plan = env.plan
                 stopped = env.world.ego.v < 0.2 and plan["target_speed"] == 0.0
@@ -307,9 +320,11 @@ def worker(wid, args, quota, out_dir, counter):
                 stats["steps"] += 1
                 stats["steps_focus"] += int(focus)
                 stats["steps_lead_edge"] += int(edge)
+                stats["steps_freeze"] += int(frozen_t > 0)
                 if keep:
                     stats["frames"] += 1
                     stats["focus"] += int(focus)
+                    stats["freeze"] += int(frozen_t > 0)
                     if edge:
                         stats["lead_edge"] += 1
                         stats["lead_edge_vehicle"] += int(plan["reason"] == "vehicle")
@@ -340,7 +355,8 @@ def worker(wid, args, quota, out_dir, counter):
         if wid == 0:
             el = time.time() - t0
             share = f"  focus {stats['focus'] / max(stats['frames'], 1):.0%}" + (
-                f"  lead at the edge {stats['lead_edge'] / max(stats['frames'], 1):.0%}" if args.focus_lead_edge > 0 else "")
+                f"  lead at the edge {stats['lead_edge'] / max(stats['frames'], 1):.0%}" if args.focus_lead_edge > 0 else "") + (
+                f"  freezes {stats['freezes']}" if args.freeze_takeover > 0 else "")
             print(f"[w0] {n}/{quota} frames  {(n - n0) / max(el, 1e-6):.1f} fps{share}  last={info['status']}", flush=True)
     writer.flush()
     save_stats()
@@ -361,6 +377,9 @@ def report(out_dir):
     print(f"{tot['frames']} frames kept: focus {tot['focus'] / fr:.1%}, lead at the edge / on a curve {tot['lead_edge'] / fr:.1%}"
           f" (reason vehicle {tot['lead_edge_vehicle'] / le:.0%}, true light none {tot['lead_edge_tl_none'] / le:.0%},"
           f" model red with no light {tot['lead_edge_tl_none_red'] / le:.1%} of them)")
+    if tot["freezes"] or tot["steps_freeze"]:
+        print(f"freezes handed to the expert: {tot['freezes']}; frames kept while the model stood against the expert:"
+              f" {tot['freeze']} ({tot['freeze'] / fr:.1%})")
     return tot
 
 
@@ -394,6 +413,9 @@ def main():
     ap.add_argument("--focus_lead_edge", type=float, default=0.0,
                     help="with --focus_yield < 1, frames are also in focus when a vehicle leads within this many m and "
                          "is partly outside the camera's view or the route turns 30 deg or more over the next 15 m")
+    ap.add_argument("--freeze_takeover", type=float, default=0.0,
+                    help="dagger: once the driving model has asked to stand (target < 0.5 m/s) for this many s while the "
+                         "expert drives on (> 2 m/s, reason curve / cruise), the expert drives for 3-5 s (0: off)")
     ap.add_argument("--renderer", default="keisim", choices=["keisim", "keiview"], help="camera renderer")
     ap.add_argument("--keiview_roads", default="plain", choices=["plain", "detail"],
                     help="KeiView road surface: plain (every KeiView dataset so far) or detail (markings, signs, ...)")
