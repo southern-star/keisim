@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from keipilot.data import DrivingDataset, load_shards  # noqa: E402
 from keipilot.model import KeiPilot, channels_last, compute_loss  # noqa: E402
 from keisim.config import N_SEM  # noqa: E402
-from keisim.expert import LABEL_VERSION  # noqa: E402
+from keisim.expert import YELLOW_VERSION  # noqa: E402
 
 
 def sample_weights(d, dagger_weight=1.0, kv_weight=1.0):
@@ -152,7 +152,7 @@ def main():
     rng.shuffle(eps)
     val_eps = eps[: max(1, int(len(eps) * args.val_frac))]
     is_val = np.isin(data["episode"], val_eps)
-    tr_idx, va_idx = np.nonzero(~is_val)[0], np.nonzero(is_val)[0]
+    tr_idx, va_idx = np.nonzero(~is_val)[0], np.nonzero(is_val & ~data["stale_creep"])[0]
     print(f"{N} frames from {len(files)} shards, {len(eps)} episodes; train {len(tr_idx)} / val {len(va_idx)}", flush=True)
 
     ds_tr = DrivingDataset(data, tr_idx, train=True, cf_prob=args.cf_prob if args.speed_input else 0.0,
@@ -173,9 +173,12 @@ def main():
     w[has_prev] *= args.history_weight
     print(f"frames with a previous frame: {int(has_prev.sum())}", flush=True)
     # yellow-light frames whose label follows an older yellow rule and cannot be relabelled
-    stale = (data["tl"] == 1) & ~data["cf_ok"] & (data["label_version"] < LABEL_VERSION)
+    stale = (data["tl"] == 1) & ~data["cf_ok"] & (data["label_version"] < YELLOW_VERSION)
     w[stale] = 0.0
     print(f"dropped {int(stale.sum())} yellow frames labelled with an older rule", flush=True)
+    # frames between a 止まれ stop and the wait point whose label is faster than label version 6's 徐行 (load_shards)
+    w[data["stale_creep"]] = 0.0
+    print(f"dropped {int(data['stale_creep'].sum())} frames after a 止まれ stop labelled before its 徐行 rule", flush=True)
     w = w[tr_idx]
     n_epoch = args.samples_per_epoch or len(tr_idx)
     sampler = WeightedRandomSampler(torch.from_numpy(w), num_samples=n_epoch, replacement=True)

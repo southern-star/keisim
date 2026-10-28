@@ -16,8 +16,10 @@ from .geometry import world_to_local
 from .traffic import PASS_SPEED, YIELD_GAP, Traffic, corridor_gaps, vehicle_circles
 
 PATH_S = np.arange(1, 11) * 2.0          # label waypoints every 2 m up to 20 m
-LABEL_VERSION = 5                        # 3: yellow per traffic law; 4: at yellow, stop whenever the ego still can;
-                                         # 5: and always when creeping (< 1 m/s) with the bumper at the line
+LABEL_VERSION = 6                        # 3: yellow per traffic law; 4: at yellow, stop whenever the ego still can;
+                                         # 5: and always when creeping (< 1 m/s) with the bumper at the line;
+                                         # 6: 止まれ: 徐行 (CROSSING_V) from the stop line to the wait point
+YELLOW_VERSION = 5                       # the last label version that changed the yellow rule
 TL_MARGIN = 2.5                          # stop this far before the stop line (keeps it in view)
 YIELD_TTA_MAX = 8.0                      # yield_tta labels are clipped here (8 s or more: nobody coming)
 LATE_COMMIT = 1.0                        # m: past its wait point, a right turn still stops for oncoming traffic until
@@ -201,7 +203,12 @@ class Expert:
         # approach to a crossing with poor visibility). The cars with priority come from the sides, mostly outside
         # the camera's 100 deg until the last metres: at the old 30 km/h a yield began 9 m before the wait point
         # (median), with the car in view at that moment only half of the time, and models braked too late.
+        # After a 止まれ (label version 6): no faster than CROSSING_V from the stop line on (its stop zone, where
+        # the line binds harder until the stop is made) up to the wait point. The envelope alone let the ego speed
+        # up to 16-21 km/h over the 5-10 m from its stop to the wait point, too fast where the corner hides the cars
+        # with priority (KeiView's walls and hedges): models that saw a car late hit it.
         yield_tta = math.nan          # label for the model's auxiliary head: earliest arrival of a car with priority
+        ss_creep = False              # 徐行 after a 止まれ line (diagnostics)
         if tr.has_yields:
             s_front = s + hl
 
@@ -225,6 +232,10 @@ class Expert:
                     if d_wait >= -0.5:
                         if not jn["signalized"] and len(w.town.junctions[jn["junction"]].arms) >= 3:
                             v_x = math.sqrt(CROSSING_V ** 2 + 2 * CROSSING_B * max(d_wait, 0.0))
+                            lin = w.town.lanes[conn.pred[0]]            # the approach: its 止まれ line, if any
+                            if lin.stop_sign_s is not None and s_front >= (jn["s_in"] - lin.length + lin.stop_sign_s
+                                                                           - STOP_SIGN_MARGIN - STOP_SIGN_ZONE):
+                                v_x, ss_creep = min(v_x, CROSSING_V), True
                             if v_x < target:
                                 target, reason = v_x, "crossing"
                         tta = tr.min_arrival(conn, w.t, tables())
@@ -313,7 +324,7 @@ class Expert:
         # lead_owner: what the gap is to (>= 0: NPC vehicle index in world.traffic, <= -2: pedestrian, -1: nothing)
         return {"path": path, "target_speed": float(target), "tl_state": int(tl), "reason": reason,
                 "gap": g, "lead_owner": int(lead_o[0]), "target_nolight": float(target_nolight),
-                "yield_tta": float(yield_tta), "ss_d": float(ss_d), "ss_go": float(ss_go), **lt}
+                "yield_tta": float(yield_tta), "ss_d": float(ss_d), "ss_go": float(ss_go), "ss_creep": ss_creep, **lt}
 
     def act(self, plan=None):
         env = self.env

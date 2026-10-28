@@ -12,7 +12,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from keisim.expert import STOP_SIGN_MARGIN, STOP_SIGN_V, STOP_SIGN_ZONE, target_for_speed
+from keisim.expert import CROSSING_V, STOP_SIGN_MARGIN, STOP_SIGN_V, STOP_SIGN_ZONE, target_for_speed
 
 LABEL_KEYS = ("cmd", "tp", "path", "speed", "tl", "v", "reason", "town", "episode", "step", "weather", "virtual")
 # inputs of the expert's traffic-light decision (keisim.expert.target_for_speed); shards recorded before
@@ -245,7 +245,18 @@ def load_shards(dirs, with_prev=True):
         data["speed"] = data["speed"].astype(np.float32)
         data["speed"][v1] = relabel_v1(data["speed"][v1], data["reason"][v1])
     data["label_version"] = version
-    data["keiview"] = np.array([dir_renderer[f] == "keiview" for f in files])[data["src"]]
+    # label version 6 (keisim.expert): 徐行 (CROSSING_V) from a 止まれ line's stop zone on, up to the wait point.
+    # Older frames in the zone (a pending line within it) only differ in the counterfactual "standing at the line"
+    # (ss_go), which takes the cap exactly. Past the stop the recorded inputs cannot place a frame before or after
+    # the wait point: in directories with 止まれ lines, a faster label after a stand within the last STAND_CAP m,
+    # with a crossing ahead that gives way and no line pending, is stale (stale_creep; train.py drops it)
+    old = version < 6
+    zone = old & np.isfinite(data["ss_d"]) & (data["ss_d"] <= STOP_SIGN_MARGIN + STOP_SIGN_ZONE)
+    data["ss_go"][zone] = np.minimum(data["ss_go"][zone], CROSSING_V)
+    in_stop_dir = np.isin(data["src"], [i for i, d in enumerate(file_dir) if d in stop_dirs])
+    data["stale_creep"] = (old & in_stop_dir & np.isnan(data["ss_d"]) & np.isfinite(data["yield_tta"]) &
+                           (data["stand_m"] < STAND_CAP) & (data["target_nolight"] > CROSSING_V + 1e-3))
+    data["keiview"] =np.array([dir_renderer[f] == "keiview" for f in files])[data["src"]]
     data["on_policy"] = np.array([os.path.basename(files[i]).startswith("dagger") for i in range(len(files))])[data["src"]]
     return data, files
 
