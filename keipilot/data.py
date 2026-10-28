@@ -248,14 +248,16 @@ def load_shards(dirs, with_prev=True):
     # label version 6 (keisim.expert): 徐行 (CROSSING_V) from a 止まれ line's stop zone on, up to the wait point.
     # Older frames in the zone (a pending line within it) only differ in the counterfactual "standing at the line"
     # (ss_go), which takes the cap exactly. Past the stop the recorded inputs cannot place a frame before or after
-    # the wait point: in directories with 止まれ lines, a faster label after a stand within the last STAND_CAP m,
-    # with a crossing ahead that gives way and no line pending, is stale (stale_creep; train.py drops it)
+    # the wait point: in directories with 止まれ lines, a frame after a stand within the last STAND_CAP m, with a
+    # crossing ahead that gives way and no line pending, may be stale (stale_creep; train.py drops it). All of them
+    # go, whatever their label: dropping only the faster ones (mc5) left the waits, 43 % of what remained of rounds
+    # 1-3's KeiSim frames there against 13 % in label version 6 frames, and mc5 hesitated after its 止まれ stops
     old = version < 6
     zone = old & np.isfinite(data["ss_d"]) & (data["ss_d"] <= STOP_SIGN_MARGIN + STOP_SIGN_ZONE)
     data["ss_go"][zone] = np.minimum(data["ss_go"][zone], CROSSING_V)
     in_stop_dir = np.isin(data["src"], [i for i, d in enumerate(file_dir) if d in stop_dirs])
     data["stale_creep"] = (old & in_stop_dir & np.isnan(data["ss_d"]) & np.isfinite(data["yield_tta"]) &
-                           (data["stand_m"] < STAND_CAP) & (data["target_nolight"] > CROSSING_V + 1e-3))
+                           (data["stand_m"] < STAND_CAP))
     data["keiview"] =np.array([dir_renderer[f] == "keiview" for f in files])[data["src"]]
     data["on_policy"] = np.array([os.path.basename(files[i]).startswith("dagger") for i in range(len(files))])[data["src"]]
     return data, files

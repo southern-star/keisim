@@ -176,9 +176,9 @@ def main():
     stale = (data["tl"] == 1) & ~data["cf_ok"] & (data["label_version"] < YELLOW_VERSION)
     w[stale] = 0.0
     print(f"dropped {int(stale.sum())} yellow frames labelled with an older rule", flush=True)
-    # frames between a 止まれ stop and the wait point whose label is faster than label version 6's 徐行 (load_shards)
+    # frames recorded before label version 6 that may lie between a 止まれ stop and the wait point (load_shards)
     w[data["stale_creep"]] = 0.0
-    print(f"dropped {int(data['stale_creep'].sum())} frames after a 止まれ stop labelled before its 徐行 rule", flush=True)
+    print(f"dropped {int(data['stale_creep'].sum())} frames after a stop, recorded before the 徐行 rule", flush=True)
     w = w[tr_idx]
     n_epoch = args.samples_per_epoch or len(tr_idx)
     sampler = WeightedRandomSampler(torch.from_numpy(w), num_samples=n_epoch, replacement=True)

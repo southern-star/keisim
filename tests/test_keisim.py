@@ -360,6 +360,36 @@ def test_stand_memory_of_old_shards(tmp_path):
     assert not any(bool(hide[i]["stand_known"]) for i in range(9))
 
 
+def test_stale_creep_of_old_shards(tmp_path):
+    """Label version 6 (徐行 from a 止まれ line to the wait point) on older shards: in the stop zone the counterfactual
+    ss_go takes the cap; past a stop, every frame with a crossing ahead that gives way is dropped (stale_creep),
+    the waits as well as the faster labels, so what remains does not lean towards waiting. Version 6 shards and
+    directories without 止まれ lines keep everything."""
+    from keipilot.data import LABEL_KEYS, STAND_CAP, ShardWriter, load_shards, write_meta
+    from keisim.expert import CROSSING_V
+
+    nan = np.float32(np.nan)
+    # (reason, stand_m, yield_tta, ss_d, ss_go, target_nolight): fast after a stop, waiting after a stop, after a stop
+    # with no crossing ahead, not stood lately, in the stop zone
+    frames = [(7, 2.0, 3.0, nan, nan, 5.0), (6, 2.0, 1.0, nan, nan, 0.0), (0, 2.0, nan, nan, nan, 8.0),
+              (7, STAND_CAP, 3.0, nan, nan, 5.0), (8, STAND_CAP, 3.0, 1.0, 5.0, 2.0)]
+    for d, version, reasons in (("osm5", 5, None), ("osm6", 6, None), ("grid5", 5, (7, 6, 0, 7, 0))):
+        w = ShardWriter(str(tmp_path / d), "dagger", frames_per_shard=10)
+        for i, (reason, stand, tta, ss_d, ss_go, target) in enumerate(frames):
+            lab = {k: (np.zeros(2, np.float32) if k == "tp" else np.zeros((10, 2), np.float32) if k == "path" else 0)
+                   for k in LABEL_KEYS}
+            lab.update(v=np.float32(3.0), reason=np.int8(reasons[i] if reasons else reason), episode=0, step=i,
+                       stand_m=np.float32(stand), yield_tta=np.float32(tta), ss_d=np.float32(ss_d),
+                       ss_go=np.float32(ss_go), target_nolight=np.float32(target), lt_over=False, lt_d=nan,
+                       lt_st=np.int8(3), lt_trem=nan, lt_blocked=False)
+            w.add(np.zeros((16, 32, 3), np.uint8), np.zeros((16, 32), np.uint8), **lab)
+        w.flush()
+        write_meta(str(tmp_path / d), label_version=version)
+    data, _ = load_shards([str(tmp_path / d) for d in ("osm5", "osm6", "grid5")])
+    assert data["stale_creep"].tolist() == [True, True, False, False, False] + [False] * 10
+    assert data["ss_go"][4] == np.float32(CROSSING_V) and data["ss_go"][9] == 5.0
+
+
 def test_brake_hold_blocks_throttle_burst():
     """A model that loses a pedestrian for a few frames mid-stop must keep braking; braking harder is never
     limited, and the hold ends on its own."""
