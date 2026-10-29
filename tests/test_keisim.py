@@ -235,18 +235,27 @@ def test_right_turn_gap_acceptance():
     J = town.junctions[conn.junction]
     t_green = next(t for t in np.arange(0, J.cycle, 0.1) if town.signal_state_for_lane(pred, t) == TL_GREEN)
 
+    def car(s_center, v, nxt=None, ego=False, waits=False):     # a row of Traffic.yield_tables
+        return (s_center, v, 4.5, ego, nxt, None, waits)
+
     def tables(s_center, v, ego=False):
-        return {pred: [(s_center, v, 4.5, ego, b)]}
+        return {pred: [car(s_center, v, b, ego)]}
     assert not tr.must_yield(conn, t_green, {})
     assert tr.must_yield(conn, t_green, tables(L - 10.0, 8.0))            # about 2 s away
     assert not tr.must_yield(conn, t_green, tables(L - 80.0, 8.0))        # about 11 s away
-    assert tr.must_yield(conn, t_green, {b: [(s2 - 2.0, 0.0, 4.5, False, None)]})  # standing in the crossing
+    assert tr.must_yield(conn, t_green, {b: [car(s2 - 2.0, 0.0)]})        # standing in the crossing
     # an oncoming car queued behind one that stands still to turn right itself cannot come: no deadlock
     targets = {y[0] for y in conn.yields}
     other = next(c for c in town.lanes[pred].succ if c not in targets)            # the oncoming right turn
-    queue = {pred: [(L - 4.0, 0.0, 4.5, False, other), (L - 11.0, 0.0, 4.5, False, b)]}
+    queue = {pred: [car(L - 4.0, 0.0, other), car(L - 11.0, 0.0, b)]}
     assert not tr.must_yield(conn, t_green, queue)
-    assert not tr.must_yield(conn, t_green, {other: [(1.0, 0.0, 4.5, False, None)], pred: [(L - 4.0, 0.0, 4.5, False, b)]})
+    assert not tr.must_yield(conn, t_green, {other: [car(1.0, 0.0)], pred: [car(L - 4.0, 0.0, b)]})
+    # an ego that has stood still for TrafficConfig.ego_patience_s (waits) does not count before the crossing, nor
+    # do the cars queued behind it; inside the crossing it does
+    assert tr.must_yield(conn, t_green, {pred: [car(L - 8.0, 0.0, b, ego=True)]})
+    assert not tr.must_yield(conn, t_green, {pred: [car(L - 8.0, 0.0, b, ego=True, waits=True), car(L - 16.0, 0.0, b)]})
+    assert not tr.must_yield(conn, t_green, {b: [car(s2 - 8.0, 0.0, ego=True, waits=True), car(s2 - 15.0, 0.0)]})
+    assert tr.must_yield(conn, t_green, {b: [car(s2 - 2.0, 0.0, ego=True, waits=True)]})
     t_red = next(t for t in np.arange(0, J.cycle, 0.1) if town.signal_state_for_lane(pred, t) != TL_GREEN
                  and town.signal_state_for_lane(pred, t + 3.0) != TL_GREEN)
     assert not tr.must_yield(conn, t_red, tables(L - 25.0, 6.0))          # stops at its red line
@@ -262,6 +271,27 @@ def test_right_turn_gap_acceptance():
     assert np.isfinite(tr.min_arrival(conn, t_green, tables(L - 8.0, 0.0)))
     assert np.isinf(tr.min_arrival(conn, t_green, tables(L - 8.0, 0.0), moving_only=True))
     assert tr.min_arrival(conn, t_green, tables(L - 10.0, 8.0), moving_only=True) < 2.5
+
+
+def test_ego_patience_marks_a_standing_ego():
+    """World.step hands the NPCs' yield tables an ego that has stood still for TrafficConfig.ego_patience_s as
+    waiting, and never one with the default 0."""
+    from keisim.config import town_config
+
+    for patience in (0.0, 3.0):
+        cfg = EnvConfig()
+        cfg.render_rgb = cfg.render_seg = False
+        cfg.town = town_config("twophase")
+        cfg.traffic.ego_patience_s = patience
+        env = KeiEnv(cfg)
+        env.reset(town_seed=1012, episode_seed=1)
+        w, waits = env.world, []
+        step = w.traffic.step
+        w.traffic.step = lambda *a, **k: waits.append(a[10] and a[10][-1]) or step(*a, **k)
+        for _ in range(round(8.0 / (cfg.dt * cfg.action_repeat))):
+            env.step([0.0, 0.0, 1.0])                                   # full brake
+        assert w.ego_stood >= 4.0
+        assert waits[-1] is (patience > 0.0) and not any(waits[:round(2.0 / cfg.dt)])
 
 
 def test_release_hidden_stuck_vehicles():

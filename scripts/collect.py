@@ -147,7 +147,7 @@ def osm_spec(spec):
 # (steps_*) and the kept frames
 STAT_KEYS = ("steps", "steps_focus", "steps_lead_edge", "frames", "focus", "lead_edge", "lead_edge_vehicle",
              "lead_edge_tl_none", "lead_edge_tl_none_red", "steps_freeze", "freeze", "freezes")
-FREEZE_REASONS = ("curve", "cruise")    # --freeze_takeover: the expert drives on along the road, no one to wait for
+FREEZE_REASONS = ("curve", "cruise")    # --freeze_reasons: the expert drives on along the road, no one to wait for
 
 
 def record(env, writer, rng, v_prob, weather_id, virtual_prob, offset=False, rgb=None, seg=None, prev=None,
@@ -227,6 +227,7 @@ def worker(wid, args, quota, out_dir, counter):
         cfg.traffic.ped_spacing = tuple(args.ped_spacing)
     if args.vehicle_spacing is not None:
         cfg.traffic.vehicle_spacing = tuple(args.vehicle_spacing)
+    cfg.traffic.ego_patience_s = args.ego_patience
     if args.mode == "dagger":
         cfg.blocked_timeout = 40.0
     env = KeiEnv(cfg)
@@ -302,7 +303,7 @@ def worker(wid, args, quota, out_dir, counter):
                 # worth of the same picture, and the episode goes on
                 if args.freeze_takeover > 0:
                     frozen = v_model is not None and v_model < 0.5 and env.plan["target_speed"] > 2.0 and \
-                        env.plan["reason"] in FREEZE_REASONS
+                        env.plan["reason"] in args.freeze_reasons
                     frozen_t = frozen_t + dt if frozen else 0.0
                     if frozen_t >= args.freeze_takeover:
                         beta_on, beta_t, frozen_t = True, rng.uniform(3.0, 5.0), 0.0
@@ -415,7 +416,13 @@ def main():
                          "is partly outside the camera's view or the route turns 30 deg or more over the next 15 m")
     ap.add_argument("--freeze_takeover", type=float, default=0.0,
                     help="dagger: once the driving model has asked to stand (target < 0.5 m/s) for this many s while the "
-                         "expert drives on (> 2 m/s, reason curve / cruise), the expert drives for 3-5 s (0: off)")
+                         "expert drives on (> 2 m/s, a reason in --freeze_reasons), the expert drives for 3-5 s (0: off)")
+    ap.add_argument("--freeze_reasons", nargs="*", default=list(FREEZE_REASONS),
+                    help="--freeze_takeover's expert reasons; add crossing for the stands after a 止まれ, at the "
+                         "give-way crossing nobody comes to")
+    ap.add_argument("--ego_patience", type=float, default=0.0,
+                    help="s the ego may stand before the NPCs that give way to it stop waiting for it "
+                         "(TrafficConfig.ego_patience_s; 0: they wait for ever)")
     ap.add_argument("--renderer", default="keisim", choices=["keisim", "keiview"], help="camera renderer")
     ap.add_argument("--keiview_roads", default="plain", choices=["plain", "detail"],
                     help="KeiView road surface: plain (every KeiView dataset so far) or detail (markings, signs, ...)")
@@ -450,6 +457,8 @@ def main():
                **({"osm_towns": args.osm_towns, "osm_seed0": args.osm_seed0} if args.osm_towns else {}),
                **({"keiview_roads": args.keiview_roads} if args.keiview_roads != "plain" else {}),
                **({"yield_visible": 1} if args.yield_visible else {}),
+               **({"ego_patience": args.ego_patience} if args.ego_patience else {}),
+               **({"freeze_reasons": args.freeze_reasons} if args.freeze_takeover > 0 else {}),
                **({"rig": args.rig, "cameras": [asdict(c) for c in set_camera_rig(EnvConfig(), args.rig).cameras]}
                   if args.rig != "front" else {}))
     ctx = mp.get_context("spawn" if args.mode == "dagger" else "fork")

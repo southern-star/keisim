@@ -99,6 +99,7 @@ def run_route(job):
     cfg.renderer = args.get("renderer", "keisim")
     cfg.keiview_roads = args.get("keiview_roads", "plain")
     cfg.expert_yield_visible = bool(args.get("yield_visible", False))
+    cfg.traffic.ego_patience_s = float(args.get("ego_patience", 0.0))
     if args.get("dense"):
         cfg.traffic.vehicle_spacing = (20.0, 28.0)
         cfg.traffic.ped_spacing = (14.0, 20.0)
@@ -326,6 +327,9 @@ def main():
     ap.add_argument("--episode0", type=int, default=100, help="--osm_town: first episode seed")
     ap.add_argument("--rig", default=None, choices=list(CAMERA_RIGS),
                     help="camera rig (keisim CAMERA_RIGS); default: the model's (front for the expert)")
+    ap.add_argument("--ego_patience", type=float, default=0.0,
+                    help="s the ego may stand before the NPCs that give way to it stop waiting for it "
+                         "(TrafficConfig.ego_patience_s; 0: they wait for ever); suffix _pat<S>")
     args = ap.parse_args()
     if args.rig is None:
         from keipilot.agent import checkpoint_rig
@@ -362,7 +366,8 @@ def main():
         ("_kvdetail" if args.renderer == "keiview" and args.keiview_roads == "detail" else "") + \
         ("" if args.town_style == suite_style else f"_{args.town_style}") + \
         ("" if int(args.jam_fixes) == suite_fixes else ("_jamfix" if args.jam_fixes else "_nojamfix")) + \
-        ("" if args.blocked_timeout == suite_timeout else f"_wait{args.blocked_timeout:.0f}")
+        ("" if args.blocked_timeout == suite_timeout else f"_wait{args.blocked_timeout:.0f}") + \
+        (f"_pat{args.ego_patience:g}" if args.ego_patience else "")
     if args.osm_town:
         suffix = suffix.replace("_twophase", "")
         fail_dir = os.path.join("runs", "failures", args.osm_town, f"{tag}{suffix}")
@@ -374,7 +379,7 @@ def main():
          "brake_hold": args.brake_hold,
          "red_hold": args.red_hold, "town_style": args.town_style, "jam_fixes": bool(args.jam_fixes),
          "blocked_timeout": args.blocked_timeout, "osm_bbox": args.osm_bbox, "yield_visible": bool(args.yield_visible),
-         "rig": args.rig}
+         "rig": args.rig, "ego_patience": args.ego_patience}
     t0 = time.time()
     ctx = mp.get_context("spawn")
     with ctx.Pool(args.workers) as pool:

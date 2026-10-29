@@ -128,6 +128,11 @@ class TrafficConfig:
     stuck_hidden_s: float = 45.0
     view_half_deg: float = 60.0
     view_dist: float = 110.0
+    # Patience with a standing ego: a car that gives way to the ego stops waiting for it once the ego has stood still
+    # this long before the crossing (s; 0: it waits as long as the ego stands). Without it, an NPC at its 止まれ waits
+    # for a standing ego for ever, and a model that cannot tell a standing car from a coming one waits for the NPC:
+    # neither goes (about three quarters of mc5b's long stands in Sapporo). Drivers go when the other car stays put.
+    ego_patience_s: float = 0.0
 
 
 @dataclass

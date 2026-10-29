@@ -3,8 +3,11 @@ tests between the tags, and where each failure happened (last junction reached -
 Collision kinds as ss_wait.py, from the failure logs: ss_wait = a vehicle collision where the ego stood in the last
 10 s and the expert's final yield began at <= 13 km/h (out of the wait position after a 止まれ stop); yield = the
 other vehicle collisions in a yield; veh = the remaining vehicle collisions; ped.
-Usage (fork dir): sap300.py [--keiview] [--batches 100-1500] TAG[=FAILDIR,FAILDIR] ...
-The default failure-log folder is runs/failures/osm_sapporo/<tag>_hold_red[_keiview]."""
+Then the needless standing (s the ego stood while the expert would have driven on, evaluate.py's junction_passes):
+at the junctions where the expert stopped (止まれ lines, give-way) and at the other priority crossings.
+Usage (fork dir): sap300.py [--keiview] [--batches 100-1500] TAG[:SUFFIX][=FAILDIR,FAILDIR] ...
+SUFFIX: evaluate.py's suffix after the renderer's, e.g. _pat3 for --ego_patience 3 (keipilot_mc5b:_pat3).
+The default failure-log folder is runs/failures/osm_sapporo/<tag>_hold_red[_keiview]<suffix>."""
 import collections, glob, json, math, os, sys
 
 args = sys.argv[1:]
@@ -58,10 +61,11 @@ def where(r):
 tags, kinds, rows = [], {}, {}
 for spec in args:
     tag, _, dirs = spec.partition("=")
-    dirs = dirs.split(",") if dirs else [f"runs/failures/osm_sapporo/{tag}_hold_red{rend}"]
+    tag, _, sfx = tag.partition(":")
+    dirs = dirs.split(",") if dirs else [f"runs/failures/osm_sapporo/{tag}_hold_red{rend}{sfx}"]
     res = {}
     for e in batches:
-        f = f"{R}/{tag}_hold_red{'' if e == 100 else f'_ep{e}'}{rend}.json"
+        f = f"{R}/{tag}_hold_red{'' if e == 100 else f'_ep{e}'}{rend}{sfx}.json"
         if os.path.exists(f):
             for r in json.load(open(f))["results"]:
                 res[r["episode"]] = r
@@ -78,6 +82,7 @@ for spec in args:
             K[ep] = "blk_" + r.get("blocked_by", {}).get("cause", "?")
         elif r["status"] != "success":
             K[ep] = r["status"]
+    tag += sfx
     tags.append(tag)
     kinds[tag], rows[tag] = K, res
 
@@ -93,6 +98,18 @@ for t in tags:
     other = {k: v for k, v in c.items() if k not in cols}
     print(f"{t:18s} {sum(r['DS'] for r in res) / len(res):6.3f} {sum(r['status'] == 'success' for r in res):5d} {col:4d} "
           + " ".join(f"{c.get(k, 0):9d}" for k in cols) + f"  {other or ''}")
+
+print("\nneedless standing: total s / passes over 5 s / over 20 s; mean speed")
+for t in tags:
+    res = [rows[t][e] for e in common]
+    jp = [p for r in res for p in r["junction_passes"] if p.get("reached")]
+    cells = []
+    for name, ps in (("expert stopped (止まれ, give-way)", [p for p in jp if p.get("expert_stop")]),
+                     ("other priority crossings", [p for p in jp if not p.get("expert_stop") and p["kind"] == "priority"])):
+        n = [p.get("needless_s", 0.0) for p in ps]
+        cells.append(f"{name} {sum(n):5.0f} s / {sum(x > 5 for x in n):2d} / {sum(x > 20 for x in n):2d} ({len(n)} passes)")
+    km, h = sum(r["distance"] for r in res) / 1000, sum(r["time"] for r in res) / 3600
+    print(f"  {t:18s} " + "; ".join(cells) + f"; {km / h:4.1f} km/h")
 
 
 def sign(a, b):
