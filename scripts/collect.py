@@ -72,6 +72,50 @@ class Perturbation:
         return a
 
 
+class StandPert:
+    """--stand_pert: at that share of the route's priority junctions the car brakes to a stand somewhere from
+    `before` m ahead of the junction to `after` m past it, where the expert drives on slowly (a reason in REASONS,
+    under v_max) and no car with priority is near, stands for --stand_hold s and is then handed back. In the data a
+    car standing at a junction was nearly always waiting for a car with priority, so the standing inputs (speed 0,
+    stand_m 0) themselves said "wait": KeiView's phantom stands never ended. These frames carry the expert's "go"."""
+
+    REASONS = ("crossing", "cruise", "curve")
+
+    def __init__(self, env, rng, p, hold, before=12.0, after=5.0, v_max=5.0):
+        self.rng, self.hold, self.v_max = rng, hold, v_max
+        town = env.world.town
+        self.at = sorted(float(rng.uniform(j["s_in"] - before, j["s_out"] + after)) for j in env.route.junctions
+                         if not j["signalized"] and len(town.junctions[j["junction"]].arms) >= 3 and rng.random() < p)
+        self.on = self.tail = False
+        self.left = 0.0                                     # s of standing still left
+
+    def __call__(self, env, a, dt):
+        """The action to apply instead of the driver's `a`, and whether this step belongs to a stand (the brake,
+        the stand, and the start until the car is moving again)."""
+        e, plan = env.world.ego, env.plan
+        if not (self.on or self.tail) and self.at and env.s_ego >= self.at[0]:
+            while self.at and env.s_ego >= self.at[0]:
+                self.at.pop(0)
+            tta = plan.get("yield_tta", np.nan)
+            if plan["reason"] in self.REASONS and plan["target_speed"] > 2.0 and e.v < self.v_max and \
+                    not (np.isfinite(tta) and tta < 6.0):
+                self.on, self.left = True, float(self.rng.uniform(*self.hold))
+                return self(env, a, dt)
+        if self.on:
+            a = np.array(a, float)
+            a[1], a[2] = 0.0, (0.6 if e.v > 0.05 else 1.0)
+            if e.v <= 0.05:
+                self.left -= dt
+                self.on = self.left > 0
+                self.tail = not self.on
+            return a, True
+        if self.tail:
+            self.left -= dt
+            self.tail = e.v < 1.0 and self.left > -3.0
+            return a, True
+        return a, False
+
+
 def random_offset(rng, virtual_prob):
     """Virtual camera displacement (lateral m, yaw rad, pitch) or None."""
     if rng.random() < virtual_prob:
@@ -146,7 +190,8 @@ def osm_spec(spec):
 # per-worker counts (stats_wNN.json, saved with every shard so a resumed run keeps them): every recording step
 # (steps_*) and the kept frames
 STAT_KEYS = ("steps", "steps_focus", "steps_lead_edge", "frames", "focus", "lead_edge", "lead_edge_vehicle",
-             "lead_edge_tl_none", "lead_edge_tl_none_red", "steps_freeze", "freeze", "freezes")
+             "lead_edge_tl_none", "lead_edge_tl_none_red", "steps_freeze", "freeze", "freezes", "stand_perts",
+             "stand_pert")
 FREEZE_REASONS = ("curve", "cruise")    # --freeze_reasons: the expert drives on along the road, no one to wait for
 
 
@@ -267,6 +312,7 @@ def worker(wid, args, quota, out_dir, counter):
         beta_on = False
         beta_t = 0.0
         frozen_t = 0.0                                      # --freeze_takeover: s the model has stood against the expert
+        stand_pert = StandPert(env, rng, args.stand_pert, args.stand_hold) if args.stand_pert > 0 else None
         if agent is not None:
             agent.reset()
         done = False
@@ -308,16 +354,21 @@ def worker(wid, args, quota, out_dir, counter):
                     if frozen_t >= args.freeze_takeover:
                         beta_on, beta_t, frozen_t = True, rng.uniform(3.0, 5.0), 0.0
                         stats["freezes"] += 1
+            standing = False                                # --stand_pert: braking to, holding or leaving a stand
+            if stand_pert is not None:
+                was = stand_pert.on
+                a, standing = stand_pert(env, a, dt)
+                stats["stand_perts"] += int(stand_pert.on and not was)
             if env._step % args.every == 0:
                 plan = env.plan
                 stopped = env.world.ego.v < 0.2 and plan["target_speed"] == 0.0
-                keep = not stopped or rng.random() < args.stopped_keep
+                keep = standing or not stopped or rng.random() < args.stopped_keep
                 edge = args.focus_lead_edge > 0 and lead_at_edge(env, plan, args.focus_lead_edge)
                 focus = False
                 if args.focus_yield < 1.0:          # mostly frames around junction decisions, and model mistakes
                     focus = np.isfinite(plan.get("yield_tta", np.nan)) or plan["reason"] in args.focus_reasons or \
                         (v_model is not None and abs(v_model - plan["target_speed"]) > args.focus_disagree) or edge
-                    keep = keep and (focus or rng.random() < args.focus_yield)
+                    keep = keep and (focus or standing or rng.random() < args.focus_yield)
                 stats["steps"] += 1
                 stats["steps_focus"] += int(focus)
                 stats["steps_lead_edge"] += int(edge)
@@ -326,6 +377,7 @@ def worker(wid, args, quota, out_dir, counter):
                     stats["frames"] += 1
                     stats["focus"] += int(focus)
                     stats["freeze"] += int(frozen_t > 0)
+                    stats["stand_pert"] += int(standing)
                     if edge:
                         stats["lead_edge"] += 1
                         stats["lead_edge_vehicle"] += int(plan["reason"] == "vehicle")
@@ -357,7 +409,8 @@ def worker(wid, args, quota, out_dir, counter):
             el = time.time() - t0
             share = f"  focus {stats['focus'] / max(stats['frames'], 1):.0%}" + (
                 f"  lead at the edge {stats['lead_edge'] / max(stats['frames'], 1):.0%}" if args.focus_lead_edge > 0 else "") + (
-                f"  freezes {stats['freezes']}" if args.freeze_takeover > 0 else "")
+                f"  freezes {stats['freezes']}" if args.freeze_takeover > 0 else "") + (
+                f"  stands {stats['stand_perts']}" if args.stand_pert > 0 else "")
             print(f"[w0] {n}/{quota} frames  {(n - n0) / max(el, 1e-6):.1f} fps{share}  last={info['status']}", flush=True)
     writer.flush()
     save_stats()
@@ -381,6 +434,9 @@ def report(out_dir):
     if tot["freezes"] or tot["steps_freeze"]:
         print(f"freezes handed to the expert: {tot['freezes']}; frames kept while the model stood against the expert:"
               f" {tot['freeze']} ({tot['freeze'] / fr:.1%})")
+    if tot["stand_perts"]:
+        print(f"stands made (--stand_pert): {tot['stand_perts']}; frames kept from them: {tot['stand_pert']}"
+              f" ({tot['stand_pert'] / fr:.1%})")
     return tot
 
 
@@ -420,6 +476,10 @@ def main():
     ap.add_argument("--freeze_reasons", nargs="*", default=list(FREEZE_REASONS),
                     help="--freeze_takeover's expert reasons; add crossing for the stands after a 止まれ, at the "
                          "give-way crossing nobody comes to")
+    ap.add_argument("--stand_pert", type=float, default=0.0,
+                    help="share of the priority junctions where the car is made to stand a while although the expert "
+                         "drives on (StandPert; 0: off)")
+    ap.add_argument("--stand_hold", type=float, nargs=2, default=[1.0, 4.0], help="--stand_pert: s standing (range)")
     ap.add_argument("--ego_patience", type=float, default=0.0,
                     help="s the ego may stand before the NPCs that give way to it stop waiting for it "
                          "(TrafficConfig.ego_patience_s; 0: they wait for ever)")
@@ -459,6 +519,7 @@ def main():
                **({"yield_visible": 1} if args.yield_visible else {}),
                **({"ego_patience": args.ego_patience} if args.ego_patience else {}),
                **({"freeze_reasons": args.freeze_reasons} if args.freeze_takeover > 0 else {}),
+               **({"stand_pert": args.stand_pert, "stand_hold": args.stand_hold} if args.stand_pert > 0 else {}),
                **({"rig": args.rig, "cameras": [asdict(c) for c in set_camera_rig(EnvConfig(), args.rig).cameras]}
                   if args.rig != "front" else {}))
     ctx = mp.get_context("spawn" if args.mode == "dagger" else "fork")
