@@ -123,7 +123,8 @@ def run_route(job):
         global _AGENT
         if "_AGENT" not in globals():
             from keipilot.agent import KeiPilotAgent
-            _AGENT = KeiPilotAgent(args["ckpt"], brake_hold=args.get("brake_hold", False), red_hold=args.get("red_hold", False))
+            _AGENT = KeiPilotAgent(args["ckpt"], brake_hold=args.get("brake_hold", False), red_hold=args.get("red_hold", False),
+                                   yield_hold=args.get("yield_hold"))
         agent = _AGENT
         agent.reset()
     obs = env.reset(town_seed=osm if osm is not None else town, episode_seed=ep, route_length=args["route_length"],
@@ -314,6 +315,9 @@ def main():
                          "--agent expert, and the expert's reasons in the logs; tag suffix _yv")
     ap.add_argument("--brake_hold", action="store_true", help="safety layer: no throttle burst right after firm braking")
     ap.add_argument("--red_hold", action="store_true", help="safety layer: no creeping while the model sees red/yellow")
+    ap.add_argument("--yield_hold", type=float, nargs="*", default=None, metavar="X",
+                    help="safety layer: stand until a car with priority the model's yield_tta head saw coming has passed "
+                         "(keipilot.agent.YieldHold); no values: its defaults, or ON MARGIN V STAND; tag suffix _yh")
     ap.add_argument("--town_style", default=None, choices=list(TOWN_STYLES),
                     help="default: classic (long2: varied, long3: twophase)")
     ap.add_argument("--blocked_timeout", type=float, default=None, help="s without progress (default 90, long2 180)")
@@ -355,6 +359,8 @@ def main():
         tag += "_hold"
     if args.red_hold:
         tag += "_red"
+    if args.yield_hold is not None:
+        tag += "_yh" + "".join(f"_{x:g}" for x in args.yield_hold)
     if args.yield_visible:
         tag += "_yv"
     if args.osm_town:
@@ -377,6 +383,7 @@ def main():
          "max_steps": args.max_steps, "videos": args.videos, "video_dir": args.video_dir, "tag": tag,
          "dense": args.dense, "renderer": args.renderer, "keiview_roads": args.keiview_roads, "fail_dir": fail_dir,
          "brake_hold": args.brake_hold,
+         "yield_hold": None if args.yield_hold is None else (tuple(args.yield_hold) or True),
          "red_hold": args.red_hold, "town_style": args.town_style, "jam_fixes": bool(args.jam_fixes),
          "blocked_timeout": args.blocked_timeout, "osm_bbox": args.osm_bbox, "yield_visible": bool(args.yield_visible),
          "rig": args.rig, "ego_patience": args.ego_patience}

@@ -68,14 +68,48 @@ class RedHold:
         return target
 
 
+class YieldHold:
+    """Safety layer for giving way, on the model's own yield_tta head (the earliest arrival of a car with priority;
+    trained on the frames before the junctions where the ego gives way). While the car is slow (below `v` m/s:
+    pulling up to a crossing or creeping into it) and the head says a car arrives within `on` s, the target is held
+    at zero until that arrival plus `margin` s, even if the head loses the car in between (it often does as the car
+    comes close at the side of the image) or the speed head says go. A hold ends at the earliest arrival read
+    during it: a car really coming keeps its arrival time, while a phantom reading that stays the same (a wall read
+    as a car always 3.7 s away) would otherwise push the end back for ever. The next short reading starts a new
+    hold, but only while the car moves or within `stand` s of coming to a stand: a phantom seen while standing
+    would chain holds for ever, and the model's own target already keeps the car waiting for what it sees."""
+
+    def __init__(self, on=4.0, margin=1.0, v=3.5, stand=4.0):
+        self.on, self.margin, self.v, self.stand = on, margin, v, stand
+        self.reset()
+
+    def reset(self):
+        self.t, self.until, self.stood = 0.0, -1.0, 0.0
+
+    def __call__(self, target, speed, tta, dt):
+        self.t += dt
+        self.stood = self.stood + dt if speed < 0.1 else 0.0
+        if speed < self.v and tta < self.on:
+            end = self.t + max(tta, 0.0) + self.margin
+            if self.t < self.until:
+                self.until = min(self.until, end)
+            elif self.stood <= self.stand:
+                self.until = end
+        return 0.0 if self.t < self.until else target
+
+
 class KeiPilotAgent:
-    def __init__(self, ckpt, device=None, brake_hold=False, red_hold=False):
+    def __init__(self, ckpt, device=None, brake_hold=False, red_hold=False, yield_hold=None):
+        """yield_hold: None (off), True (YieldHold's defaults) or its (on, margin, v, stand)."""
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.model = load_model(ckpt, self.device).to(memory_format=torch.channels_last)
         self.follower = PlanFollower()
         self.amp = self.device.startswith("cuda")
         self.hold = BrakeHold() if brake_hold else None
         self.red_hold = RedHold() if red_hold else None
+        self.yield_hold = None if not yield_hold else YieldHold() if yield_hold is True else YieldHold(*yield_hold)
+        if self.yield_hold and not self.model.aux_yield:
+            raise ValueError("yield_hold needs a model with the yield_tta head (train.py --aux_weight)")
         self.frames = None                 # history models: the last frames seen, one per control step
         self.stand_m = STAND_CAP           # memory-input models: metres since the ego last stood
 
@@ -83,6 +117,8 @@ class KeiPilotAgent:
         self.follower.reset()
         if self.hold:
             self.hold.reset()
+        if self.yield_hold:
+            self.yield_hold.reset()
         self.frames = None
         self.stand_m = STAND_CAP
 
@@ -121,6 +157,8 @@ class KeiPilotAgent:
         }
         if with_seg:        # (rigs: the first camera's)
             res["seg"] = out["seg"][0].float().argmax(0).cpu().numpy().astype(np.uint8)
+        if "yield_tta" in out:
+            res["yield_tta"] = float(out["yield_tta"][0])
         return res
 
     def act(self, rgb_bgr, command, target_point, speed, dt, with_seg=False):
@@ -134,11 +172,13 @@ class KeiPilotAgent:
         self.stand_m = stand_update(self.stand_m, speed, dt)
         p = self.plan(rgb_bgr, command, target_point, with_seg=with_seg, speed=speed, prev_bgr=prev,
                       stand_m=self.stand_m)
-        if self.hold or self.red_hold:
+        if self.hold or self.red_hold or self.yield_hold:
             p["target_speed_raw"] = p["target_speed"]
         if self.hold:
             p["target_speed"] = self.hold(p["target_speed"], speed, dt)
         if self.red_hold:     # judged on the model's own target, before the brake hold capped it
             p["target_speed"] = min(p["target_speed"], self.red_hold(p["target_speed_raw"], speed, p["tl_probs"]))
+        if self.yield_hold:
+            p["target_speed"] = min(p["target_speed"], self.yield_hold(p["target_speed_raw"], speed, p["yield_tta"], dt))
         action = self.follower(p["path"], p["target_speed"], speed, dt)
         return action, p
