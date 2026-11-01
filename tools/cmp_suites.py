@@ -17,7 +17,7 @@ print(f"{'suite':14s}" + "".join(f"{t[9:]:>44s}" for t in tags))
 for s in suites:
     cells = []
     for t in tags:
-        f = f"{R}/{t}_hold_red_{s}.json"
+        f = f"{R}/{t if '_hold_red' in t else t + '_hold_red'}_{s}.json"     # keipilot_mc8_hold_red_yh: more layers
         if not os.path.exists(f):
             cells.append(f"{'-':>44s}")
             continue

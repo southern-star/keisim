@@ -7,7 +7,8 @@ Then the needless standing (s the ego stood while the expert would have driven o
 at the junctions where the expert stopped (止まれ lines, give-way) and at the other priority crossings.
 Usage (fork dir): sap300.py [--keiview] [--batches 100-1500] TAG[:SUFFIX][=FAILDIR,FAILDIR] ...
 SUFFIX: evaluate.py's suffix after the renderer's, e.g. _pat3 for --ego_patience 3 (keipilot_mc5b:_pat3).
-The default failure-log folder is runs/failures/osm_sapporo/<tag>_hold_red[_keiview]<suffix>."""
+The default failure-log folder is runs/failures/osm_sapporo/<tag>_hold_red[_keiview]<suffix>. A TAG with _hold_red in it
+is the files' whole prefix (more safety layers: keipilot_mc8_hold_red_yh:_pat3)."""
 import collections, glob, json, math, os, sys
 
 args = sys.argv[1:]
@@ -62,10 +63,11 @@ tags, kinds, rows = [], {}, {}
 for spec in args:
     tag, _, dirs = spec.partition("=")
     tag, _, sfx = tag.partition(":")
-    dirs = dirs.split(",") if dirs else [f"runs/failures/osm_sapporo/{tag}_hold_red{rend}{sfx}"]
+    pre = tag if "_hold_red" in tag else f"{tag}_hold_red"      # e.g. keipilot_mc8_hold_red_yh: more safety layers
+    dirs = dirs.split(",") if dirs else [f"runs/failures/osm_sapporo/{pre}{rend}{sfx}"]
     res = {}
     for e in batches:
-        f = f"{R}/{tag}_hold_red{'' if e == 100 else f'_ep{e}'}{rend}{sfx}.json"
+        f = f"{R}/{pre}{'' if e == 100 else f'_ep{e}'}{rend}{sfx}.json"
         if os.path.exists(f):
             for r in json.load(open(f))["results"]:
                 res[r["episode"]] = r
