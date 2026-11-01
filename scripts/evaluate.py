@@ -53,8 +53,10 @@ SUITES = {
     # 3 vs 8 collisions in 160 routes, within the run-to-run noise of these chaotic long routes
     "long3e": [(t, 9600 + e) for t in range(1010, 1020) for e in range(2)],
     "long3f": [(t, 9700 + e) for t in range(1010, 1020) for e in range(2)],
+    # suburban towns (片側2車線 main roads, longer blocks, two-phase signals): 2.5 km routes in unseen town seeds
+    "suburban": [(t, 9800 + e) for t in range(2000, 2010) for e in range(2)],
 }
-CAP_SCALE = {"classic": 1, "varied": 2, "twophase": 2, "roadtypes": 2}      # NPC count caps per town style
+CAP_SCALE = {"classic": 1, "varied": 2, "twophase": 2, "roadtypes": 2, "suburban": 2}      # NPC count caps per town style
 # per-suite defaults for arguments left unset on the command line
 SUITE_DEFAULTS = {
     "long": {"route_length": 2500.0, "max_steps": 20000},
@@ -68,6 +70,7 @@ SUITE_DEFAULTS = {
               "blocked_timeout": 180.0},
 }
 SUITE_DEFAULTS["long3c"] = SUITE_DEFAULTS["long3d"] = SUITE_DEFAULTS["long3"]
+SUITE_DEFAULTS["suburban"] = {**SUITE_DEFAULTS["long3"], "town_style": "suburban"}
 SUITE_DEFAULTS["long3e"] = SUITE_DEFAULTS["long3f"] = SUITE_DEFAULTS["long3"]
 
 

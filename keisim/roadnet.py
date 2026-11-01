@@ -57,6 +57,8 @@ class Lane:
         self.pred: list[int] = []
         self.speed_limit = speed_limit
         self.width = width                # lane width (connectors: the wider of the two roads' lanes)
+        self.lane_index = 0               # road lanes: 0 = kerb lane, nlanes - 1 = the lane next to the centre line
+        self.nlanes = 1                   # road lanes: lanes of this direction of the road
         self.stop_s = None                # arc length of the stop line
         self.stop_sign_s = None           # arc length of a 止まれ stop line (minor road before a priority crossing)
         self.signal = None                # (junction id, phase index)
@@ -69,18 +71,31 @@ class RoadSpec:
     """Cross-section of a road. kind: street | main | residential | alley. shoulder: from the lane's outer edge to
     the edge of the road surface (the 路側帯 where people walk on roads without a sidewalk); sidewalk: width of the
     raised sidewalk on each side (0: none). center / edge: paint (see config.ROAD_KINDS). oneway: a single lane on
-    the centre line, driven from the road's junction a to b (Town.from_graph towns), no centre line paint."""
+    the centre line, driven from the road's junction a to b (Town.from_graph towns), no centre line paint.
+    lanes: lanes per direction (two-way roads; 2 = 片側2車線), side by side from the centre line outwards, with
+    dashed white lane lines between them."""
 
     def __init__(self, kind, lane_width, shoulder, sidewalk, speed_limit, center="dashed", edge="classic",
-                 oneway=False):
+                 oneway=False, lanes=1):
         self.kind = kind
         self.lane_width, self.shoulder, self.sidewalk = lane_width, shoulder, sidewalk
         self.speed_limit = speed_limit
         self.center, self.edge = (center, edge) if not oneway else ("none", edge)
         self.oneway = bool(oneway)
-        self.lane_outer = lane_width / 2.0 if oneway else lane_width   # the lanes' outer edge, from the centre line
+        if self.oneway and lanes != 1:
+            raise ValueError("one-way roads have a single lane")
+        self.lanes = int(lanes)
+        # the lanes' outer edge, from the centre line
+        self.lane_outer = lane_width / 2.0 if oneway else lane_width * self.lanes
         self.half_width = self.lane_outer + shoulder  # road surface, centre line to edge
         self.walk_outer = self.half_width + sidewalk  # outer edge of the sidewalk (= half_width without one)
+
+    def lane_offsets(self):
+        """Lateral offsets (+ = the driving side: left with left-hand traffic) of one direction's lane centres from
+        the road's centre line, kerb lane first."""
+        if self.oneway:
+            return [0.0]
+        return [(self.lanes - k - 0.5) * self.lane_width for k in range(self.lanes)]
 
     @classmethod
     def street(cls, cfg, oneway=False):
@@ -89,7 +104,10 @@ class RoadSpec:
 
     @classmethod
     def of_kind(cls, kind, cfg, oneway=False):
-        return cls.street(cfg, oneway) if kind == "street" else cls(kind, **ROAD_KINDS[kind], oneway=oneway)
+        if kind == "street":
+            return cls.street(cfg, oneway)
+        lanes = cfg.main_lanes if kind == "main" and not oneway else 1
+        return cls(kind, **ROAD_KINDS[kind], oneway=oneway, lanes=lanes)
 
     def walkway(self):
         """Where pedestrians walk along this road: (offset from the centre line, lateral spread factor, on the road
@@ -112,8 +130,18 @@ class Road:
         self.kind = spec.kind
         self.half_width = spec.half_width
         self.walk_outer = spec.walk_outer
-        self.lane_ab = -1
-        self.lane_ba = -1
+        self.lanes_ab: list[int] = []     # lane ids driven from a to b, kerb lane first
+        self.lanes_ba: list[int] = []     # ... from b to a (none on one-way roads)
+
+    @property
+    def lane_ab(self):
+        """The kerb lane from a to b (-1: none)."""
+        return self.lanes_ab[0] if self.lanes_ab else -1
+
+    @property
+    def lane_ba(self):
+        """The kerb lane from b to a (-1: none, one-way roads)."""
+        return self.lanes_ba[0] if self.lanes_ba else -1
 
 
 YIELD_CLEAR = 2.4        # clearance of a waiting car's front circle from the paths it yields to
@@ -455,6 +483,22 @@ class Town:
             J.radius = max(3.0, wo / math.tan(min(gmin, 2 * math.pi - gmin) / 2.0) + 1.0)
 
     @staticmethod
+    def _lane_map(n_arms, k, n_in, turn, outs):
+        """Lanes a car in lane k (0 = kerb) of an approach with n_in lanes may enter on the road leaving through
+        `outs` (kerb lane first), for a movement `turn` at a junction with n_arms arms. Cars keep their lane: with
+        left-hand traffic a left turn goes from the kerb lane into the kerb lane, a right turn from the lane next to
+        the centre line into the lane next to the centre line, straight on lane k into lane k (only where it exists);
+        bends (2 arms) keep the lane like straight on. Single lanes connect to the single lane, as before."""
+        n_out = len(outs)
+        if n_in == 1 and n_out == 1:
+            return [outs[0]]
+        if n_arms >= 3 and turn == "left":
+            return [outs[0]] if k == 0 else []
+        if n_arms >= 3 and turn == "right":
+            return [outs[-1]] if k == n_in - 1 else []
+        return [outs[k]] if k < n_out else []
+
+    @staticmethod
     def graph_min_radius(specs, gmin=math.pi / 2):
         """Floor of a 3+-arm junction's radius in Town.from_graph towns, from the cross-sections of its arms and the
         tightest angle `gmin` between neighbouring arms: the procedural 9.5 m fits 7-8 m streets with sidewalks but
@@ -483,56 +527,74 @@ class Town:
         side = 1.0 if cfg.left_hand_traffic else -1.0
         for road in self.roads:
             rs = road.spec
-            off = 0.0 if rs.oneway else side * rs.lane_width / 2.0     # one-way roads: a single lane on the centre line
-            ab = Lane(len(self.lanes), offset_polyline(road.center, off), "road", rs.speed_limit, rs.lane_width)
-            ab.road, ab.start_junction, ab.end_junction = road.id, road.a, road.b
-            self.lanes.append(ab)
-            road.lane_ab, road.lane_ba = ab.id, -1
+            # one-way roads: a single lane on the centre line; two-way roads: rs.lanes per direction, kerb lane first
+            for k, off in enumerate(rs.lane_offsets()):
+                ab = Lane(len(self.lanes), offset_polyline(road.center, side * off), "road", rs.speed_limit,
+                          rs.lane_width)
+                ab.road, ab.start_junction, ab.end_junction = road.id, road.a, road.b
+                ab.lane_index, ab.nlanes = k, len(rs.lane_offsets())
+                self.lanes.append(ab)
+                road.lanes_ab.append(ab.id)
             if rs.oneway:
                 continue
-            ba = Lane(len(self.lanes), offset_polyline(road.center, -off)[::-1].copy(), "road", rs.speed_limit,
-                      rs.lane_width)
-            ba.road, ba.start_junction, ba.end_junction = road.id, road.b, road.a
-            self.lanes.append(ba)
-            road.lane_ba = ba.id
+            for k, off in enumerate(rs.lane_offsets()):
+                ba = Lane(len(self.lanes), offset_polyline(road.center, -side * off)[::-1].copy(), "road",
+                          rs.speed_limit, rs.lane_width)
+                ba.road, ba.start_junction, ba.end_junction = road.id, road.b, road.a
+                ba.lane_index, ba.nlanes = k, rs.lanes
+                self.lanes.append(ba)
+                road.lanes_ba.append(ba.id)
 
-        # arms: which lanes come in / go out (-1: none, the far end of a one-way road)
+        # arms: which lanes come in / go out, kerb lane first (ins / outs); in / out: the kerb lane (-1: none, the
+        # far end of a one-way road)
         for J in self.junctions:
             for arm in J.arms:
                 road = self.roads[arm["spec"]]
                 arm["road"] = road.id
                 if arm["end"] == "a":
-                    arm["in"], arm["out"] = road.lane_ba, road.lane_ab
+                    arm["ins"], arm["outs"] = list(road.lanes_ba), list(road.lanes_ab)
                     arm["pt"], arm["dir"] = road.center[0], unit(arm["angle"])
                 else:
-                    arm["in"], arm["out"] = road.lane_ab, road.lane_ba
+                    arm["ins"], arm["outs"] = list(road.lanes_ab), list(road.lanes_ba)
                     arm["pt"], arm["dir"] = road.center[-1], unit(arm["angle"])
-            J.incoming = [a["in"] for a in J.arms if a["in"] >= 0]
-            J.outgoing = [a["out"] for a in J.arms if a["out"] >= 0]
+                arm["in"] = arm["ins"][0] if arm["ins"] else -1
+                arm["out"] = arm["outs"][0] if arm["outs"] else -1
+            J.incoming = [lid for a in J.arms for lid in a["ins"]]
+            J.outgoing = [lid for a in J.arms for lid in a["outs"]]
 
         # ---- junction connectors + polygons + signals
+        def connect(J, lin, lout, turn):
+            h0, h1 = lin.heading[-1], lout.heading[0]
+            pts = arc_bezier(lin.pts[-1], h0, lout.pts[0], h1, 64)
+            c = Lane(len(self.lanes), pts, "conn", min(lin.speed_limit, lout.speed_limit), max(lin.width, lout.width))
+            c.junction = J.id
+            c.start_junction = c.end_junction = J.id
+            c.turn = turn
+            c.pred, c.succ = [lin.id], [lout.id]
+            lin.succ.append(c.id)
+            lout.pred.append(c.id)
+            self.lanes.append(c)
+            J.connectors.append(c.id)
+
         for J in self.junctions:
             for ia, arm_in in enumerate(J.arms):
-                if arm_in["in"] < 0:
-                    continue
-                lin = self.lanes[arm_in["in"]]
-                for ib, arm_out in enumerate(J.arms):
-                    if ia == ib or arm_out["out"] < 0:
-                        continue
-                    lout = self.lanes[arm_out["out"]]
-                    h0, h1 = lin.heading[-1], lout.heading[0]
-                    pts = arc_bezier(lin.pts[-1], h0, lout.pts[0], h1, 64)
-                    c = Lane(len(self.lanes), pts, "conn", min(lin.speed_limit, lout.speed_limit),
-                             max(lin.width, lout.width))
-                    c.junction = J.id
-                    c.start_junction = c.end_junction = J.id
-                    dh = float(wrap(h1 - h0))
-                    c.turn = "left" if dh > 0.5 else ("right" if dh < -0.5 else "straight")
-                    c.pred, c.succ = [lin.id], [lout.id]
-                    lin.succ.append(c.id)
-                    lout.pred.append(c.id)
-                    self.lanes.append(c)
-                    J.connectors.append(c.id)
+                for k, lid_in in enumerate(arm_in["ins"]):
+                    lin = self.lanes[lid_in]
+                    moves = []                                 # (out arm, turn) of this approach
+                    for ib, arm_out in enumerate(J.arms):
+                        if ia == ib or not arm_out["outs"]:
+                            continue
+                        dh = float(wrap(self.lanes[arm_out["outs"][0]].heading[0] - lin.heading[-1]))
+                        turn = "left" if dh > 0.5 else ("right" if dh < -0.5 else "straight")
+                        moves.append((arm_out, turn))
+                        kerb_turn = turn if cfg.left_hand_traffic else {"left": "right", "right": "left"}.get(turn, turn)
+                        for lid_out in self._lane_map(len(J.arms), k, len(arm_in["ins"]), kerb_turn, arm_out["outs"]):
+                            connect(J, lin, self.lanes[lid_out], turn)
+                    if not lin.succ:                           # a lane that no movement suits: it goes on anyway
+                        # (into the nearest lane; rare on generated towns), an inner lane not across the kerb lane
+                        kerb_side = "left" if cfg.left_hand_traffic else "right"
+                        for arm_out, turn in [mv for mv in moves if k == 0 or mv[1] != kerb_side] or moves:
+                            connect(J, lin, self.lanes[arm_out["outs"][min(k, len(arm_out["outs"]) - 1)]], turn)
             corners_r, corners_w = [], []
             for arm in J.arms:
                 n = np.array([-arm["dir"][1], arm["dir"][0]])
@@ -556,11 +618,10 @@ class Town:
                     J.allred = cfg.signal_allred
                 J.offset = float(rng.uniform(0, J.cycle))
                 for k, arm in enumerate(J.arms):
-                    if arm["in"] < 0:
-                        continue
-                    lin = self.lanes[arm["in"]]
-                    lin.signal = (J.id, group[k])
-                    lin.stop_s = max(1.0, lin.length - cfg.stop_line_setback)
+                    for lid in arm["ins"]:
+                        lin = self.lanes[lid]
+                        lin.signal = (J.id, group[k])
+                        lin.stop_s = max(1.0, lin.length - cfg.stop_line_setback)
         self._make_yields()
 
         # swept strips of junction connectors (bends / skewed junctions bulge past the hull)
@@ -569,12 +630,14 @@ class Town:
         for lane in self.lanes:
             if lane.kind != "conn":
                 continue
-            ra = self.roads[self.lanes[lane.pred[0]].road].spec
-            rb = self.roads[self.lanes[lane.succ[0]].road].spec
+            la, lb = self.lanes[lane.pred[0]], self.lanes[lane.succ[0]]
+            ra = self.roads[la.road].spec
+            rb = self.roads[lb.road].spec
             hl = max(ra.lane_width / 2 + ra.shoulder, rb.lane_width / 2 + rb.shoulder)
             self.conn_road_polys.append(self.strip(lane.pts, hl))
-            self.conn_curb_polys.append(self.strip(lane.pts, hl + 0.2))
-            self.conn_walk_polys.append(self.strip(lane.pts, hl + min(ra.sidewalk, rb.sidewalk)))
+            if la.lane_index == 0 and lb.lane_index == 0:      # curbs and sidewalks only along the kerb lanes' turns
+                self.conn_curb_polys.append(self.strip(lane.pts, hl + 0.2))
+                self.conn_walk_polys.append(self.strip(lane.pts, hl + min(ra.sidewalk, rb.sidewalk)))
         self._make_bbox()
         self._make_raster()
         self._make_markings()
@@ -612,6 +675,37 @@ class Town:
             on_main = any((t == "row" and j0 == j1 == v) or (t == "col" and i0 == i1 == v) for t, v in lines)
             kind = "main" if on_main else kinds[int(rng.choice(3, p=mix / mix.sum()))]
             out.append(RoadSpec.of_kind(kind, cfg))
+        # Multi-lane main roads: every lane of an approach needs a movement (_lane_map). Lane k > 0 goes straight on
+        # into lane k of a road with more than k lanes; the innermost one may turn across the oncoming traffic (右折)
+        # instead, at a junction of 3+ roads (and becomes a right-turn lane where the road straight on has fewer
+        # lanes). A main road that would strand a lane (its end is a bend into a road with fewer lanes, where the
+        # main line meets the town's edge, or it goes straight on into one with no right turn there) gets fewer
+        # lanes, up to the junction where all of its lanes have somewhere to go. Grid directions: (i, j) is (x, y).
+        arms = {}
+        for n, (ka, kb) in enumerate(edges):
+            arms.setdefault(ka, []).append((n, (kb[0] - ka[0], kb[1] - ka[1])))
+            arms.setdefault(kb, []).append((n, (ka[0] - kb[0], ka[1] - kb[1])))
+        across = (lambda t: (t[1], -t[0])) if cfg.left_hand_traffic else (lambda t: (-t[1], t[0]))
+        changed = True
+        while changed:
+            changed = False
+            for al in arms.values():
+                for n, d in al:
+                    m = out[n].lanes
+                    if m < 2:
+                        continue
+                    t = (-d[0], -d[1])                     # direction of travel into the junction
+                    others = [(n2, d2) for n2, d2 in al if n2 != n]
+                    if len(others) == 1:                   # a bend: lane k goes on in lane k
+                        straight, turn_across = others[0][0], False
+                    else:
+                        straight = next((n2 for n2, d2 in others if d2 == t), None)
+                        turn_across = any(d2 == across(t) for _, d2 in others)
+                    n_s = out[straight].lanes if straight is not None else 0
+                    fit = min(m, max(2, n_s + 1) if turn_across else max(n_s, 1))
+                    if fit < m:
+                        out[n] = RoadSpec("main", **ROAD_KINDS["main"], lanes=fit)
+                        changed = True
         return out
 
     def _make_bbox(self):
@@ -667,11 +761,11 @@ class Town:
 
         def stop_line(lane, s, rs):
             """Stop line across incoming `lane` at arc length `s` (centre-line side to edge; one-way roads: edge to
-            edge), 0.45 m deep."""
+            edge), 0.45 m deep. `lane` is the kerb lane: the line runs on over the other lanes of its direction."""
             p = lane.poly.interp(s)
             h = float(lane.poly.heading(s))
             u, n = unit(h), unit(h + math.pi / 2)
-            inner = -side * (rs.lane_width / 2.0)   # towards road centre
+            inner = -side * (rs.lane_width / 2.0 + (lane.nlanes - 1) * rs.lane_width)   # towards road centre
             if rs.edge == "classic":
                 outer = side * (rs.lane_width / 2.0 + rs.shoulder - 0.35)
             else:                                    # up to the edge line
@@ -750,6 +844,24 @@ class Town:
                 m = (s >= s0) & (s <= s1)
                 if m.sum() >= 2:
                     self.markings.append(strip(c[m], 0.0, mw))
+            # lane lines between the lanes of one direction (車線境界線): white, dashed 5 m / 5 m, solid over the
+            # last 20 m before a signalised junction (no lane changes there)
+            if not rs.oneway and rs.lanes > 1:
+                solid_a = 20.0 if sig_a else 0.0
+                solid_b = 20.0 if sig_b else 0.0
+                seg = [(0.0, min(solid_a, L))] if solid_a > 0 else []
+                t = solid_a + 2.5
+                while t < L - solid_b - 2.5:
+                    seg.append((t, min(t + 5.0, L - solid_b - 2.5)))
+                    t += 10.0
+                if solid_b > 0:
+                    seg.append((max(0.0, L - solid_b), L))
+                for k in range(1, rs.lanes):
+                    for sgn in (1, -1):
+                        for s0, s1 in seg:
+                            m = (s >= s0) & (s <= s1)
+                            if m.sum() >= 2:
+                                self.markings.append(strip(c[m], sgn * k * rs.lane_width, mw))
             # stop lines and crosswalks at signalised ends; a stop line only at the minor road's 止まれ
             # (one-way roads: no lane arrives at their start, so no stop line there; the crosswalk stays)
             for end, J in (("a", self.junctions[road.a]), ("b", self.junctions[road.b])):
@@ -816,9 +928,10 @@ class Town:
             major = self._priority_groups(J) if prio else None
             if prio and self.stop_signs:
                 for arm in J.arms:
-                    if arm["in"] >= 0 and major[arm["in"]] == 1:
-                        lin = self.lanes[arm["in"]]
-                        lin.stop_sign_s = max(0.5, lin.length - STOP_SIGN_SETBACK)
+                    for lid in arm["ins"]:
+                        if major[lid] == 1:
+                            lin = self.lanes[lid]
+                            lin.stop_sign_s = max(0.5, lin.length - STOP_SIGN_SETBACK)
             conns = [self.lanes[c] for c in J.connectors]
             equals = []
             for a in conns:
@@ -905,7 +1018,7 @@ class Town:
                 key = (opp > math.radians(120), min(ri, rk), ri + rk, li + lk, opp)
                 if best is None or key > best:
                     best, pair = key, (i, k)
-        return {arm["in"]: 0 if k in pair else 1 for k, arm in enumerate(arms) if arm["in"] >= 0}
+        return {lid: 0 if k in pair else 1 for k, arm in enumerate(arms) for lid in arm["ins"]}
 
     def _equal_gives_way(self, J, a, b, ranked):
         """True if connector `a` gives way to `b` (equal movements whose paths cross; see _make_yields)."""

@@ -296,7 +296,8 @@ def export_town(town: Town) -> dict:
             d.update({"kind": rs.kind, "lane_width": rs.lane_width, "shoulder": rs.shoulder, "sidewalk": rs.sidewalk,
                       "half_width": rs.half_width, "walk_outer": rs.walk_outer,
                       "speed_limit": round(rs.speed_limit, 4), "center_line": rs.center, "edge_line": rs.edge,
-                      **({"oneway": True} if rs.oneway else {})})    # one lane on the centre line, a -> b
+                      **({"oneway": True} if rs.oneway else {}),     # one lane on the centre line, a -> b
+                      **({"lanes": rs.lanes} if rs.lanes > 1 else {})})    # lanes per direction (片側2車線)
     junctions = [{"id": J.id, "pos": r2(J.pos), "radius": round(J.radius, 2), "arms": len(J.arms),
                   "signalized": bool(J.signalized), "phases": J.phases, "green": round(J.green, 9),
                   "yellow": J.yellow, "allred": J.allred, "offset": round(J.offset, 9)}

@@ -75,6 +75,9 @@ class TownConfig:
     road_types: str = "uniform"
     main_roads: int = 2
     road_mix: tuple = (0.3, 0.45, 0.25)
+    # lanes per direction of the main roads of a mixed town (2: 片側2車線 arterials, see RoadSpec.lanes). The cars
+    # keep their lane: left turns from the kerb lane, right turns from the lane next to the centre line.
+    main_lanes: int = 1
     building_prob: float = 0.85
     tree_prob: float = 0.55
     tex_res: float = 0.1              # metres per texel of the ground texture
@@ -153,11 +156,14 @@ TOWN_STYLES = {
     # without sidewalks (30 km/h, people walk in the 路側帯) and narrow alleys (20 km/h)
     "roadtypes": {"block_mode": "varied", "spacing_min": 70.0, "spacing_max": 200.0, "signal_mode": "two_phase",
                   "road_types": "mixed"},
+    # roadtypes with longer blocks, fewer alleys and 片側2車線 main roads (two lanes each way, yellow centre line)
+    "suburban": {"block_mode": "varied", "spacing_min": 100.0, "spacing_max": 220.0, "signal_mode": "two_phase",
+                 "road_types": "mixed", "road_mix": (0.45, 0.45, 0.1), "main_lanes": 2},
 }
 
 # TownConfig fields added after town_tag() was introduced: part of the tag only when they differ from the
 # default, so the tags (and exported town names) of the existing styles stay the same.
-_TAG_LATER = ("road_types", "main_roads", "road_mix")
+_TAG_LATER = ("road_types", "main_roads", "road_mix", "main_lanes")
 
 
 def town_config(style="classic"):

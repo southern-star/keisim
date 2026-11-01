@@ -734,3 +734,56 @@ def test_expert_yield_visible_counts_only_cars_in_view():
     cam = (pose[0] + c.x * math.cos(pose[2]), pose[1] + c.x * math.sin(pose[2]))
     vis = tr.visible_from(cam, pose[2], math.radians(c.fov_deg) / 2, c.max_dist, env.world.town)
     assert seen[-1] == int(vis.sum()) < tr.n
+
+
+def test_suburban_two_lane_main_roads():
+    """'suburban' towns: the main roads have two lanes each way (片側2車線), kerb lane first. The cars keep their
+    lane: kerb-side turns go from kerb lane to kerb lane, turns across the oncoming traffic from the innermost lane
+    to the innermost lane, straights in the same lane; every lane has somewhere to go and no two lanes of a road
+    merge. The other styles keep their settings and exported town names; the expert completes a route on both lanes."""
+    from keisim.config import town_config, town_tag
+
+    assert town_tag(town_config("roadtypes")) == "dae67d73"
+    for seed in (2000, 2001, 2002, 2003):
+        T = Town(seed, town_config("suburban"))
+        n2 = 0
+        for r in T.roads:
+            n = r.spec.lanes
+            assert n == 1 or r.kind == "main"
+            n2 += n == 2
+            assert len(r.lanes_ab) == len(r.lanes_ba) == n and r.lane_ab == r.lanes_ab[0]
+            for k, lid in enumerate(r.lanes_ab + r.lanes_ba):
+                L = T.lanes[lid]
+                assert L.lane_index == k % n and L.nlanes == n and L.succ
+                mid = L.pts[len(L.pts) // 2]
+                d = np.min(np.hypot(*(r.center - mid).T))
+                assert abs(d - (n - L.lane_index - 0.5) * r.spec.lane_width) < 0.3
+                nrm = normals_of(L.pts)
+                pts = np.concatenate([L.pts, L.pts + nrm * 0.9, L.pts - nrm * 0.9])
+                assert (T.surface(pts) == 1).all(), f"lane {lid} leaves the road in town {seed}"
+        assert n2 >= 3
+        for J in T.junctions:
+            into = {}
+            for c in (T.lanes[c] for c in J.connectors):
+                a, b = T.lanes[c.pred[0]], T.lanes[c.succ[0]]
+                assert into.setdefault((b.id, a.road), c.id) == c.id           # no merges of one road's lanes
+                if len(J.arms) >= 3 and c.turn == "left":                       # left-hand traffic: kerb side
+                    assert a.lane_index == b.lane_index == 0
+                elif len(J.arms) >= 3 and c.turn == "right":
+                    assert (a.lane_index, b.lane_index) == (a.nlanes - 1, b.nlanes - 1)
+                else:
+                    assert b.lane_index == a.lane_index
+    cfg = EnvConfig()
+    cfg.town = town_config("suburban")
+    cfg.traffic.box_rule = cfg.traffic.release_hidden = True
+    env = KeiEnv(cfg)
+    env.reset(town_seed=2001, episode_seed=69, render=False)
+    T = env.world.town
+    done, used = False, set()
+    while not done:
+        _, _, done, info = env.step(env.expert_action())
+        lane = T.lanes[env.route.lane_at(env.s_ego)]
+        if lane.kind == "road" and lane.nlanes == 2:
+            used.add(lane.lane_index)
+    assert info["status"] == "success", info
+    assert used == {0, 1}
