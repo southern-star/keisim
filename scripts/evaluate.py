@@ -317,7 +317,9 @@ def main():
     ap.add_argument("--red_hold", action="store_true", help="safety layer: no creeping while the model sees red/yellow")
     ap.add_argument("--yield_hold", type=float, nargs="*", default=None, metavar="X",
                     help="safety layer: stand until a car with priority the model's yield_tta head saw coming has passed "
-                         "(keipilot.agent.YieldHold); no values: its defaults, or ON MARGIN V STAND; tag suffix _yh")
+                         "(keipilot.agent.YieldHold), held only from a yield the model itself began; no values: its defaults, "
+                         "or ON MARGIN V STAND [BRAKE] (BRAKE < 0: also without the model's own yield, as first "
+                         "evaluated); tag suffix _yh")
     ap.add_argument("--town_style", default=None, choices=list(TOWN_STYLES),
                     help="default: classic (long2: varied, long3: twophase)")
     ap.add_argument("--blocked_timeout", type=float, default=None, help="s without progress (default 90, long2 180)")

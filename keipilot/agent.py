@@ -77,10 +77,16 @@ class YieldHold:
     during it: a car really coming keeps its arrival time, while a phantom reading that stays the same (a wall read
     as a car always 3.7 s away) would otherwise push the end back for ever. The next short reading starts a new
     hold, but only while the car moves or within `stand` s of coming to a stand: a phantom seen while standing
-    would chain holds for ever, and the model's own target already keeps the car waiting for what it sees."""
+    would chain holds for ever, and the model's own target already keeps the car waiting for what it sees.
+    A hold starts only while the model itself slows down or stands (its target `brake` m/s or more below the speed,
+    or below `brake`): the layer keeps a yield the model began until the car it saw has passed, but starts no stop
+    on the head alone. Off its training frames (crossings where the ego has priority, scenery) the head often reads
+    3-4 s with no car near, most of all while standing, and holds on those readings made 131 of 300 Sapporo routes
+    stand longer (11-01). brake None or negative: no such condition (the layer as first evaluated)."""
 
-    def __init__(self, on=4.0, margin=1.0, v=3.5, stand=4.0):
+    def __init__(self, on=4.0, margin=1.0, v=3.5, stand=4.0, brake=0.5):
         self.on, self.margin, self.v, self.stand = on, margin, v, stand
+        self.brake = None if brake is None or brake < 0 else brake
         self.reset()
 
     def reset(self):
@@ -93,14 +99,14 @@ class YieldHold:
             end = self.t + max(tta, 0.0) + self.margin
             if self.t < self.until:
                 self.until = min(self.until, end)
-            elif self.stood <= self.stand:
+            elif self.stood <= self.stand and (self.brake is None or target < max(speed - self.brake, self.brake)):
                 self.until = end
         return 0.0 if self.t < self.until else target
 
 
 class KeiPilotAgent:
     def __init__(self, ckpt, device=None, brake_hold=False, red_hold=False, yield_hold=None):
-        """yield_hold: None (off), True (YieldHold's defaults) or its (on, margin, v, stand)."""
+        """yield_hold: None (off), True (YieldHold's defaults) or its (on, margin, v, stand[, brake])."""
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.model = load_model(ckpt, self.device).to(memory_format=torch.channels_last)
         self.follower = PlanFollower()
