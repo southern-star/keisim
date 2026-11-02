@@ -194,7 +194,8 @@ def run_route(job):
         m["status"] = "timeout"
     m.update({"town": town, "episode": ep, "steps": steps, "wall": time.time() - t0,
               "avg_speed": float(np.mean(speeds)) if speeds else 0.0, "weather": env.weather.name,
-              "lights_passed": int(sum(1 for s_stop, _ in env.route.stops if s_stop < env.s_ego))})
+              "lights_passed": int(sum(1 for s_stop, _ in env.route.stops if s_stop < env.s_ego)),
+              "lane_changes": int(sum(1 for c in env.route.changes if c["s_b"] < env.s_ego))})
     if kv is not None:
         m["keiview_ms"] = {"town": kv_town_ms, "frames": len(kv_ms),
                            "mean": float(np.mean(kv_ms)) if kv_ms else None,
@@ -273,6 +274,8 @@ def summarize(results):
         "km": km,
         "avg_speed_kmh": float(np.mean([r["avg_speed"] for r in results]) * 3.6),
         "lights_passed": int(sum(r.get("lights_passed", 0) for r in results)),
+        **({"lane_changes": int(sum(r.get("lane_changes", 0) for r in results))}
+           if any(r.get("lane_changes") for r in results) else {}),
     }
     kinds = {}
     for r in results:

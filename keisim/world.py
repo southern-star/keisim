@@ -77,7 +77,7 @@ class World:
         if self.traffic.has_yields and self.route is not None and self.ego_s is not None:
             k = self.route.lane_index_at(self.ego_s)
             lanes = self.route.lanes
-            ego_info = (lanes[k], self.ego_s - self.route.offsets[k], lanes[k + 1] if k + 1 < len(lanes) else None,
+            ego_info = (lanes[k], self.route.local_s(self.ego_s, k), lanes[k + 1] if k + 1 < len(lanes) else None,
                         e.v, e.LENGTH, lanes[k + 2] if k + 2 < len(lanes) else None)
         ped_margin = pass_xy = None
         if self.town.in_road_walkways and pd.n:     # people walking in a 路側帯 are passed closely, but slowly

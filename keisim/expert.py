@@ -30,6 +30,13 @@ STOP_SIGN_ZONE = 1.5                     # m: ... and the stop counts when the e
 STOP_SIGN_V = 0.05                       # m/s: standing (a full stop: 一時停止)
 STOP_SIGN_OVER = 1.5                     # m: a car that rolled this far past the line without stopping stops there;
                                          # further in, the junction's own rules take over
+LC_CHECK = 12.0                          # m: lane change: the target lane is checked from this far before its start
+LC_PUSH = 10.0                           # m: without a gap there, a start closer than this moves on to LC_PUSH_TO ahead
+LC_PUSH_TO = 15.0
+LC_GAP0 = 2.0                            # m: bumper-to-bumper room kept to the cars in the target lane ...
+LC_T_REAR = 0.8                          # s: ... plus the follower's speed times this behind the ego
+LC_T_CLOSE = 1.5                         # s: ... plus the closing speed times this (ahead: the ego is faster; behind:
+                                         # the follower is)
 
 
 def clear_time(d_cross, v, length):
@@ -106,6 +113,34 @@ class Expert:
         pts = route.poly.interp(np.minimum(s + PATH_S, route.poly.length))
         return world_to_local(pts, *pose)
 
+    def lane_change_gap(self, route, s, v):
+        """The next lane change of the route if it starts within LC_CHECK m of the ego (route position `s`) and has not
+        started: (index in route.changes, [(dx, v)] of the cars in its target lane that leave no room for it, dx
+        along that lane from the ego, + ahead). (None, []) otherwise. The cars on the connectors into the target lane
+        count too (just out of the junction behind). A camera looking ahead cannot see the cars behind: this is a
+        privileged check (mirrors / a rear camera)."""
+        w = self.env.world
+        town = w.town
+        for i, ch in enumerate(route.changes):
+            if s >= ch["s_a"] - 0.3:
+                continue                                   # under way or done
+            if ch["s_a"] - s > LC_CHECK:
+                break
+            A, B = town.lanes[ch["from"]], town.lanes[ch["to"]]
+            s_e = route.local_s(s, ch["k"] - 1) * B.length / A.length
+            occ = w.traffic.occupancy()
+            cars = list(occ.get(B.id, []))
+            for c in B.pred:
+                cars += [(sn - town.lanes[c].length, vn, ln) for sn, vn, ln in occ.get(c, [])]
+            bad = []
+            for sn, vn, ln in cars:
+                dx = sn - s_e
+                room = (w.ego.LENGTH + ln) / 2 + LC_GAP0
+                if -(room + vn * LC_T_REAR + max(0.0, vn - v) * LC_T_CLOSE) < dx < room + max(0.0, v - vn) * LC_T_CLOSE:
+                    bad.append((dx, vn))
+            return i, bad
+        return None, []
+
     def plan(self, pose=None, s=None):
         env = self.env
         w = env.world
@@ -118,6 +153,14 @@ class Expert:
             s = env.s_ego
         v = ego.v
         hl = ego.LENGTH / 2
+        # --- lane change (multi-lane roads, route.py): just before it starts, the target lane needs room beside and
+        # behind the ego. Without it the change moves on along its window (the path ahead changes) while the ego
+        # lets the car in the way pass (or falls behind it); at the window's end the ego waits for the room there.
+        lc_i, lc_bad = self.lane_change_gap(route, s, v) if route.changes else (None, [])
+        if lc_bad and real:
+            ch = route.changes[lc_i]
+            if ch["s_a"] - s < LC_PUSH and ch["a0"] < ch["a_max"]:
+                route.retime_change(lc_i, route.local_s(s, ch["k"] - 1) + LC_PUSH_TO)
         path = self.path_local(route, s, pose)
         reason = "cruise"
         if w.town.speed_varies:          # road types: the route's own limits
@@ -188,6 +231,18 @@ class Expert:
                     v_pass = math.sqrt(PASS_SPEED ** 2 + 2 * 1.6 * max(float(g_pass[0]), 0.0))
                     if v_pass < target:
                         target, reason = v_pass, "pedestrian"
+
+        if lc_bad:
+            ch = route.changes[lc_i]
+            for dx, vn in lc_bad:
+                if dx > 0.0 or vn >= v - 0.5:
+                    v_let = max(0.0, vn - 1.0)
+                    if v_let < target:
+                        target, reason = v_let, "lane_change"
+            if ch["a0"] >= ch["a_max"] - 1e-6:      # (stops a metre short: closer in, the change counts as begun)
+                v_w = stop_profile(ch["s_a"] - s - 1.0, self.B_COMF)
+                if v_w < target:
+                    target, reason = v_w, "lane_change"
 
         # --- give way (two-phase signals): a right turn waits at its connector's wait point, inside the
         # junction, while oncoming traffic would reach the crossing within YIELD_GAP s. Independent of the ego

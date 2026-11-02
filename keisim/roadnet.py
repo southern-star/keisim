@@ -59,6 +59,7 @@ class Lane:
         self.width = width                # lane width (connectors: the wider of the two roads' lanes)
         self.lane_index = 0               # road lanes: 0 = kerb lane, nlanes - 1 = the lane next to the centre line
         self.nlanes = 1                   # road lanes: lanes of this direction of the road
+        self.siblings: list[int] = []     # road lanes: the other lanes of this direction (lane changes, route.py)
         self.stop_s = None                # arc length of the stop line
         self.stop_sign_s = None           # arc length of a 止まれ stop line (minor road before a priority crossing)
         self.signal = None                # (junction id, phase index)
@@ -544,6 +545,11 @@ class Town:
                 ba.lane_index, ba.nlanes = k, rs.lanes
                 self.lanes.append(ba)
                 road.lanes_ba.append(ba.id)
+
+        for road in self.roads:
+            for group in (road.lanes_ab, road.lanes_ba):
+                for lid in group:
+                    self.lanes[lid].siblings = [o for o in group if o != lid]
 
         # arms: which lanes come in / go out, kerb lane first (ins / outs); in / out: the kerb lane (-1: none, the
         # far end of a one-way road)

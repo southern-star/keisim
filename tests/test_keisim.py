@@ -787,3 +787,84 @@ def test_suburban_two_lane_main_roads():
             used.add(lane.lane_index)
     assert info["status"] == "success", info
     assert used == {0, 1}
+
+
+def test_lane_change_routes():
+    """Suburban routes change lanes where the next movement needs it (now and then where it does not): the path
+    blends from one lane into its sibling inside the lane's window, route positions map exactly onto each lane
+    outside the blend, the stop lines stay where they are, and a change moved later (Route.retime_change) leaves the
+    path before it as it was. Routes in towns without multi-lane roads are those of the code before lane changes."""
+    import hashlib
+
+    from keisim.config import town_config
+    from keisim.route import LC_ENTRY, LC_EXIT, LC_MIN, random_route
+
+    m = hashlib.sha1()
+    for style, seed in (("classic", 1000), ("roadtypes", 1105)):
+        T = Town(seed, town_config(style))
+        for ep in range(5):
+            r = random_route(T, np.random.default_rng(ep), 600.0)
+            assert not r.changes
+            m.update(np.round(r.poly.pts, 6).tobytes())
+            m.update(np.round(np.asarray(r.offsets), 6).tobytes())
+            m.update(repr((r.lanes, round(r.s_start, 6), round(r.s_end, 6),
+                           [(round(float(a), 6), b) for a, b in r.stops])).encode())
+    assert m.hexdigest()[:16] == "1533b9616db393e2"
+    T = Town(2000, town_config("suburban"))
+    n = 0
+    for ep in range(30):
+        r = random_route(T, np.random.default_rng(ep), 1500.0)
+        assert np.hypot(*np.diff(r.poly.pts, axis=0).T).max() < 0.55          # no jumps
+        for s_stop, lid in r.stops:
+            L = T.lanes[lid]
+            assert np.allclose(r.poly.interp(s_stop), L.poly.interp(L.stop_s), atol=1e-6)
+        for ch in r.changes:
+            n += 1
+            A, B = T.lanes[ch["from"]], T.lanes[ch["to"]]
+            assert B.id in A.siblings and A.road == B.road and ch["lc"] >= LC_MIN - 1e-9
+            assert LC_ENTRY - 1e-9 <= ch["a_min"] <= ch["a0"] <= ch["a_max"]
+            assert ch["a_max"] + ch["lc"] <= A.length - LC_EXIT + 1e-6
+            k = ch["k"]
+            for s in np.linspace(r.offsets[k - 1] + 0.1, ch["s_a"], 10):
+                assert np.allclose(r.poly.interp(s), A.poly.interp(r.local_s(s, k - 1)), atol=1e-6)
+            for s in np.linspace(ch["s_b"], r.offsets[k + 1] - 0.1, 10):
+                assert np.allclose(r.poly.interp(s), B.poly.interp(r.local_s(s, k)), atol=1e-6)
+            assert r.lane_at(ch["s_a"] + 1.0) == A.id and r.lane_at(ch["s_b"] - 1.0) == B.id
+        if r.changes and r.changes[0]["a0"] + 5.0 < r.changes[0]["a_max"]:
+            ch = r.changes[0]
+            before = r.poly.interp(np.linspace(0.0, ch["s_a"], 50))
+            end = r.poly.interp(r.s_end)
+            r.retime_change(0, ch["a0"] + 5.0)
+            assert abs(r.changes[0]["s_a"] - ch["s_a"] - 5.0) < 1e-6
+            assert np.allclose(r.poly.interp(np.linspace(0.0, ch["s_a"], 50)), before, atol=1e-9)
+            assert np.allclose(r.poly.interp(r.s_end), end, atol=1e-6)
+    assert n >= 20
+
+
+def test_expert_lane_change_waits_for_room():
+    """The expert changes lanes only with room in the target lane: on this route a car there makes it move the
+    change on along its window (and slow down to let the car pass) before it changes and completes the route."""
+    from keisim.config import town_config
+
+    cfg = EnvConfig()
+    cfg.town = town_config("suburban")
+    cfg.traffic.box_rule = cfg.traffic.release_hidden = True
+    env = KeiEnv(cfg)
+    env.reset(town_seed=2001, episode_seed=113, render=False)
+    R, tr = env.route, env.world.traffic
+    assert len(R.changes) == 1
+    a0, moved, waited, near = R.changes[0]["a0"], 0, 0, np.inf
+    done = False
+    while not done:
+        _, _, done, info = env.step(env.expert_action())
+        ch = R.changes[0]
+        moved += ch["a0"] != a0
+        a0 = ch["a0"]
+        waited += env.plan["reason"] == "lane_change"
+        if ch["s_a"] <= env.s_ego <= ch["s_b"]:        # changing: the cars in the target lane keep their distance
+            on = [i for i in range(tr.n) if tr.route[i][tr.ri[i]] == ch["to"]]
+            if on:
+                near = min(near, float(np.hypot(*(tr.xy[on] - env.world.ego.xy).T).min()))
+    assert info["status"] == "success", info
+    assert env.s_ego > R.changes[0]["s_b"] and moved > 0 and waited > 0
+    assert near > 6.0
