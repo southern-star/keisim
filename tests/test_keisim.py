@@ -843,28 +843,79 @@ def test_lane_change_routes():
 
 def test_expert_lane_change_waits_for_room():
     """The expert changes lanes only with room in the target lane: on this route a car there makes it move the
-    change on along its window (and slow down to let the car pass) before it changes and completes the route."""
+    change on along its window (and slow down to let the car pass) before it changes, with room behind and ahead,
+    and completes the route without touching the cars in the target lane."""
     from keisim.config import town_config
+    from keisim.geometry import box_corners, obb_overlap
 
     cfg = EnvConfig()
     cfg.town = town_config("suburban")
     cfg.traffic.box_rule = cfg.traffic.release_hidden = True
     env = KeiEnv(cfg)
     env.reset(town_seed=2001, episode_seed=113, render=False)
-    R, tr = env.route, env.world.traffic
+    R, tr, e = env.route, env.world.traffic, env.world.ego
     assert len(R.changes) == 1
-    a0, moved, waited, near = R.changes[0]["a0"], 0, 0, np.inf
+    a0, moved, waited, started, last_bad = R.changes[0]["a0"], 0, 0, False, None
     done = False
     while not done:
+        if not started:
+            _, last_bad = env.expert.lane_change_gap(R, env.s_ego, e.v)
         _, _, done, info = env.step(env.expert_action())
         ch = R.changes[0]
         moved += ch["a0"] != a0
         a0 = ch["a0"]
         waited += env.plan["reason"] == "lane_change"
-        if ch["s_a"] <= env.s_ego <= ch["s_b"]:        # changing: the cars in the target lane keep their distance
+        if ch["s_a"] - 0.3 <= env.s_ego <= ch["s_b"]:
+            if not started:                             # it started with room in the target lane
+                assert last_bad == [], last_bad
+                started = True
             on = [i for i in range(tr.n) if tr.route[i][tr.ri[i]] == ch["to"]]
             if on:
-                near = min(near, float(np.hypot(*(tr.xy[on] - env.world.ego.xy).T).min()))
+                bc = box_corners(tr.xy[on, 0], tr.xy[on, 1], tr.yaw[on], tr.dims[on, 0], tr.dims[on, 1])
+                assert not obb_overlap(e.corners(), bc).any()
     assert info["status"] == "success", info
-    assert env.s_ego > R.changes[0]["s_b"] and moved > 0 and waited > 0
-    assert near > 6.0
+    assert started and env.s_ego > R.changes[0]["s_b"] and moved > 0 and waited > 0
+
+
+def test_npc_lane_changes():
+    """Suburban NPCs change lanes too (the blend of route.py, with room in the target lane): over a minute of an
+    episode many do, smoothly (no jumps beyond their speed, heading along their motion) and without ever overlapping
+    another car. Towns without multi-lane roads have no lane changes (Traffic.has_lc)."""
+    from keisim.config import town_config
+    from keisim.geometry import box_corners, obb_overlap
+
+    cfg = EnvConfig()
+    cfg.town = town_config("roadtypes")
+    env = KeiEnv(cfg)
+    env.reset(town_seed=1105, episode_seed=55, render=False)
+    assert not env.world.traffic.has_lc
+    cfg = EnvConfig()
+    cfg.town = town_config("suburban")
+    cfg.traffic.box_rule = cfg.traffic.release_hidden = True
+    cfg.traffic.max_vehicles *= 2
+    env = KeiEnv(cfg)
+    env.reset(town_seed=2001, episode_seed=113, route_length=600.0, render=False)
+    T, tr = env.world.town, env.world.traffic
+    assert tr.has_lc
+    lane0 = [tr.route[i][tr.ri[i]] for i in range(tr.n)]
+    xy0 = tr.xy.copy()
+    changes = 0
+    for _ in range(600):
+        _, _, done, info = env.step(env.expert_action())
+        assert not done or info["status"] == "success", info
+        lane1 = [tr.route[i][tr.ri[i]] for i in range(tr.n)]
+        changes += sum(lane1[i] in T.lanes[lane0[i]].siblings for i in range(tr.n))
+        d = tr.xy - xy0
+        dist = np.hypot(*d.T)
+        moved = (dist > 0.2) & (dist < 30.0)                     # (respawned cars jump far)
+        assert (dist[dist < 30.0] <= tr.v[dist < 30.0] * 0.1 + 0.5).all()
+        ang = np.abs((np.arctan2(d[:, 1], d[:, 0]) - tr.yaw + np.pi) % (2 * np.pi) - np.pi)
+        assert (ang[moved] < np.radians(12.0)).all()
+        bc = box_corners(tr.xy[:, 0], tr.xy[:, 1], tr.yaw, tr.dims[:, 0], tr.dims[:, 1])
+        near = np.hypot(*(tr.xy[:, None] - tr.xy[None]).transpose(2, 0, 1)) < 7.0
+        for i, j in zip(*np.nonzero(np.triu(near, 1))):
+            assert not obb_overlap(bc[i], bc[j][None])[0], (i, j)
+        lane0, xy0 = lane1, tr.xy.copy()
+        if done:
+            break
+    assert changes >= 10

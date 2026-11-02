@@ -25,6 +25,29 @@ LC_MIN = 25.0            # m: ... shorter where the window is short; no lane cha
 LC_START_MARGIN = 8.0    # m: on the route's first lane, a change starts this far after the ego's start
 LC_FREE_PROB = 0.25      # random_route: chance of a lane change that the next movement does not need
 LC_DS = 0.5              # m: point spacing of the blend
+# room for a lane change (the expert and the NPCs alike): checked from LC_CHECK m before its start; the cars in the
+# target lane need LC_GAP0 m bumper to bumper, plus the follower's speed times LC_T_REAR behind, plus the closing
+# speed times LC_T_CLOSE (ahead: the changing car is faster; behind: the follower is). Without room, a start closer
+# than LC_PUSH m moves on to LC_PUSH_TO m ahead (while the window lasts).
+LC_CHECK = 12.0
+LC_PUSH = 10.0
+LC_PUSH_TO = 15.0
+LC_GAP0 = 2.0
+LC_T_REAR = 0.8
+LC_T_CLOSE = 1.5
+
+
+def blend_weight(u):
+    """Lateral share of the target lane, u in [0, 1] along a lane change (quintic: no lateral speed or acceleration
+    at either end)."""
+    return u * u * u * (10.0 + u * (-15.0 + 6.0 * u))
+
+
+def change_room(dx, v_other, len_other, v, length):
+    """True if a car in the target lane at dx (along that lane, + ahead) leaves room for a change at speed v."""
+    room = (length + len_other) / 2 + LC_GAP0
+    return not (-(room + v_other * LC_T_REAR + max(0.0, v_other - v) * LC_T_CLOSE) < dx <
+                room + max(0.0, v - v_other) * LC_T_CLOSE)
 
 
 def change_window(lane_a, s_lo=0.0):
@@ -36,10 +59,6 @@ def change_window(lane_a, s_lo=0.0):
         return None
     lc = min(LC_LEN, hi - lo)
     return lo, hi - lc, lc
-
-
-def _blend(u):
-    return u * u * u * (10.0 + u * (-15.0 + 6.0 * u))
 
 
 class Route:
@@ -93,7 +112,7 @@ class Route:
                 sa = ch["a0"] + u * ch["lc"]
                 pa = A.poly.interp(sa)
                 pb = lane.poly.interp(sa * lane.length / A.length)
-                w = _blend(u)[:, None]
+                w = blend_weight(u)[:, None]
                 seg = (1.0 - w) * pa + w * pb
                 kk = curvature_of(seg)
                 if len(kk) > 7:

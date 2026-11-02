@@ -13,6 +13,7 @@ import numpy as np
 
 from .config import TL_GREEN, TL_NONE, TL_RED, TL_YELLOW
 from .geometry import world_to_local
+from .route import LC_CHECK, LC_PUSH, LC_PUSH_TO, change_room
 from .traffic import PASS_SPEED, YIELD_GAP, Traffic, corridor_gaps, vehicle_circles
 
 PATH_S = np.arange(1, 11) * 2.0          # label waypoints every 2 m up to 20 m
@@ -30,13 +31,6 @@ STOP_SIGN_ZONE = 1.5                     # m: ... and the stop counts when the e
 STOP_SIGN_V = 0.05                       # m/s: standing (a full stop: 一時停止)
 STOP_SIGN_OVER = 1.5                     # m: a car that rolled this far past the line without stopping stops there;
                                          # further in, the junction's own rules take over
-LC_CHECK = 12.0                          # m: lane change: the target lane is checked from this far before its start
-LC_PUSH = 10.0                           # m: without a gap there, a start closer than this moves on to LC_PUSH_TO ahead
-LC_PUSH_TO = 15.0
-LC_GAP0 = 2.0                            # m: bumper-to-bumper room kept to the cars in the target lane ...
-LC_T_REAR = 0.8                          # s: ... plus the follower's speed times this behind the ego
-LC_T_CLOSE = 1.5                         # s: ... plus the closing speed times this (ahead: the ego is faster; behind:
-                                         # the follower is)
 
 
 def clear_time(d_cross, v, length):
@@ -114,30 +108,23 @@ class Expert:
         return world_to_local(pts, *pose)
 
     def lane_change_gap(self, route, s, v):
-        """The next lane change of the route if it starts within LC_CHECK m of the ego (route position `s`) and has not
-        started: (index in route.changes, [(dx, v)] of the cars in its target lane that leave no room for it, dx
-        along that lane from the ego, + ahead). (None, []) otherwise. The cars on the connectors into the target lane
-        count too (just out of the junction behind). A camera looking ahead cannot see the cars behind: this is a
-        privileged check (mirrors / a rear camera)."""
+        """The next lane change of the route if it has not started and starts within LC_CHECK m of the ego (route
+        position `s`), or within the ego's stopping distance: (index in route.changes, [(dx, v)] of the cars in its
+        target lane that leave no room for it (route.change_room), dx along that lane from the ego, + ahead).
+        (None, []) otherwise. The cars on the connectors into the target lane count too (just out of the junction
+        behind), and the NPCs changing into it (Traffic.lane_cars). A camera looking ahead cannot see the cars behind:
+        this is a privileged check (mirrors / a rear camera)."""
         w = self.env.world
         town = w.town
         for i, ch in enumerate(route.changes):
             if s >= ch["s_a"] - 0.3:
                 continue                                   # under way or done
-            if ch["s_a"] - s > LC_CHECK:
-                break
+            if ch["s_a"] - s > max(LC_CHECK, v * v / (2 * self.B_COMF) + 3.0):
+                break                                      # (checked from where the ego could stop before it)
             A, B = town.lanes[ch["from"]], town.lanes[ch["to"]]
             s_e = route.local_s(s, ch["k"] - 1) * B.length / A.length
-            occ = w.traffic.occupancy()
-            cars = list(occ.get(B.id, []))
-            for c in B.pred:
-                cars += [(sn - town.lanes[c].length, vn, ln) for sn, vn, ln in occ.get(c, [])]
-            bad = []
-            for sn, vn, ln in cars:
-                dx = sn - s_e
-                room = (w.ego.LENGTH + ln) / 2 + LC_GAP0
-                if -(room + vn * LC_T_REAR + max(0.0, vn - v) * LC_T_CLOSE) < dx < room + max(0.0, v - vn) * LC_T_CLOSE:
-                    bad.append((dx, vn))
+            bad = [(sn - s_e, vn) for sn, vn, ln in w.traffic.lane_cars(B.id)
+                   if not change_room(sn - s_e, vn, ln, v, w.ego.LENGTH)]
             return i, bad
         return None, []
 
@@ -232,10 +219,21 @@ class Expert:
                     if v_pass < target:
                         target, reason = v_pass, "pedestrian"
 
+        if tr.lcp:          # an NPC that has begun to change into the ego's lane ahead of it: follow it from then on
+            k_l = route.lane_index_at(s)
+            lane_id = route.lanes[k_l]
+            if w.town.lanes[lane_id].kind == "road":
+                s_l = route.local_s(s, k_l)
+                for j, s_b in tr.changing_into(lane_id):
+                    if s_b > s_l:
+                        g_lc = s_b - s_l - (ego.LENGTH + tr.dims[j, 0]) / 2
+                        v_lc = stop_profile(g_lc - self.GAP0_VEH, self.B_COMF)
+                        if v_lc < target:
+                            target, reason = v_lc, "vehicle"
         if lc_bad:
             ch = route.changes[lc_i]
-            for dx, vn in lc_bad:
-                if dx > 0.0 or vn >= v - 0.5:
+            for dx, vn in lc_bad:              # fall in behind the car ahead (one behind: it passes, or the ego waits)
+                if dx > 0.0:
                     v_let = max(0.0, vn - 1.0)
                     if v_let < target:
                         target, reason = v_let, "lane_change"

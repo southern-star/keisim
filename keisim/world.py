@@ -85,7 +85,7 @@ class World:
             ped_margin = np.where(walk, 0.2, 0.9)
             pass_xy = pd.xy[walk]
         self.traffic.step(dt, self.t, ext_xy, ext_r, ext_o, ext_v, ext_yaw, e.xy, e.v, e.yaw, ego_info,
-                          ped_margin=ped_margin, pass_xy=pass_xy)
+                          ped_margin=ped_margin, pass_xy=pass_xy, ego_len=e.LENGTH, ego_wait=self._ego_lc_wait())
         # pedestrians (crossing is triggered more often just ahead of the ego)
         tr = self.traffic
         veh_xy = np.vstack([tr.xy, e.xy[None]])
@@ -101,6 +101,20 @@ class World:
             trigger = near & (self.rng.random(pd.n) < self.cfg.traffic.ego_cross_rate * dt)
         pd.step(dt, veh_xy, veh_v, veh_yaw, trigger)
         self.t += dt
+
+    def _ego_lc_wait(self):
+        """(target lane, s along it, length) while the ego waits at the end of a lane change window (route.py): the
+        NPCs coming up behind it in the target lane leave it a gap (Traffic._lane_change_gaps)."""
+        r, s, e = self.route, self.ego_s, self.ego
+        if r is None or s is None or not r.changes or e.v >= 1.0:
+            return None
+        for ch in r.changes:
+            if s < ch["s_a"] - 0.3:
+                if ch["a0"] >= ch["a_max"] - 1e-6 and ch["s_a"] - s < 4.0:
+                    A, B = self.town.lanes[ch["from"]], self.town.lanes[ch["to"]]
+                    return ch["to"], r.local_s(s, ch["k"] - 1) * B.length / A.length, e.LENGTH
+                return None
+        return None
 
     # ------------------------------------------------------------ collisions
     def ego_collisions(self):
