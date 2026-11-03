@@ -244,10 +244,15 @@ export function createNavigator(data, lanes = buildLanes(data)) {
 
   const startLane = lanes.filter((L) => L.kind !== 'ramp').reduce((a, b) => (b.len > a.len ? b : a));
   // ramps (lane graph): the approach lanes they are entered from (keisim Town.ramps 'from')
-  const ramps = lanes.filter((L) => L.kind === 'ramp').map((R) => ({ R, A: lanes.find((L) => L.kind === 'road' && L.links.has(R.id)) }));
+  // (first the ones whose approach lane is long enough to start on: no junction before the diverge)
+  const hasRamp = (L) => [...L.links.values()].some((k) => k.lane.kind === 'ramp');
+  const ramps = lanes.filter((L) => L.kind === 'ramp').map((R) => ({ R, A: lanes.find((L) => L.kind === 'road' && L.links.has(R.id)) }))
+    .map((rp) => ({ ...rp, a0: rp.A.links.get(rp.R.id).lo }))
+    .sort((p, q) => (q.a0 >= RAMP_LEAD) - (p.a0 >= RAMP_LEAD));
   /** Start where the ego always starts (the town's longest lane, a quarter in), or with `ramp` (index into the
    *  town's ramps) about RAMP_LEAD m before the ramp's diverge, taking it (keisim route.ramp_route): on its approach
-   *  lane, or on the road before it (through the junction before, straight on if it can). */
+   *  lane, or on the road before it (through the junction before; from a road without a ramp of its own if it can, so
+   *  the car does not pass another ramp's diverge first, then straight on if it can). */
   function start(ramp = null) {
     const rp = ramp === null || !ramps.length ? null : ramps[ramp % ramps.length];
     if (!rp) return reset(startLane, startLane.len * 0.25);
@@ -256,10 +261,11 @@ export function createNavigator(data, lanes = buildLanes(data)) {
       const P = path.last, mv = laneMoves(P.lane, lowOn(P)).find((m) => m.ramp === rp.R && !m.pre);
       if (mv) take(mv, lowOn(P));
     };
-    const a0 = rp.A.links.get(rp.R.id).lo;                 // where the deceleration lane begins
-    const into = rp.A.pred.filter((c) => c.from.kind === 'road' && c.from.len > 30);
+    const a0 = rp.a0;                                       // where the deceleration lane begins
+    const into = rp.A.pred.filter((c) => c.from.kind === 'road' && c.from.len > 30)
+      .sort((p, q) => hasRamp(p.from) - hasRamp(q.from) || (q.turn === 'straight') - (p.turn === 'straight'));
     if (a0 >= RAMP_LEAD || !into.length) return reset(rp.A, Math.max(3.0, Math.min(a0 - RAMP_LEAD, a0 - 30)), takeRamp);
-    const c = into.find((x) => x.turn === 'straight') || into[0];
+    const c = into[0];
     return reset(c.from, Math.max(3.0, c.from.len - (RAMP_LEAD - a0 - c.len)), () => {
       take({ turn: c.turn, src: c.from, pre: null, conn: c }, lowOn(path.last));
       takeRamp();

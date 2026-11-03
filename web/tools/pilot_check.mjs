@@ -12,6 +12,7 @@
 //                              access: npm install --no-save onnxruntime-web@1.20.1)
 //                              [--ramp N]   (towns with ramps: start before ramp N; -1: the usual start)
 //                              [--frames DIR]   (a screenshot at every report: DIR/f0001.png, ...)
+//                              [--only ground,roads,signals,actors]   (build only these modules: fast without a GPU)
 // Needs models/keipilot.onnx (scripts/export_onnx.py) and network access to cdn.jsdelivr.net (onnxruntime-web).
 import fs from 'node:fs';
 import puppeteer from 'puppeteer-core';
@@ -43,7 +44,8 @@ try {
   page.on('pageerror', (e) => console.log(`[pageerror] ${e.message}`));
   const q = new URLSearchParams({ pilot: '1', town, ...(args.ep ? { ep: args.ep } : {}), ...(args.tdir ? { tdir: args.tdir } : {}),
     ...(args.traffic ? { traffic: args.traffic } : {}), ...(args.cars ? { cars: args.cars } : {}),
-    ...(args.model ? { model: args.model } : {}), ...(args.ort ? { ort: args.ort } : {}), ...(args.ramp ? { ramp: args.ramp } : {}) });
+    ...(args.model ? { model: args.model } : {}), ...(args.ort ? { ort: args.ort } : {}), ...(args.ramp ? { ramp: args.ramp } : {}),
+    ...(args.only ? { only: args.only } : {}) });
   const t0 = Date.now();
   await page.goto(`${base}?${q}`, { waitUntil: 'load', timeout: 180000 });
   await page.waitForFunction('window.__pilotRun || /読み込めません/.test(document.getElementById("loadlabel").textContent)', { timeout: 600000, polling: 200 });
