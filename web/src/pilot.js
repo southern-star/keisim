@@ -6,6 +6,9 @@
 // model's route inputs (next turn, target point) come from src/nav.js. Signals switch with KeiSim's timing (split
 // phases, or two-phase signals with right turns that wait for oncoming gaps in the two-phase towns); other cars
 // (src/traffic.js) drive around the town unless switched off (?traffic=0, the HUD button or T, remembered).
+// Towns with 片側2車線 roads and ramps (KeiSim's lane graph, src/lanes.js): the route changes lanes for its next turn,
+// the left turn at a junction with a ramp goes by the ramp, and the drive starts before a ramp (?ramp=N: which one,
+// ?ramp=-1: the usual start); the other cars change lanes and take the ramps too.
 // Keys: ← ↑ → turn at the next junction, Space pause, R back to the start, T other cars (or the buttons).
 import * as THREE from 'three';
 import { buildLanes, createNavigator } from './nav.js';
@@ -165,11 +168,15 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
   try { stored = localStorage.getItem(TRAFFIC_KEY); } catch (e) { /* storage blocked: default on */ }
   let trafficOn = (params.has('traffic') ? params.get('traffic') : stored) !== '0';
   const want = params.get('ep');                            // force 'wasm' or 'webgpu'
+  // ?ort=node_modules/onnxruntime-web/dist/: onnxruntime-web from this site instead of the CDN (offline tests,
+  // tools/pilot_check.mjs --ort); a relative path only, never another origin
+  const ortDir = params.get('ort');
+  const ORT = ortDir && /^[\w-]+(\/[\w.-]+)*\/$/.test(ortDir) && !ortDir.includes('..') ? new URL(ortDir, location.href).href : ORT_URL;
   const adapter = want === 'wasm' ? null : await gpuAdapter();
   const gpu = want === 'webgpu' || !!adapter;
   status('推論エンジンを読み込み中…');
-  const ort = await import(`${ORT_URL}${gpu ? 'ort.webgpu.min.mjs' : 'ort.wasm.min.mjs'}`);
-  ort.env.wasm.wasmPaths = ORT_URL;
+  const ort = await import(`${ORT}${gpu ? 'ort.webgpu.min.mjs' : 'ort.wasm.min.mjs'}`);
+  ort.env.wasm.wasmPaths = ORT;
   if (adapter) ort.env.webgpu.adapter = adapter;
   if (!gpu) ort.env.wasm.proxy = true;                      // CPU inference in a worker, off the render loop
   const MB = (n) => (n / 1e6).toFixed(0);
@@ -194,6 +201,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     <div>速度 <b data-k="v">0</b> km/h　目標 <b data-k="t">–</b> km/h</div>
     <div>信号 <b data-k="tl">–</b> <span data-k="tlp"></span></div>
     <div>次の交差点 <b data-k="cmd">–</b> <span data-k="dist"></span></div>
+    <div class="lc" data-k="lc"></div>
     <div class="btns"><button data-turn="left">← 左折</button><button data-turn="straight">↑ 直進</button><button data-turn="right">右折 →</button><button data-act="pause">一時停止</button><button data-act="reset">最初から</button><button data-act="traffic">周りの車</button></div>
     <div class="traffic" data-k="traffic"></div>
     <div class="msg" data-k="msg"></div>
@@ -216,8 +224,10 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
   let plan = null, action = [0, 0, 1], tick = 0, acc = 0, stillT = 0, gen = 0, standM = STAND_CAP;
   let busy = false, sinceModel = CONTROL_DT, paused = false, inferMs = 0, msg = '', msgT = 0, deviation = 0, resets = 0;
 
+  // lane graph towns with ramps: start before one (keisim route.ramp_route), unless ?ramp=-1
+  const rampStart = nav.ramps && Number(params.get('ramp') ?? 0) >= 0 ? Number(params.get('ramp') ?? 0) : null;
   function reset(why) {
-    const p = nav.start();
+    const p = nav.start(rampStart);
     Object.assign(car, { x: p.x, y: p.y, yaw: p.yaw, v: 0, steer: 0 });
     plan = null; action = [0, 0, 1]; tick = 0; acc = 0; stillT = 0; gen++; standM = STAND_CAP;
     speedCtl.reset(); safety.reset();
@@ -439,7 +449,10 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     el.tl.textContent = k < 0 ? '–' : `● ${TL_NAMES[k]}`;
     el.tl.style.color = k < 0 ? '' : TL_CSS[k];
     el.tlp.textContent = k < 0 ? '' : `${(tl[k] * 100).toFixed(0)}%`;
-    el.cmd.textContent = j ? TURN_JA[j.turn] : '直進';
+    el.cmd.textContent = j ? `${TURN_JA[j.turn]}${j.ramp ? '（ランプ）' : ''}` : '直進';
+    // the route's next lane change (lane graph towns): how far, or under way
+    const ch = nav.changes ? nav.changes().find((c) => c.s1 > nav.s && !c.ramp) : null;
+    el.lc.textContent = !ch || ch.s0 - nav.s > 80 ? '' : ch.s0 > nav.s ? `車線変更 あと ${(ch.s0 - nav.s).toFixed(0)} m` : '車線変更中';
     el.dist.textContent = !j ? '' : inp.dist > 0 ? `あと ${inp.dist.toFixed(0)} m` : '(交差点内)';
     el.msg.textContent = paused ? '一時停止中' : msgT > 0 ? msg : '';
     for (const b of hud.querySelectorAll('[data-turn]')) b.classList.toggle('on', !!j && b.dataset.turn === j.turn);
@@ -461,9 +474,9 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     update, capture, after, backend, reset,
     adapter: backend === 'webgpu' && adapter && adapter.info ? `${adapter.info.vendor} ${adapter.info.architecture}`.trim() : '',
     idle: () => inflight || Promise.resolve(),             // the inference in flight (tests: window.__pilotRun)
-    traffic, lanes,                                         // for tests (tools/pilot_check.mjs --yields)
+    traffic, lanes, nav,                                    // for tests (tools/pilot_check.mjs --yields)
     state: () => ({ car: { ...car }, plan, s: nav.s, inputs: nav.inputs(), inferMs, deviation, resets, t: ctx.time, standM, useStand,
       traffic: trafficOn ? { n: traffic.n, contacts: traffic.contacts, npcContacts: traffic.npcContacts, twoPhase: traffic.twoPhase,
-        stopSignStops: traffic.stopSignStops } : null }),
+        stopSignStops: traffic.stopSignStops, laneChanges: traffic.laneChanges, rampPassages: traffic.rampPassages } : null }),
   };
 }

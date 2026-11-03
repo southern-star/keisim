@@ -53,8 +53,16 @@ SUITES = {
     # 3 vs 8 collisions in 160 routes, within the run-to-run noise of these chaotic long routes
     "long3e": [(t, 9600 + e) for t in range(1010, 1020) for e in range(2)],
     "long3f": [(t, 9700 + e) for t in range(1010, 1020) for e in range(2)],
+    # suburban towns (片側2車線 main roads, longer blocks, two-phase signals): 2.5 km routes in unseen town seeds
+    "suburban": [(t, 9800 + e) for t in range(2000, 2010) for e in range(2)],
+    # the same towns with at-grade left-turn ramps (TownConfig.ramps)
+    "ramps": [(t, 9800 + e) for t in range(2000, 2010) for e in range(2)],
+    # every route takes an at-grade ramp (route.ramp_route): ramps towns that have ramps, 600 m routes starting on
+    # the road before the ramp, on its approach lane or beside it
+    "ramp_routes": [(t, 9900 + e) for t in (2000, 2001, 2002, 2003, 2005, 2008, 2010, 2011, 2012, 2014)
+                    for e in range(3)],
 }
-CAP_SCALE = {"classic": 1, "varied": 2, "twophase": 2, "roadtypes": 2}      # NPC count caps per town style
+CAP_SCALE = {"classic": 1, "varied": 2, "twophase": 2, "roadtypes": 2, "suburban": 2, "ramps": 2}      # NPC count caps per town style
 # per-suite defaults for arguments left unset on the command line
 SUITE_DEFAULTS = {
     "long": {"route_length": 2500.0, "max_steps": 20000},
@@ -68,6 +76,10 @@ SUITE_DEFAULTS = {
               "blocked_timeout": 180.0},
 }
 SUITE_DEFAULTS["long3c"] = SUITE_DEFAULTS["long3d"] = SUITE_DEFAULTS["long3"]
+SUITE_DEFAULTS["suburban"] = {**SUITE_DEFAULTS["long3"], "town_style": "suburban"}
+SUITE_DEFAULTS["ramps"] = {**SUITE_DEFAULTS["long3"], "town_style": "ramps"}
+SUITE_DEFAULTS["ramp_routes"] = {"route_length": 600.0, "max_steps": 6000, "town_style": "ramps", "jam_fixes": True,
+                                 "blocked_timeout": 180.0, "via_ramp": 1}
 SUITE_DEFAULTS["long3e"] = SUITE_DEFAULTS["long3f"] = SUITE_DEFAULTS["long3"]
 
 
@@ -126,7 +138,7 @@ def run_route(job):
         agent = _AGENT
         agent.reset()
     obs = env.reset(town_seed=osm if osm is not None else town, episode_seed=ep, route_length=args["route_length"],
-                    weather=args["weather"])
+                    weather=args["weather"], via_ramp=bool(args.get("via_ramp", False)))
     kv = env._keiview if cfg.renderer == "keiview" else None
     kv_ms = []                                  # KeiView: ego_server's render time per frame (ms)
     kv_town_ms = kv.town_ms if kv is not None else None
@@ -191,7 +203,10 @@ def run_route(job):
         m["status"] = "timeout"
     m.update({"town": town, "episode": ep, "steps": steps, "wall": time.time() - t0,
               "avg_speed": float(np.mean(speeds)) if speeds else 0.0, "weather": env.weather.name,
-              "lights_passed": int(sum(1 for s_stop, _ in env.route.stops if s_stop < env.s_ego))})
+              "lights_passed": int(sum(1 for s_stop, _ in env.route.stops if s_stop < env.s_ego)),
+              "lane_changes": int(sum(1 for c in env.route.changes if c["s_b"] < env.s_ego)),
+              "ramps": int(sum(1 for j in env.route.junctions
+                               if env.world.town.lanes[j["lane"]].kind == "ramp" and j["s_out"] < env.s_ego))})
     if kv is not None:
         m["keiview_ms"] = {"town": kv_town_ms, "frames": len(kv_ms),
                            "mean": float(np.mean(kv_ms)) if kv_ms else None,
@@ -270,6 +285,9 @@ def summarize(results):
         "km": km,
         "avg_speed_kmh": float(np.mean([r["avg_speed"] for r in results]) * 3.6),
         "lights_passed": int(sum(r.get("lights_passed", 0) for r in results)),
+        **({"lane_changes": int(sum(r.get("lane_changes", 0) for r in results))}
+           if any(r.get("lane_changes") for r in results) else {}),
+        **({"ramps": int(sum(r.get("ramps", 0) for r in results))} if any(r.get("ramps") for r in results) else {}),
     }
     kinds = {}
     for r in results:
@@ -323,6 +341,8 @@ def main():
                     default=None, help="--osm_town\'s box (default: the town\'s entry in keisim.realworld.OSM_BOXES)")
     ap.add_argument("--routes", type=int, default=20, help="--osm_town: number of routes (episode seeds 100..)")
     ap.add_argument("--episode0", type=int, default=100, help="--osm_town: first episode seed")
+    ap.add_argument("--via_ramp", type=int, default=None, choices=[0, 1],
+                    help="routes that take a ramp (route.ramp_route; ramps towns; default 0, ramp_routes: 1)")
     args = ap.parse_args()
     if args.osm_town and args.osm_bbox is None:
         from keisim.realworld import OSM_BOXES
@@ -333,7 +353,7 @@ def main():
         SUITE_DEFAULTS["osm"] = {"town_style": "twophase", "jam_fixes": True, "blocked_timeout": 180.0}
         args.suite = "osm"
     dflt = {"route_length": 600.0, "max_steps": 4000, "town_style": "classic", "jam_fixes": 0, "blocked_timeout": 90.0,
-            **SUITE_DEFAULTS.get(args.suite, {})}
+            "via_ramp": 0, **SUITE_DEFAULTS.get(args.suite, {})}
     suite_style, suite_fixes, suite_timeout = dflt["town_style"], int(dflt["jam_fixes"]), dflt["blocked_timeout"]
     for k, v in dflt.items():
         if getattr(args, k) is None:
@@ -372,7 +392,8 @@ def main():
          "dense": args.dense, "renderer": args.renderer, "keiview_roads": args.keiview_roads, "fail_dir": fail_dir,
          "brake_hold": args.brake_hold,
          "red_hold": args.red_hold, "town_style": args.town_style, "jam_fixes": bool(args.jam_fixes),
-         "blocked_timeout": args.blocked_timeout, "osm_bbox": args.osm_bbox, "yield_visible": bool(args.yield_visible)}
+         "blocked_timeout": args.blocked_timeout, "osm_bbox": args.osm_bbox, "yield_visible": bool(args.yield_visible),
+         "via_ramp": bool(args.via_ramp)}
     t0 = time.time()
     ctx = mp.get_context("spawn")
     with ctx.Pool(args.workers) as pool:
