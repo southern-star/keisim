@@ -1,11 +1,12 @@
 """Ego routes: a lane sequence flattened into one arc-length parametrised path.
 
-Lane changes (multi-lane roads, Town lanes with `siblings`): two lanes of the same road and direction next to each
-other in the sequence, [A, B], mean "drive on A, change to B". The path leaves A at A-local `a0` and blends into B
-over `lc` metres (a quintic lateral profile: zero lateral speed and acceleration at both ends), then follows B. The
-change sits in A's window [a_min, a_max] (LC_ENTRY after the junction it came from, done LC_EXIT before the end of
-the road: 20 m of solid lane line before a signal + the stop line); the expert may move it later in the window
-(Route.retime_change) while it waits for a gap in B.
+Lane changes (Lane.links: the sibling lanes of multi-lane roads, and the ramps of Town._make_ramps): two linked
+lanes next to each other in the sequence, [A, B], mean "drive on A, change to B". The path leaves A at A-local `a0`
+and blends into B over `lc` metres (a quintic lateral profile: zero lateral speed and acceleration at both ends), then
+follows B. The change sits in A's window [a_min, a_max] (siblings: LC_ENTRY after the junction it came from, done
+LC_EXIT before the end of the road: 20 m of solid lane line before a signal + the stop line; ramps: where the two
+lanes run side by side); the expert may move it later in the window (Route.retime_change) while it waits for a gap in
+B. A ramp in the sequence, [A, R, C], is the left turn at its junction (an entry of Route.junctions).
 """
 from __future__ import annotations
 
@@ -50,11 +51,25 @@ def change_room(dx, v_other, len_other, v, length):
                 room + max(0.0, v - v_other) * LC_T_CLOSE)
 
 
-def change_window(lane_a, s_lo=0.0):
-    """(a_min, a_max, lc): where on `lane_a` a change to a sibling lane can start, and its length; None if the lane
-    is too short (from A-local s_lo on)."""
-    lo = max(LC_ENTRY, s_lo)
-    hi = lane_a.length - LC_EXIT
+def link_map(lane_a, lane_b, s):
+    """A-local arc length(s) `s` -> lane_b's, for a change from lane_a into lane_b (Lane.links)."""
+    lk = lane_a.links.get(lane_b.id)
+    if lk is None or lk[3] is None:                 # siblings: the whole lane, scaled
+        return s * lane_b.length / lane_a.length
+    return lk[2] + (s - lk[0]) * lk[3]
+
+
+def change_window(lane_a, s_lo=0.0, lane_b=None):
+    """(a_min, a_max, lc): where on `lane_a` a change into lane_b can start, and its length; None if there is no
+    room for one (from A-local s_lo on). Siblings (or lane_b None): from LC_ENTRY after the lane's start to LC_EXIT
+    before its end; a ramp's lane: along the stretch where the two run side by side (Lane.links)."""
+    lk = None if lane_b is None else lane_a.links.get(lane_b.id)
+    if lk is None or lk[3] is None:
+        lo = max(LC_ENTRY, s_lo)
+        hi = lane_a.length - LC_EXIT
+    else:
+        lo = max(lk[0], s_lo)
+        hi = lk[1]
     if hi - lo < LC_MIN:
         return None
     lc = min(LC_LEN, hi - lo)
@@ -75,7 +90,7 @@ class Route:
         if k == 0:
             return False
         a, b = self.town.lanes[self.lanes[k - 1]], self.town.lanes[self.lanes[k]]
-        return b.id in getattr(a, "siblings", ())
+        return b.id in getattr(a, "links", ())
 
     def _build(self):
         town = self.town
@@ -87,7 +102,7 @@ class Route:
             if not self._is_change(k):
                 continue
             A, B = town.lanes[self.lanes[k - 1]], town.lanes[self.lanes[k]]
-            win = change_window(A, lo[k - 1] + (self.s_start + LC_START_MARGIN if k - 1 == 0 else 0.0))
+            win = change_window(A, lo[k - 1] + (self.s_start + LC_START_MARGIN if k - 1 == 0 else 0.0), B)
             if win is None:                    # too short: change over what is left (rare; random_route avoids it)
                 a_min = a_max = max(lo[k - 1], min(A.length - LC_MIN, A.length / 2))
                 lc = max(1.0, min(LC_MIN, A.length - a_min - 1.0))
@@ -95,7 +110,7 @@ class Route:
                 a_min, a_max, lc = win
             a0 = float(np.clip(self._change_at.get(k, a_min), a_min, a_max))
             hi[k - 1] = a0
-            lo[k] = (a0 + lc) * B.length / A.length
+            lo[k] = link_map(A, B, a0 + lc)
             self.changes.append({"k": k, "from": A.id, "to": B.id, "a0": a0, "lc": lc, "a_min": a_min,
                                  "a_max": a_max})
         pts, curv, offs, s0 = [], [], [], []
@@ -111,7 +126,7 @@ class Route:
                 u = np.linspace(0.0, 1.0, m + 1)
                 sa = ch["a0"] + u * ch["lc"]
                 pa = A.poly.interp(sa)
-                pb = lane.poly.interp(sa * lane.length / A.length)
+                pb = lane.poly.interp(link_map(A, lane, sa))
                 w = blend_weight(u)[:, None]
                 seg = (1.0 - w) * pa + w * pb
                 kk = curvature_of(seg)
@@ -152,6 +167,7 @@ class Route:
         self.junctions = []
         self.stops = []
         self.stop_signs = []            # (s, lane id) of the 止まれ stop lines along the route (Town.from_graph)
+        by_k = {c["k"]: c for c in self.changes}
         for k, lid in enumerate(self.lanes):
             lane = town.lanes[lid]
             if lane.kind == "conn":
@@ -159,6 +175,9 @@ class Route:
                 self.junctions.append({"s_in": offs[k], "s_out": offs[k] + lane.length, "junction": J.id,
                                        "turn": lane.turn, "signalized": J.signalized, "lane": lid,
                                        "decision": len(J.arms) >= 3})
+            elif lane.kind == "ramp" and k in by_k and k + 1 in by_k:   # a ramp: the turn it makes at its junction
+                self.junctions.append({"s_in": by_k[k]["s_a"], "s_out": by_k[k + 1]["s_b"], "junction": lane.junction,
+                                       "turn": lane.turn, "signalized": False, "lane": lid, "decision": True})
             if lane.stop_s is not None and lo[k] <= lane.stop_s <= hi[k]:
                 self.stops.append((offs[k] + lane.stop_s - s0[k], lid))
             if lane.stop_sign_s is not None and lo[k] <= lane.stop_sign_s <= hi[k]:
@@ -232,6 +251,52 @@ class Route:
         return v
 
 
+def lane_moves(town, cur, s_lo=0.0, truck_lanes=None):
+    """The movements from road lane `cur` at the end of its road, for a car that may change lanes from cur-local
+    s_lo on: [(turn, src, lanes)], src the lane it is made from (cur, or a sibling it changes to first), lanes the
+    route's next lanes: [src, if it changes] + [the junction's connector], or + [a ramp, the lane it merges into]
+    (Town._make_ramps). A change only where its window fits (a ramp after a lane change: from where that ends).
+    truck_lanes: only connectors into these lanes (unless none is) and ramps into them."""
+    lanes = town.lanes
+    srcs = [(cur, s_lo)]
+    for b in cur.siblings:
+        win = change_window(cur, s_lo, lanes[b])
+        if win is not None:
+            srcs.append((lanes[b], link_map(cur, lanes[b], win[0] + win[2])))
+    moves = []
+    for src, lo in srcs:
+        pre = [] if src is cur else [src.id]
+        sc = src.succ
+        if truck_lanes:
+            sc = [c for c in sc if lanes[c].succ[0] in truck_lanes] or sc
+        moves += [(lanes[c].turn, src.id, pre + [c]) for c in sc]
+        for rid in src.links:
+            R = lanes[rid]
+            if R.kind != "ramp" or change_window(src, lo, R) is None:
+                continue
+            (cid,) = R.links
+            if not truck_lanes or cid in truck_lanes:
+                moves.append((R.turn, src.id, pre + [rid, cid]))
+    return moves
+
+
+def pick_move(rng, moves, cur_id, weights=None):
+    """The movement first (weights per turn, or uniform), then the lane: the current one if it has it (else a change;
+    LC_FREE_PROB of the time a change it does not need). Returns (src, lanes) of lane_moves."""
+    turns = [t for t in ("left", "straight", "right") if any(m[0] == t for m in moves)]
+    if weights is None:
+        t = turns[rng.integers(len(turns))]
+    else:
+        w = np.array([weights.get(t, 1.0) for t in turns], float)
+        t = turns[rng.choice(len(turns), p=w / w.sum())]
+    opts = [m for m in moves if m[0] == t]
+    own = [m for m in opts if m[1] == cur_id]
+    other = [m for m in opts if m[1] != cur_id]
+    pick = own if own and (not other or rng.random() >= LC_FREE_PROB) else other
+    _, src, seq = pick[rng.integers(len(pick))]
+    return src, seq
+
+
 def random_route(town, rng, length, start_lane=None, s_start=None, turn_weights=None):
     """Random walk through the lane graph with a mild preference for turns. On multi-lane roads the movement at the
     next junction is drawn first (from all lanes of the road), then the lane: the current one if it has that
@@ -253,33 +318,29 @@ def random_route(town, rng, length, start_lane=None, s_start=None, turn_weights=
         succ = cur.succ
         if not succ:
             break
-        sib = [b for b in getattr(cur, "siblings", ()) if change_window(cur, s_lo) is not None]
-        if sib:
-            moves = [(c, src) for src in [cur.id] + sib for c in town.lanes[src].succ]
-            turns = [t for t in ("left", "straight", "right") if any(town.lanes[c].turn == t for c, _ in moves)]
-            w = np.array([turn_weights.get(t, 1.0) for t in turns], float)
-            t = turns[rng.choice(len(turns), p=w / w.sum())]
-            opts = [m for m in moves if town.lanes[m[0]].turn == t]
-            own = [m for m in opts if m[1] == cur.id]
-            other = [m for m in opts if m[1] != cur.id]
-            pick = own if own and (not other or rng.random() >= LC_FREE_PROB) else other
-            c, src = pick[rng.integers(len(pick))]
-            if src != cur.id:
-                lanes.append(src)                  # change to the lane that has the movement
-        else:
+        moves = lane_moves(town, cur, s_lo) if cur.links else []
+        if any(src != cur.id or town.lanes[seq[-1]].kind == "road" for _, src, seq in moves):
+            src, seq = pick_move(rng, moves, cur.id, turn_weights)
+        else:                                      # a single lane, no ramp: as before lane changes
             w = np.array([turn_weights.get(town.lanes[c].turn, 1.0) for c in succ], float)
-            c = succ[rng.choice(len(succ), p=w / w.sum())]
-        lanes.append(c)
-        total += town.lanes[c].length
-        nxt = town.lanes[c].succ[0]
-        lanes.append(nxt)
-        total += town.lanes[nxt].length
-        s_lo = 0.0
+            seq = [succ[rng.choice(len(succ), p=w / w.sum())]]
+        lanes.extend(seq)
+        if town.lanes[seq[-1]].kind == "conn":
+            c = seq[-1]
+            total += town.lanes[c].length
+            nxt = town.lanes[c].succ[0]
+            lanes.append(nxt)
+            total += town.lanes[nxt].length
+            s_lo = 0.0
+        else:                                      # by a ramp: the lane merged into, from the end of the ramp
+            R, C = town.lanes[seq[-2]], town.lanes[seq[-1]]
+            total += R.length + C.length
+            s_lo = link_map(R, C, R.length)
     r = Route(town, lanes, s_start)
     r.s_end = float(min(r.s_end, s_start + max(length, 50.0) + 0.0)) if total > length + 40 else r.s_end
     # do not end inside a junction: push the end to the next road lane if needed
     k = r.lane_index_at(r.s_end)
-    if town.lanes[r.lanes[k]].kind == "conn":
+    if town.lanes[r.lanes[k]].kind in ("conn", "ramp"):
         if k + 1 < len(r.lanes):
             r.s_end = float(min(r.poly.length - 1.0, r.offsets[k + 1] + 12.0))
     return r

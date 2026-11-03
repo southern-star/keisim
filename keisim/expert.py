@@ -13,7 +13,7 @@ import numpy as np
 
 from .config import TL_GREEN, TL_NONE, TL_RED, TL_YELLOW
 from .geometry import world_to_local
-from .route import LC_CHECK, LC_PUSH, LC_PUSH_TO, change_room
+from .route import LC_CHECK, LC_PUSH, LC_PUSH_TO, change_room, link_map
 from .traffic import PASS_SPEED, YIELD_GAP, Traffic, corridor_gaps, vehicle_circles
 
 PATH_S = np.arange(1, 11) * 2.0          # label waypoints every 2 m up to 20 m
@@ -122,7 +122,7 @@ class Expert:
             if ch["s_a"] - s > max(LC_CHECK, v * v / (2 * self.B_COMF) + 3.0):
                 break                                      # (checked from where the ego could stop before it)
             A, B = town.lanes[ch["from"]], town.lanes[ch["to"]]
-            s_e = route.local_s(s, ch["k"] - 1) * B.length / A.length
+            s_e = link_map(A, B, route.local_s(s, ch["k"] - 1))
             bad = [(sn - s_e, vn) for sn, vn, ln in w.traffic.lane_cars(B.id)
                    if not change_room(sn - s_e, vn, ln, v, w.ego.LENGTH)]
             return i, bad

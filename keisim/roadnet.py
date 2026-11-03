@@ -30,6 +30,11 @@ MIRROR_PASS = 3.6        # m: a right turn whose centre line runs this close to 
 STOP_SIGN_SETBACK = 2.0  # m: the 止まれ stop line of a minor road's approach to a priority crossing, before its lane's end
 TOMARE_GAP, TOMARE_LEN = 0.8, 2.6   # m: the painted 止まれ ends this far before the stop line and is this long
 TOMARE_CHAR_W, TOMARE_SPACE = 0.72, 0.12   # m: width of each of its three characters across the lane, and between them
+# at-grade left-turn ramps (Town._make_ramps), A-local / C-local metres: the ramp leaves the approach lane A
+# RAMP_SETBACK before its end (the stop line is 5 m before it) after RAMP_DEC of deceleration lane beside it (reached
+# by a RAMP_TAPER_IN taper), goes round the corner and runs RAMP_ACC beside the lane C it turns into (from
+# RAMP_SETBACK after C's start), then tapers into C over RAMP_TAPER_OUT
+RAMP_SETBACK, RAMP_DEC, RAMP_TAPER_IN, RAMP_ACC, RAMP_TAPER_OUT = 18.0, 45.0, 15.0, 45.0, 20.0
 NARROW_CLEAR = 1.9       # m: ... and the outer one waits with its front corners and sides this far from the inner
                          # one's centre line (its half width + the swing of its body in the turn + a margin)
 
@@ -60,6 +65,10 @@ class Lane:
         self.lane_index = 0               # road lanes: 0 = kerb lane, nlanes - 1 = the lane next to the centre line
         self.nlanes = 1                   # road lanes: lanes of this direction of the road
         self.siblings: list[int] = []     # road lanes: the other lanes of this direction (lane changes, route.py)
+        # lanes a car may change into from this one: id -> (lo, hi, lo there, scale): this lane's [lo, hi] runs beside
+        # the other one from `lo there` on (scale: its metres per metre here; None: siblings, the whole lane, scaled
+        # to the other's length). Siblings, and the ramps' deceleration / acceleration lanes (Town._make_ramps).
+        self.links: dict = {}
         self.stop_s = None                # arc length of the stop line
         self.stop_sign_s = None           # arc length of a 止まれ stop line (minor road before a priority crossing)
         self.signal = None                # (junction id, phase index)
@@ -383,6 +392,7 @@ class Town:
         self.stop_sign_posts: list[dict] = []   # 止まれ signs: {lane, pole (x, y), yaw (facing the driver), z}
         self._building_edges = None          # building_edges(), built on first use
         self.max_vehicle_dims = None         # (length, width) cap of the NPC cars (keisim.realworld: narrow roads)
+        self.ramps: list[dict] = []          # at-grade left-turn ramps (_make_ramps)
 
     # ------------------------------------------------------------------ build
     def _build(self):
@@ -550,6 +560,7 @@ class Town:
             for group in (road.lanes_ab, road.lanes_ba):
                 for lid in group:
                     self.lanes[lid].siblings = [o for o in group if o != lid]
+                    self.lanes[lid].links = {o: (0.0, self.lanes[lid].length, 0.0, None) for o in group if o != lid}
 
         # arms: which lanes come in / go out, kerb lane first (ins / outs); in / out: the kerb lane (-1: none, the
         # far end of a one-way road)
@@ -567,6 +578,8 @@ class Town:
                 arm["out"] = arm["outs"][0] if arm["outs"] else -1
             J.incoming = [lid for a in J.arms for lid in a["ins"]]
             J.outgoing = [lid for a in J.arms for lid in a["outs"]]
+
+        ramp_skip = self._plan_ramps()               # (approach lane, exit lane) of the left turns ramps take over
 
         # ---- junction connectors + polygons + signals
         def connect(J, lin, lout, turn):
@@ -595,7 +608,8 @@ class Town:
                         moves.append((arm_out, turn))
                         kerb_turn = turn if cfg.left_hand_traffic else {"left": "right", "right": "left"}.get(turn, turn)
                         for lid_out in self._lane_map(len(J.arms), k, len(arm_in["ins"]), kerb_turn, arm_out["outs"]):
-                            connect(J, lin, self.lanes[lid_out], turn)
+                            if (lin.id, lid_out) not in ramp_skip:
+                                connect(J, lin, self.lanes[lid_out], turn)
                     if not lin.succ:                           # a lane that no movement suits: it goes on anyway
                         # (into the nearest lane; rare on generated towns), an inner lane not across the kerb lane
                         kerb_side = "left" if cfg.left_hand_traffic else "right"
@@ -644,6 +658,7 @@ class Town:
             if la.lane_index == 0 and lb.lane_index == 0:      # curbs and sidewalks only along the kerb lanes' turns
                 self.conn_curb_polys.append(self.strip(lane.pts, hl + 0.2))
                 self.conn_walk_polys.append(self.strip(lane.pts, hl + min(ra.sidewalk, rb.sidewalk)))
+        self._make_ramps()
         self._make_bbox()
         self._make_raster()
         self._make_markings()
@@ -651,6 +666,129 @@ class Town:
         self._make_stop_sign_posts()
         self._make_buildings_and_trees(buildings)
         self._finalize_static()
+
+    # ------------------------------------------------------------------ ramps
+    def _ramp_path(self, A, C):
+        """Centre line of a left-turn ramp from approach lane A to exit lane C, one lane width outside both: the
+        taper and deceleration lane beside A, the curve round the corner, the acceleration lane and taper beside C.
+        Also the ends of its pieces (for the links) and the A- / C-local spans."""
+        side = 1.0 if self.cfg.left_hand_traffic else -1.0
+        w = A.width
+
+        def beside(lane, ss, off):
+            p = lane.poly.interp(ss)
+            h = lane.poly.heading(ss)
+            return p + np.stack([-np.sin(h), np.cos(h)], -1) * (side * off)[:, None]
+
+        a_hi = A.length - RAMP_SETBACK
+        a_lo = a_hi - RAMP_DEC
+        t0 = a_lo - RAMP_TAPER_IN
+        c_lo = RAMP_SETBACK
+        c_hi = c_lo + RAMP_ACC
+        c_end = c_hi + RAMP_TAPER_OUT
+        ds = 0.5
+        st = np.arange(t0, a_lo, ds)
+        taper_in = beside(A, st, w * (3 - 2 * ((st - t0) / RAMP_TAPER_IN)) * ((st - t0) / RAMP_TAPER_IN) ** 2)
+        dec = beside(A, np.linspace(a_lo, a_hi, int(RAMP_DEC / ds) + 1), np.full(int(RAMP_DEC / ds) + 1, w))
+        acc = beside(C, np.linspace(c_lo, c_hi, int(RAMP_ACC / ds) + 1), np.full(int(RAMP_ACC / ds) + 1, w))
+        sc = np.arange(c_hi + ds, c_end + 1e-9, ds)
+        u = (sc - c_hi) / RAMP_TAPER_OUT
+        taper_out = beside(C, sc, w * (1 - (3 - 2 * u) * u * u))
+        h0 = float(A.poly.heading(a_hi))
+        h1 = float(C.poly.heading(c_lo))
+        curve = arc_bezier(dec[-1], h0, acc[0], h1, 64)
+        pts = np.concatenate([taper_in, dec, curve[1:-1], acc, taper_out])
+        return pts, (dec[0], dec[-1], acc[0], acc[-1]), (t0, a_lo, a_hi), (c_lo, c_hi, c_end), curve
+
+    def _plan_ramps(self):
+        """Corners of signalised junctions that get an at-grade left-turn ramp (TownConfig.ramps, own random stream):
+        where the kerb lane A of a 2-lane main road's approach turns left (60-120 deg) into the kerb lane C of a main
+        road or street, A also goes straight on there, both lanes are long enough, the ramp keeps clear of the
+        junction and of other roads, and no other ramp uses the same stretch of A or C. Returns the left turns
+        (A, C) the ramps take over (no connector at the junction)."""
+        self._ramp_plans = []
+        if self.cfg.ramps <= 0.0:
+            return set()
+        rng = np.random.default_rng([self.seed, 0x72616D70])
+        need_a = RAMP_SETBACK + RAMP_DEC + RAMP_TAPER_IN + 12.0
+        need_c = RAMP_SETBACK + RAMP_ACC + RAMP_TAPER_OUT + 25.0
+        used = {}                                   # lane -> [(s0, s1)] taken by a ramp
+        for J in self.junctions:
+            if not J.signalized:
+                continue
+            for arm_in in J.arms:
+                if len(arm_in["ins"]) < 2:
+                    continue
+                A = self.lanes[arm_in["ins"][0]]
+                straight = left = None
+                for arm_out in J.arms:
+                    if arm_out is arm_in or not arm_out["outs"]:
+                        continue
+                    dh = float(wrap(self.lanes[arm_out["outs"][0]].heading[0] - A.heading[-1]))
+                    kerb = dh if self.cfg.left_hand_traffic else -dh
+                    if abs(dh) <= 0.5:
+                        straight = arm_out
+                    elif math.radians(60) <= kerb <= math.radians(120):
+                        left = arm_out
+                if straight is None or left is None:
+                    continue
+                C = self.lanes[left["outs"][0]]
+                if self.roads[C.road].kind not in ("main", "street") or A.length < need_a or C.length < need_c:
+                    continue
+                if rng.random() >= self.cfg.ramps:
+                    continue
+                pts, ends, a_span, c_span, curve = self._ramp_path(A, C)
+                if any(s0 < a_span[2] + RAMP_SETBACK and a_span[0] < s1 for s0, s1 in used.get(A.id, ())) or \
+                        any(s0 < c_span[2] and 0.0 < s1 for s0, s1 in used.get(C.id, ())):
+                    continue
+                # clear of the junction's own surface, and of every other road
+                if np.min(np.hypot(*(curve - J.pos).T)) < J.radius + A.width:
+                    continue
+                if any(min(np.min(np.hypot(*(rd.center[::4, None] - curve[None, ::4]).transpose(2, 0, 1))), 1e9)
+                       < rd.spec.half_width + A.width for rd in self.roads if rd.id not in (A.road, C.road)):
+                    continue
+                used.setdefault(A.id, []).append((a_span[0], A.length))
+                used.setdefault(C.id, []).append((0.0, c_span[2]))
+                self._ramp_plans.append((J.id, A.id, C.id))
+        return {(a, c) for _, a, c in self._ramp_plans}
+
+    def _make_ramps(self):
+        """The planned ramps (_plan_ramps): a 'ramp' lane each (no predecessor or successor: cars change into it from
+        A and out of it into C, Lane.links over the stretches beside them), its road / curb / sidewalk strips (with
+        the junctions' connector strips: every renderer and raster draws them), and self.ramps."""
+        side = 1.0 if self.cfg.left_hand_traffic else -1.0
+        for jid, aid, cid in self._ramp_plans:
+            A, C = self.lanes[aid], self.lanes[cid]
+            ra, rc = self.roads[A.road].spec, self.roads[C.road].spec
+            pts, ends, a_span, c_span, _ = self._ramp_path(A, C)
+            R = Lane(len(self.lanes), pts, "ramp", min(A.speed_limit, C.speed_limit), A.width)
+            R.junction = jid
+            R.turn = "left" if self.cfg.left_hand_traffic else "right"
+            R.yields, R.wait_s = [], None
+            r = [R.poly.project(np.asarray(e))[0] for e in ends]      # R-local ends of its pieces
+            t0, a_lo, a_hi = a_span
+            c_lo, c_hi, c_end = c_span
+            A.links[R.id] = (a_lo, a_hi, r[0], (r[1] - r[0]) / (a_hi - a_lo))
+            R.links[C.id] = (r[2], R.length, c_lo, (c_hi - c_lo) / (r[3] - r[2]))
+            self.lanes.append(R)
+            shoulder = max(ra.shoulder, rc.shoulder)
+            sidewalk = max(min(ra.sidewalk, rc.sidewalk), 1.5)
+            hl = R.width / 2 + shoulder
+            self.conn_road_polys.append(self.strip(R.pts, hl))
+            self.conn_curb_polys.append(self.strip(R.pts, hl + 0.2))
+            self.conn_walk_polys.append(self.strip(R.pts, hl + sidewalk))
+            self.ramps.append({"lane": R.id, "junction": jid, "from": aid, "to": cid, "r_spans": r,
+                               "a_span": a_span, "c_span": c_span, "half": hl, "side": side})
+
+    def on_ramp(self, pts, margin=0.0):
+        """True for points on a ramp's road surface (strip of half width + margin)."""
+        pts = np.asarray(pts, float).reshape(-1, 2)
+        out = np.zeros(len(pts), bool)
+        for rp in self.ramps:
+            R = self.lanes[rp["lane"]]
+            d = np.min(np.hypot(*(pts[:, None] - R.pts[None, ::2]).transpose(2, 0, 1)), axis=1)
+            out |= d < rp["half"] + margin
+        return out
 
     # ------------------------------------------------------------------ helpers
     def _road_specs(self, edges, nx, ny):
@@ -823,13 +961,17 @@ class Town:
             c = road.center
             L = road.length
             s = road.poly.s
-            # edge lines (solid)
-            if rs.edge == "classic":
+            # edge lines (solid; not where a ramp's deceleration / acceleration lane runs beside the road)
+            if rs.edge in ("classic", "lane"):
                 for sgn in (1, -1):
-                    self.markings.append(strip(c, sgn * (hw - 0.35), mw))
-            elif rs.edge == "lane":                 # just outside the lane (the 路側帯 line on residential roads)
-                for sgn in (1, -1):
-                    self.markings.append(strip(c, sgn * (rs.lane_outer + mw / 2 + 0.05), mw))
+                    off = sgn * ((hw - 0.35) if rs.edge == "classic" else (rs.lane_outer + mw / 2 + 0.05))
+                    if not self.ramps:
+                        self.markings.append(strip(c, off, mw))
+                        continue
+                    keep = ~self.on_ramp(offset_polyline(c, off), 0.3)
+                    for run in np.split(np.arange(len(c)), np.nonzero(np.diff(keep.astype(int)))[0] + 1):
+                        if keep[run[0]] and len(run) >= 2:
+                            self.markings.append(strip(c[run], off, mw))
             # centre line: solid near junctions, dashed elsewhere (main roads: solid yellow, no overtaking)
             if rs.center == "yellow":
                 self.markings_yellow.append(strip(c, 0.0, mw))
@@ -898,6 +1040,51 @@ class Town:
                 while k + 0.45 <= hw - 0.3:
                     self.crosswalks.append(strip(cc, k + 0.225, 0.45))
                     k += 0.9
+
+        for rp in self.ramps:
+            self._ramp_markings(rp, strip, mw)
+
+    def _ramp_markings(self, rp, strip, mw):
+        """A ramp's paint: the wide dashed line between it and the lane beside it (車線境界線 of a deceleration /
+        acceleration lane: 0.3 m, 3 m / 3 m), its outer edge line, the inner edge line along the curve, and a zebra
+        crossing where the sidewalk crosses the curve (Town._finalize_static moves the walkway there)."""
+        R = self.lanes[rp["lane"]]
+        side = rp["side"]
+        s, pts = R.s, R.pts
+        r0, r1, r2, r3 = rp["r_spans"]
+        w = R.width
+        out_off = side * (w / 2 + mw / 2 + 0.05)
+        self.markings.append(strip(pts, out_off, mw))                       # outer edge
+        m = (s >= r1) & (s <= r2)
+        if m.sum() >= 2:
+            self.markings.append(strip(pts[m], -out_off, mw))               # inner edge along the curve
+        for lo, hi in ((r0, r1), (r2, r3)):
+            t = lo
+            while t < hi - 1.0:
+                m = (s >= t) & (s <= min(t + 3.0, hi))
+                if m.sum() >= 2:
+                    self.markings.append(strip(pts[m], -side * w / 2, 0.3))
+                t += 6.0
+        # zebra across the curve where the sidewalks of A's and C's roads would run through it
+        for lane_id, road in ((rp["from"], self.roads[self.lanes[rp["from"]].road]),
+                              (rp["to"], self.roads[self.lanes[rp["to"]].road])):
+            ww = road.spec.walkway()
+            if ww is None:
+                continue
+            L = self.lanes[lane_id]
+            sgn = side if lane_id in road.lanes_ab else -side
+            line = offset_polyline(road.center, sgn * ww[0])
+            d = np.hypot(*(pts[:, None] - line[None, ::2]).transpose(2, 0, 1)).min(axis=1)
+            cand = np.nonzero((s >= r1) & (s <= r2) & (d < 0.6))[0]
+            if not len(cand):
+                continue
+            sc = float(s[cand[np.argmin(d[cand])]])
+            m = (s >= sc - 1.7) & (s <= sc + 1.7)
+            k = -(w / 2 + 0.2)
+            while k + 0.45 <= w / 2 + 0.2:
+                self.crosswalks.append(strip(pts[m], k + 0.225, 0.45))
+                k += 0.9
+            rp.setdefault("crossings", []).append(sc)
 
     def _make_yields(self):
         """Who gives way inside a junction. Connectors of approaches that are green at the same time (opposite
@@ -1229,7 +1416,8 @@ class Town:
                             "ch": float(rng.uniform(2.2, 3.6)),
                             "color": np.array([40 * g, 125 * g, 60 * g]) * rng.uniform(0.8, 1.2, 3),
                         }
-                        if not any(math.hypot(*(pos - sp["pole"])) < 1.5 for sp in self.stop_sign_posts):
+                        if not any(math.hypot(*(pos - sp["pole"])) < 1.5 for sp in self.stop_sign_posts) and \
+                                not (self.ramps and self.on_ramp(pos, 1.5)[0]):
                             self.trees.append(tree)
                     s += float(rng.uniform(9.0, 16.0))
 
@@ -1271,6 +1459,8 @@ class Town:
                 pts = offset_polyline(road.center, sgn * off)
                 self.walkways.append({"road": road.id, "side": sgn, "poly": Polyline(pts), "lat": lat,
                                       "in_road": in_road})
+        if self.ramps:
+            self._walkways_round_ramps()
         self.in_road_walkways = any(w["in_road"] for w in self.walkways)
         self.narrow_lanes = any(self.lanes[l].width < NARROW_LANE for l in self.road_lanes)
         # road lanes trucks may use: wide lanes from which wide lanes go on (prune dead ends of the wide network)
@@ -1286,6 +1476,41 @@ class Town:
                         changed = True
             self.truck_lanes = ok or None
         self.speed_varies = len({l.speed_limit for l in self.lanes}) > 1
+
+    def _walkways_round_ramps(self):
+        """The sidewalk paths beside a ramp move out to its far side (the ramp's own sidewalk). Where a path would
+        come back to the corner across the ramp it is cut instead: the people on the corner island and those on the
+        ramp's far side each walk their own piece (and turn at its ends), nobody walks across the ramp."""
+        out = []
+        for w in self.walkways:
+            road = self.roads[w["road"]]
+            pts = w["poly"].pts.copy()
+            on = self.on_ramp(pts, 0.6)
+            if not on.any():
+                out.append(w)
+                continue
+            hc = headings_of(road.center)                  # (the path is the centre line offset: same points)
+            n_all = np.stack([-np.sin(hc), np.cos(hc)], -1)
+            keep = np.ones(len(pts), bool)
+            for i in np.nonzero(on)[0]:
+                n = n_all[min(i, len(n_all) - 1)] * w["side"]
+                for t in np.arange(0.5, 9.01, 0.5):
+                    q = pts[i] + n * t
+                    if not self.on_ramp(q, 1.2)[0]:
+                        pts[i] = q
+                        break
+                else:
+                    keep[i] = False
+            # pieces: no jumps (where the path came back across the ramp) and no stretch over a ramp
+            mids = (pts[1:] + pts[:-1]) / 2
+            cut = (np.hypot(*np.diff(pts, axis=0).T) > 1.5) | self.on_ramp(mids, 0.3) | ~keep[1:] | ~keep[:-1]
+            start = 0
+            for j in list(np.nonzero(cut)[0]) + [len(pts) - 1]:
+                piece = pts[start:j + 1]
+                if len(piece) >= 2 and keep[start] and np.hypot(*np.diff(piece, axis=0).T).sum() >= 5.0:
+                    out.append({**w, "poly": Polyline(piece)})
+                start = j + 1
+        self.walkways = out
 
     # ------------------------------------------------------------------ queries
     def signal_state_for_lane(self, lane_id, t):

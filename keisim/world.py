@@ -7,6 +7,7 @@ import numpy as np
 
 from .config import EnvConfig
 from .geometry import box_corners, obb_overlap
+from .route import link_map
 from .render.camera import SceneState
 from .traffic import Pedestrians, Traffic, vehicle_circles
 from .vehicle import EgoVehicle
@@ -112,7 +113,7 @@ class World:
             if s < ch["s_a"] - 0.3:
                 if ch["a0"] >= ch["a_max"] - 1e-6 and ch["s_a"] - s < 4.0:
                     A, B = self.town.lanes[ch["from"]], self.town.lanes[ch["to"]]
-                    return ch["to"], r.local_s(s, ch["k"] - 1) * B.length / A.length, e.LENGTH
+                    return ch["to"], link_map(A, B, r.local_s(s, ch["k"] - 1)), e.LENGTH
                 return None
         return None
 

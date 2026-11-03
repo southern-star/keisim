@@ -919,3 +919,84 @@ def test_npc_lane_changes():
         if done:
             break
     assert changes >= 10
+
+
+def test_ramp_town_style():
+    """'ramps' towns: at-grade left-turn ramps at corners of the main roads' signalised junctions. Each ramp lane
+    runs one lane width outside the approach lane A (deceleration lane) and the lane C it turns into (acceleration
+    lane), linked to both (Lane.links); the junction's own left turn from A into C goes. The ramp is road surface, with
+    no tree, building or signal pole on it and no sidewalk path across it. Suburban towns have no ramps."""
+    from keisim.config import town_config
+    from keisim.route import random_route
+
+    assert not Town(2002, town_config("suburban")).ramps
+    n_ramps = n_routes = 0
+    for seed in (2000, 2002, 2003):
+        T = Town(seed, town_config("ramps"))
+        n_ramps += len(T.ramps)
+        for rp in T.ramps:
+            R, A, C = T.lanes[rp["lane"]], T.lanes[rp["from"]], T.lanes[rp["to"]]
+            assert R.kind == "ramp" and not R.pred and not R.succ and R.id not in T.road_lanes
+            assert R.id in A.links and C.id in R.links and A.lane_index == 0 and C.lane_index == 0
+            assert not any(T.lanes[c].succ[0] == C.id for c in A.succ)           # no left turn at the junction
+            a_lo, a_hi, r_lo, sc = A.links[R.id]
+            for sa in np.linspace(a_lo, a_hi, 5):                             # one lane width beside A and C
+                d = np.hypot(*(R.poly.interp(r_lo + (sa - a_lo) * sc) - A.poly.interp(sa)))
+                assert abs(d - A.width) < 0.05
+            r_lo, r_hi, c_lo, sc = R.links[C.id]
+            for sr in np.linspace(r_lo, rp["r_spans"][3], 5):
+                d = np.hypot(*(R.poly.interp(sr) - C.poly.interp(c_lo + (sr - r_lo) * sc)))
+                assert abs(d - C.width) < 0.05
+            assert T.is_drivable(R.pts).all()
+            nrm = normals_of(R.pts)
+            assert T.is_drivable(np.concatenate([R.pts + nrm * 1.5, R.pts - nrm * 1.5])).all()
+        for t in T.trees:
+            assert not T.on_ramp([t["x"], t["y"]], 0.5)[0]
+        for sh in T.signal_heads:
+            assert not T.on_ramp(sh["pole"], 0.3)[0]
+        for w in T.walkways:
+            pts = w["poly"].pts
+            assert not T.on_ramp(np.concatenate([pts, (pts[1:] + pts[:-1]) / 2])).any()
+        ramp_ids = {rp["lane"] for rp in T.ramps}
+        for ep in range(40):                                                   # routes take the ramps
+            r = random_route(T, np.random.default_rng(ep), 1500.0)
+            for j in r.junctions:
+                if j["lane"] in ramp_ids:
+                    n_routes += 1
+                    assert j["turn"] == "left" and r.command(j["s_in"] - 3.0) == 0
+            assert np.hypot(*np.diff(r.poly.pts, axis=0).T).max() < 0.55
+    assert n_ramps >= 4 and n_routes >= 5
+
+
+def test_ramps_expert_and_npcs():
+    """The expert takes a ramp (it changes into the deceleration lane, goes round the corner and merges from the
+    acceleration lane) and completes its route; NPCs take ramps too, without any two cars overlapping."""
+    from keisim.config import town_config
+    from keisim.geometry import box_corners, obb_overlap
+
+    cfg = EnvConfig()
+    cfg.town = town_config("ramps")
+    cfg.traffic.box_rule = cfg.traffic.release_hidden = True
+    cfg.traffic.max_vehicles *= 2
+    cfg.traffic.max_peds *= 2
+    env = KeiEnv(cfg)
+    env.reset(town_seed=2000, episode_seed=432, route_length=800.0, weather="noon", render=False)
+    T, tr, R = env.world.town, env.world.traffic, env.route
+    ramp_ids = {rp["lane"] for rp in T.ramps}
+    ramp_k = [k for k, l in enumerate(R.lanes) if l in ramp_ids]
+    assert ramp_k
+    lane0 = [tr.route[i][tr.ri[i]] for i in range(tr.n)]
+    npc_ramps = 0
+    done = False
+    while not done:
+        _, _, done, info = env.step(env.expert_action())
+        lane1 = [tr.route[i][tr.ri[i]] for i in range(tr.n)]
+        npc_ramps += sum(lane1[i] in ramp_ids and lane0[i] not in ramp_ids for i in range(tr.n))
+        lane0 = lane1
+        bc = box_corners(tr.xy[:, 0], tr.xy[:, 1], tr.yaw, tr.dims[:, 0], tr.dims[:, 1])
+        near = np.hypot(*(tr.xy[:, None] - tr.xy[None]).transpose(2, 0, 1)) < 7.0
+        for i, j in zip(*np.nonzero(np.triu(near, 1))):
+            assert not obb_overlap(bc[i], bc[j][None])[0], (i, j)
+    assert info["status"] == "success", info
+    assert env.route.lane_index_at(env.s_ego) > ramp_k[0] + 1                    # past the ramp, merged
+    assert npc_ramps >= 1
