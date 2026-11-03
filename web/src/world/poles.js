@@ -78,10 +78,13 @@ function randomFeatures(R, i) {
 const DISTRICTS = ['中央', '若葉', '緑町', '東町', '本町', '西町', '北町', '栄町', '旭', '春日'];
 
 /** Poles on one side of every KeiSim road (sidewalk's outer edge, ~32 m apart, clear of trees and
- *  signal masts), chained along the road, plus spans between the end poles meeting at a junction. */
+ *  signal masts), chained along the road, plus spans between the end poles meeting at a junction. Where that edge
+ *  is road (the lane of a ramp beside the road, KeiSim's ramps towns), the pole moves outwards off the road, to the
+ *  ramp's own sidewalk. */
 function planPoles(T, R) {
   const MAIN = ['hv', 'gw', 'lv', 'tel'], ALLEY = ['hv', 'lv', 'tel'];
   const avoid = [...T.trees.map(t => t.p), ...T.signals.map(s => s.poleP)];
+  const onRoad = T.onRoad;
   const poles = [], spans = [], ends = new Map();
   let serial = 0;
   for (const r of T.roads) {
@@ -95,10 +98,19 @@ function planPoles(T, R) {
     for (let k = 0; k < n; k++) {
       const s0 = 5 + (r.len - 10) * k / (n - 1);
       let best = null;
+      const clear = (x, z) => avoid.every(a => Math.hypot(a[0] - x, a[1] - z) > 1.7);
       for (const ds of [0, 2.2, -2.2, 4.2, -4.2, 6.5, -6.5]) {
         const f = r.at(Math.min(Math.max(s0 + ds, 2), r.len - 2));
         const x = f.x + f.nx * off * side, z = f.z + f.nz * off * side;
-        if (avoid.every(a => Math.hypot(a[0] - x, a[1] - z) > 1.7)) { best = { x, z, f }; break; }
+        if (!onRoad(x, z)) {
+          if (clear(x, z)) { best = { x, z, f }; break; }
+          continue;
+        }
+        for (let o = off + 0.5; o <= off + 8 && !best; o += 0.5) {   // on a ramp's lane: outwards, 0.35 m clear of it
+          const px = f.x + f.nx * o * side, pz = f.z + f.nz * o * side, ex = f.nx * side * 0.35, ez = f.nz * side * 0.35;
+          if (!onRoad(px, pz) && !onRoad(px - ex, pz - ez) && !onRoad(px + ex, pz + ez) && clear(px, pz)) best = { x: px, z: pz, f };
+        }
+        if (best) break;
       }
       if (!best) continue;
       const id = `P${r.id}-${k}`;
