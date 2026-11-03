@@ -14,6 +14,27 @@ export async function loadTown(url) {
   return prepareTown(data);
 }
 
+/** (x, z) -> on KeiSim's road surface (data.surfaces.road: outlines with holes, KeiSim frame; P: KeiSim -> three.js). */
+function roadTest(data, P) {
+  const bb = (ring) => {
+    const r = ring.map(P);
+    let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
+    for (const [x, z] of r) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z); }
+    return { r, x0, z0, x1, z1 };
+  };
+  const shapes = ((data.surfaces && data.surfaces.road) || []).map((s) => ({ outer: bb(s.outer), holes: s.holes.map(bb) }));
+  const inRing = (x, z, R) => {
+    if (x < R.x0 || x > R.x1 || z < R.z0 || z > R.z1) return false;
+    let c = false;
+    for (let i = 0, j = R.r.length - 1; i < R.r.length; j = i++) {
+      const [xi, zi] = R.r[i], [xj, zj] = R.r[j];
+      if ((zi > z) !== (zj > z) && x < (xj - xi) * (z - zi) / (zj - zi) + xi) c = !c;
+    }
+    return c;
+  };
+  return (x, z) => shapes.some((s) => inRing(x, z, s.outer) && !s.holes.some((h) => inRing(x, z, h)));
+}
+
 export function prepareTown(data) {
   const [ox, oy] = data.origin;
   /** KeiSim point [x, y] -> [X, Z] */
@@ -88,6 +109,9 @@ export function prepareTown(data) {
   /** metres to the nearest road surface (0 on the road; large far away) */
   T.roadDist = (x, z) => { const k = cell(x, z); return k < 0 ? 99 : grid.dist[k]; };
   T.heightAt = (x, z) => (T.surfaceAt(x, z) === SURF.sidewalk ? SIDEWALK_Y : 0);
+  /** is (x, z) on the road surface? Exact, from the exported road polygons (works without a canvas, unlike the grid
+   *  of surfaceAt: tools/check.mjs) */
+  T.onRoad = roadTest(data, P);
 
   // ------------------------------------------------------------------ surroundings
   const m = 12;

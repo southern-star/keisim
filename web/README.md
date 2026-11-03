@@ -77,7 +77,7 @@ uv run scripts/export_town.py --town 1000 --style roadtypes     # web/towns/town
 
 ```bash
 cd web && npm install                         # three + puppeteer-core（ツール用のみ）
-node tools/check.mjs --town 1000              # GPU なしのビルド検査（モジュールごとのエラー・ポリゴン数・時間）
+node tools/check.mjs --town 1000              # GPU なしのビルド検査（モジュールごとのエラー・ポリゴン数・時間、道路の上の電柱）
 node tools/check.mjs --town 1000 ground roads houses trees signals poles roaddeco   # 路面の作り込みも
 node tools/shot.mjs --town 1000 --views 1,2,3 --out shots/t1000     # 実レンダラでスクリーンショット（--roads detail、--tdir .towns も可）
 ```
@@ -173,6 +173,8 @@ cd web && node tools/serve.mjs                    # → http://localhost:5174/?p
     ランプのある交差点の左折は、手前で分かれるランプ（減速車線 → カーブ → 加速車線から合流）を通ります。HUD は「左折（ランプ）」、車線変更は「車線変更 あと ○ m」と出ます。
     ← ↑ → で曲がる方向を変えると、必要なら車線変更を入れてルートを作り直します（今いる道路の上でも、変更がまだ間に合えば）。
   - この町では、ランプの手前 120 m から走り始めます（`?ramp=1` で 2 本目のランプ、`?ramp=-1` でふつうの出発点）。
+  - 電柱はふつう歩道の外側の端に立てますが、ランプの横ではそこがランプの車線になるので、外へずらしてランプの外側の歩道に立てます（town 2000 で 9 本、2002 で 5 本）。
+    道路の上かどうかは、エクスポートの路面の多角形で確かめます（`T.onRoad`、`src/town.js`）。`tools/check.mjs` は、道路の上に電柱があると失敗します。
   - 周りの車（`src/traffic.js`）は `keisim/traffic.py` の車線変更をそのまま移しています。移り始める 12 m（またはその速度で止まれる距離）手前から、移る先の車線の前後の余裕（車間 2 m + 後ろの車の速さ × 0.8 s + 近づく速さ × 1.5 s、`route.change_room`、自車も含む）を確かめ、なければ移り始めを先へずらし、範囲の終わりでは止まって待ちます。
     待っている車には、移る先の車線の後ろの車が間を空けます（ファスナー合流）。移り始めた車には、後ろの車がついて行きます。8 秒待っても入れなければ今の車線のまま進みます（ランプの上は行き止まりなので、入れるまで待ちます）。
   - 道路ごとの制限速度、細い道のカーブの 1 台ずつの通行（KeiSim の譲り合いの表をそのまま使います）も KeiSim と同じです。
