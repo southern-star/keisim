@@ -311,6 +311,46 @@ def random_route(town, rng, length, start_lane=None, s_start=None, turn_weights=
     lanes = [start_lane]
     total = lane.length - s_start
     s_lo = s_start + LC_START_MARGIN                # A-local s from which the current lane may start a change
+    total = _walk(town, rng, lanes, total, s_lo, length, turn_weights)
+    return _finish(town, lanes, s_start, total, length)
+
+
+def ramp_route(town, rng, length, ramp=None, turn_weights=None):
+    """A random route that takes one of the town's ramps (Town.ramps, drawn; or index `ramp`). It starts on the road
+    before the ramp's approach lane (70 %; else at that road's start), in the approach lane or in a sibling (then it
+    changes into the approach lane first), takes the ramp and goes on at random as random_route does."""
+    turn_weights = turn_weights or {"left": 1.0, "straight": 1.0, "right": 1.0}
+    rp = town.ramps[int(rng.integers(len(town.ramps)))] if ramp is None else town.ramps[ramp]
+    A = town.lanes[rp["from"]]
+    entries = [A.id] + list(A.siblings)
+    X = town.lanes[entries[int(rng.integers(len(entries)))]]
+    if X.pred and rng.random() < 0.7:               # from the road before (through the junction before the ramp)
+        c = X.pred[int(rng.integers(len(X.pred)))]
+        P = town.lanes[town.lanes[c].pred[0]]
+        s_start = float(rng.uniform(3.0, max(3.5, P.length - 25.0)))
+        lanes = [P.id, c, X.id]
+        total = P.length - s_start + town.lanes[c].length + X.length
+        s_lo = 0.0
+    else:
+        s_start = float(rng.uniform(3.0, 8.0))
+        lanes = [X.id]
+        total = X.length - s_start
+        s_lo = s_start + LC_START_MARGIN
+    moves = [m for m in lane_moves(town, X, s_lo) if rp["lane"] in m[2]]
+    if not moves:                                   # no room to change into the approach lane first: start on it
+        s_start = float(rng.uniform(3.0, 8.0))
+        lanes, total, s_lo = [A.id], A.length - s_start, s_start + LC_START_MARGIN
+        moves = [m for m in lane_moves(town, A, s_lo) if rp["lane"] in m[2]]
+    seq = moves[0][2]
+    lanes.extend(seq)
+    R, C = town.lanes[seq[-2]], town.lanes[seq[-1]]
+    total += R.length + C.length
+    total = _walk(town, rng, lanes, total, link_map(R, C, R.length), length, turn_weights)
+    return _finish(town, lanes, s_start, total, length)
+
+
+def _walk(town, rng, lanes, total, s_lo, length, turn_weights):
+    """random_route's walk: extend `lanes` (in place) until they hold `length` metres (total so far: `total`)."""
     guard = 0
     while total < length + 10.0 and guard < 200:
         guard += 1
@@ -336,6 +376,11 @@ def random_route(town, rng, length, start_lane=None, s_start=None, turn_weights=
             R, C = town.lanes[seq[-2]], town.lanes[seq[-1]]
             total += R.length + C.length
             s_lo = link_map(R, C, R.length)
+    return total
+
+
+def _finish(town, lanes, s_start, total, length):
+    """The Route of a walk, ending `length` metres on (not inside a junction or on a ramp)."""
     r = Route(town, lanes, s_start)
     r.s_end = float(min(r.s_end, s_start + max(length, 50.0) + 0.0)) if total > length + 40 else r.s_end
     # do not end inside a junction: push the end to the next road lane if needed

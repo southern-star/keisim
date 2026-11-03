@@ -968,6 +968,28 @@ def test_ramp_town_style():
     assert n_ramps >= 4 and n_routes >= 5
 
 
+def test_ramp_routes_take_a_ramp():
+    """route.ramp_route (the ramp_routes suite): every route takes one of the town's ramps, starting on the road
+    before it, on its approach lane or beside it (then changing into the approach lane first)."""
+    from keisim.config import town_config
+    from keisim.route import ramp_route
+
+    starts = set()
+    for seed in (2000, 2003):
+        T = Town(seed, town_config("ramps"))
+        ids = {rp["lane"] for rp in T.ramps}
+        approach = {rp["from"] for rp in T.ramps}
+        for ep in range(12):
+            r = ramp_route(T, np.random.default_rng(ep), 600.0)
+            j = [j for j in r.junctions if j["lane"] in ids]
+            assert j and j[0]["s_out"] < r.s_end and j[0]["turn"] == "left"
+            first = T.lanes[r.lanes[0]]
+            starts.add("approach" if first.id in approach else
+                       "beside" if set(first.siblings) & approach else "before")
+            assert np.hypot(*np.diff(r.poly.pts, axis=0).T).max() < 0.55
+    assert starts == {"approach", "beside", "before"}
+
+
 def test_ramps_expert_and_npcs():
     """The expert takes a ramp (it changes into the deceleration lane, goes round the corner and merges from the
     acceleration lane) and completes its route; NPCs take ramps too, without any two cars overlapping."""
