@@ -990,6 +990,44 @@ def test_ramp_routes_take_a_ramp():
     assert starts == {"approach", "beside", "before"}
 
 
+def test_export_lane_graph():
+    """scripts/export_town.py lane_graph, the lanes of the browser demo for 片側2車線 roads and ramps (web/src/lanes.js):
+    none for towns without them; else every road and ramp lane once with its siblings and links (siblings: scale
+    None, both ways; a ramp: from its approach lane, and on to the lane it merges into), every junction connector with
+    KeiSim's give-way table and signal phases. The bundled towns 2000 and 2002 are the current exports."""
+    import json
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
+    from export_town import export, lane_graph
+    from keisim.config import town_config, town_key
+
+    assert lane_graph(Town(1015, town_config("twophase"))) is None
+    T = Town(2000, town_config("ramps"))
+    g = lane_graph(T)
+    road = [l for l in T.lanes if l.kind in ("road", "ramp")]
+    assert len(g["lanes"]) == len(road) and len(g["conns"]) == sum(l.kind == "conn" for l in T.lanes)
+    ramps = [l for l in g["lanes"] if l["kind"] == "ramp"]
+    assert len(ramps) == len(T.ramps) > 0
+    for l in g["lanes"]:
+        for b, lo, hi, blo, scale in l["links"]:
+            if scale is None:
+                assert b in l["sib"] and l["id"] in g["lanes"][b]["sib"]
+            else:
+                assert lo < hi and (l["kind"] == "ramp") != (g["lanes"][b]["kind"] == "ramp")
+    for R in ramps:
+        assert len(R["links"]) == 1 and sum(any(k[0] == R["id"] for k in l["links"]) for l in g["lanes"]) == 1
+    assert any(len(l["sib"]) == 1 for l in g["lanes"]) and any("signal" in l for l in g["lanes"])
+    for c in g["conns"]:
+        assert g["lanes"][c["from"]]["kind"] == g["lanes"][c["to"]]["kind"] == "road"
+        assert all(0 <= y[0] < len(g["conns"]) for y in c.get("yields", ())) and (("yields" in c) == ("wait" in c))
+    assert any("yields" in c for c in g["conns"]) and g["truck_lanes"]
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for seed in (2000, 2002):
+        cfg = town_config("ramps")
+        with open(os.path.join(root, "web", "towns", f"town_{town_key(seed, cfg)}.json")) as f:
+            ref = json.load(f)
+        assert json.loads(json.dumps(export(seed, cfg))) == ref, seed
+
+
 def test_ramps_expert_and_npcs():
     """The expert takes a ramp (it changes into the deceleration lane, goes round the corner and merges from the
     acceleration lane) and completes its route; NPCs take ramps too, without any two cars overlapping."""

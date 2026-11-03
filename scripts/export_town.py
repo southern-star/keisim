@@ -331,7 +331,50 @@ def export_town(town: Town) -> dict:
         "parcels": make_parcels(town, buildings),
         **({"markings_yellow": [r2(simplify(p, LINE_EPS, True)) for p in town.markings_yellow]} if mixed else {}),
         **real_town_fields(town),
+        **({"lane_graph": g} if (g := lane_graph(town)) is not None else {}),
     }
+
+
+def lane_graph(town: Town):
+    """KeiSim's own lanes for the browser demo (web/src/lanes.js), for towns with 片側2車線 roads or ramps, whose
+    lanes the demo does not rebuild itself: the road and ramp lanes ({id, kind, road, from / to junction, index (0 =
+    kerb lane), n (lanes of its direction), sib (siblings), width, speed, signal phase, 止まれ line (stop_sign), pts,
+    links: [[lane, lo, hi, lo there, scale (null: siblings)]], ramps: junction and turn}), the junction connectors
+    ({from, to, junction, turn, speed, pts, yields: [[connector, s here, s there]], wait: Lane.wait_s}) and the lanes
+    trucks may use (Town.truck_lanes). Ids are positions in these lists. None for other towns."""
+    if not (town.ramps or any(rd.spec.lanes > 1 for rd in town.roads)):
+        return None
+    own = [l for l in town.lanes if l.kind in ("road", "ramp")]
+    conns = [l for l in town.lanes if l.kind == "conn"]
+    lid = {l.id: i for i, l in enumerate(own)}
+    cid = {l.id: i for i, l in enumerate(conns)}
+    lanes = []
+    for l in own:
+        d = {"id": lid[l.id], "kind": l.kind, "road": int(l.road), "from": int(l.start_junction),
+             "to": int(l.end_junction), "index": int(l.lane_index), "n": int(l.nlanes),
+             "sib": [lid[s] for s in l.siblings], "width": round(float(l.width), 3),
+             "speed": round(float(l.speed_limit), 4), "pts": r2(simplify(l.pts, LINE_EPS, False)),
+             "links": [[lid[b], round(float(lk[0]), 3), round(float(lk[1]), 3), round(float(lk[2]), 3),
+                        None if lk[3] is None else round(float(lk[3]), 6)] for b, lk in l.links.items()]}
+        if l.signal is not None:
+            d["signal"] = int(l.signal[1])
+        if l.stop_sign_s is not None:
+            d["stop_sign"] = round(float(l.stop_sign_s), 3)
+        if l.kind == "ramp":
+            d.update({"junction": int(l.junction), "turn": l.turn, "from": -1, "to": -1})
+        lanes.append(d)
+    out = []
+    for c in conns:
+        d = {"from": lid[c.pred[0]], "to": lid[c.succ[0]], "junction": int(c.junction), "turn": c.turn,
+             "speed": round(float(c.speed_limit), 4), "pts": r2(simplify(c.pts, LINE_EPS, False))}
+        if c.yields:
+            d["yields"] = [[cid[b], round(float(h), 3), round(float(t), 3)] for b, h, t in c.yields]
+            d["wait"] = round(float(c.wait_s), 3)
+        out.append(d)
+    g = {"lanes": lanes, "conns": out}
+    if town.truck_lanes:
+        g["truck_lanes"] = sorted(lid[x] for x in town.truck_lanes)
+    return g
 
 
 def real_town_fields(town: Town) -> dict:
