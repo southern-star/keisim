@@ -794,3 +794,329 @@ def test_expert_yield_visible_counts_only_cars_in_view():
     cam = (pose[0] + c.x * math.cos(pose[2]), pose[1] + c.x * math.sin(pose[2]))
     vis = tr.visible_from(cam, pose[2], math.radians(c.fov_deg) / 2, c.max_dist, env.world.town)
     assert seen[-1] == int(vis.sum()) < tr.n
+
+
+def test_suburban_two_lane_main_roads():
+    """'suburban' towns: the main roads have two lanes each way (片側2車線), kerb lane first. The cars keep their
+    lane: kerb-side turns go from kerb lane to kerb lane, turns across the oncoming traffic from the innermost lane
+    to the innermost lane, straights in the same lane; every lane has somewhere to go and no two lanes of a road
+    merge. The other styles keep their settings and exported town names; the expert completes a route on both lanes."""
+    from keisim.config import town_config, town_tag
+
+    assert town_tag(town_config("roadtypes")) == "dae67d73"
+    for seed in (2000, 2001, 2002, 2003):
+        T = Town(seed, town_config("suburban"))
+        n2 = 0
+        for r in T.roads:
+            n = r.spec.lanes
+            assert n == 1 or r.kind == "main"
+            n2 += n == 2
+            assert len(r.lanes_ab) == len(r.lanes_ba) == n and r.lane_ab == r.lanes_ab[0]
+            for k, lid in enumerate(r.lanes_ab + r.lanes_ba):
+                L = T.lanes[lid]
+                assert L.lane_index == k % n and L.nlanes == n and L.succ
+                mid = L.pts[len(L.pts) // 2]
+                d = np.min(np.hypot(*(r.center - mid).T))
+                assert abs(d - (n - L.lane_index - 0.5) * r.spec.lane_width) < 0.3
+                nrm = normals_of(L.pts)
+                pts = np.concatenate([L.pts, L.pts + nrm * 0.9, L.pts - nrm * 0.9])
+                assert (T.surface(pts) == 1).all(), f"lane {lid} leaves the road in town {seed}"
+        assert n2 >= 3
+        for J in T.junctions:
+            into = {}
+            for c in (T.lanes[c] for c in J.connectors):
+                a, b = T.lanes[c.pred[0]], T.lanes[c.succ[0]]
+                assert into.setdefault((b.id, a.road), c.id) == c.id           # no merges of one road's lanes
+                if len(J.arms) >= 3 and c.turn == "left":                       # left-hand traffic: kerb side
+                    assert a.lane_index == b.lane_index == 0
+                elif len(J.arms) >= 3 and c.turn == "right":
+                    assert (a.lane_index, b.lane_index) == (a.nlanes - 1, b.nlanes - 1)
+                else:
+                    assert b.lane_index == a.lane_index
+    cfg = EnvConfig()
+    cfg.town = town_config("suburban")
+    cfg.traffic.box_rule = cfg.traffic.release_hidden = True
+    env = KeiEnv(cfg)
+    env.reset(town_seed=2001, episode_seed=69, render=False)
+    T = env.world.town
+    done, used = False, set()
+    while not done:
+        _, _, done, info = env.step(env.expert_action())
+        lane = T.lanes[env.route.lane_at(env.s_ego)]
+        if lane.kind == "road" and lane.nlanes == 2:
+            used.add(lane.lane_index)
+    assert info["status"] == "success", info
+    assert used == {0, 1}
+
+
+def test_lane_change_routes():
+    """Suburban routes change lanes where the next movement needs it (now and then where it does not): the path
+    blends from one lane into its sibling inside the lane's window, route positions map exactly onto each lane
+    outside the blend, the stop lines stay where they are, and a change moved later (Route.retime_change) leaves the
+    path before it as it was. Routes in towns without multi-lane roads are those of the code before lane changes."""
+    import hashlib
+
+    from keisim.config import town_config
+    from keisim.route import LC_ENTRY, LC_EXIT, LC_MIN, random_route
+
+    m = hashlib.sha1()
+    for style, seed in (("classic", 1000), ("roadtypes", 1105)):
+        T = Town(seed, town_config(style))
+        for ep in range(5):
+            r = random_route(T, np.random.default_rng(ep), 600.0)
+            assert not r.changes
+            m.update(np.round(r.poly.pts, 6).tobytes())
+            m.update(np.round(np.asarray(r.offsets), 6).tobytes())
+            m.update(repr((r.lanes, round(r.s_start, 6), round(r.s_end, 6),
+                           [(round(float(a), 6), b) for a, b in r.stops])).encode())
+    assert m.hexdigest()[:16] == "1533b9616db393e2"
+    T = Town(2000, town_config("suburban"))
+    n = 0
+    for ep in range(30):
+        r = random_route(T, np.random.default_rng(ep), 1500.0)
+        assert np.hypot(*np.diff(r.poly.pts, axis=0).T).max() < 0.55          # no jumps
+        for s_stop, lid in r.stops:
+            L = T.lanes[lid]
+            assert np.allclose(r.poly.interp(s_stop), L.poly.interp(L.stop_s), atol=1e-6)
+        for ch in r.changes:
+            n += 1
+            A, B = T.lanes[ch["from"]], T.lanes[ch["to"]]
+            assert B.id in A.siblings and A.road == B.road and ch["lc"] >= LC_MIN - 1e-9
+            assert LC_ENTRY - 1e-9 <= ch["a_min"] <= ch["a0"] <= ch["a_max"]
+            assert ch["a_max"] + ch["lc"] <= A.length - LC_EXIT + 1e-6
+            k = ch["k"]
+            for s in np.linspace(r.offsets[k - 1] + 0.1, ch["s_a"], 10):
+                assert np.allclose(r.poly.interp(s), A.poly.interp(r.local_s(s, k - 1)), atol=1e-6)
+            for s in np.linspace(ch["s_b"], r.offsets[k + 1] - 0.1, 10):
+                assert np.allclose(r.poly.interp(s), B.poly.interp(r.local_s(s, k)), atol=1e-6)
+            assert r.lane_at(ch["s_a"] + 1.0) == A.id and r.lane_at(ch["s_b"] - 1.0) == B.id
+        if r.changes and r.changes[0]["a0"] + 5.0 < r.changes[0]["a_max"]:
+            ch = r.changes[0]
+            before = r.poly.interp(np.linspace(0.0, ch["s_a"], 50))
+            end = r.poly.interp(r.s_end)
+            r.retime_change(0, ch["a0"] + 5.0)
+            assert abs(r.changes[0]["s_a"] - ch["s_a"] - 5.0) < 1e-6
+            assert np.allclose(r.poly.interp(np.linspace(0.0, ch["s_a"], 50)), before, atol=1e-9)
+            assert np.allclose(r.poly.interp(r.s_end), end, atol=1e-6)
+    assert n >= 20
+
+
+def test_expert_lane_change_waits_for_room():
+    """The expert changes lanes only with room in the target lane: on this route a car there makes it move the
+    change on along its window (and slow down to let the car pass) before it changes, with room behind and ahead,
+    and completes the route without touching the cars in the target lane."""
+    from keisim.config import town_config
+    from keisim.geometry import box_corners, obb_overlap
+
+    cfg = EnvConfig()
+    cfg.town = town_config("suburban")
+    cfg.traffic.box_rule = cfg.traffic.release_hidden = True
+    env = KeiEnv(cfg)
+    env.reset(town_seed=2001, episode_seed=113, render=False)
+    R, tr, e = env.route, env.world.traffic, env.world.ego
+    assert len(R.changes) == 1
+    a0, moved, waited, started, last_bad = R.changes[0]["a0"], 0, 0, False, None
+    done = False
+    while not done:
+        if not started:
+            _, last_bad = env.expert.lane_change_gap(R, env.s_ego, e.v)
+        _, _, done, info = env.step(env.expert_action())
+        ch = R.changes[0]
+        moved += ch["a0"] != a0
+        a0 = ch["a0"]
+        waited += env.plan["reason"] == "lane_change"
+        if ch["s_a"] - 0.3 <= env.s_ego <= ch["s_b"]:
+            if not started:                             # it started with room in the target lane
+                assert last_bad == [], last_bad
+                started = True
+            on = [i for i in range(tr.n) if tr.route[i][tr.ri[i]] == ch["to"]]
+            if on:
+                bc = box_corners(tr.xy[on, 0], tr.xy[on, 1], tr.yaw[on], tr.dims[on, 0], tr.dims[on, 1])
+                assert not obb_overlap(e.corners(), bc).any()
+    assert info["status"] == "success", info
+    assert started and env.s_ego > R.changes[0]["s_b"] and moved > 0 and waited > 0
+
+
+def test_npc_lane_changes():
+    """Suburban NPCs change lanes too (the blend of route.py, with room in the target lane): over a minute of an
+    episode many do, smoothly (no jumps beyond their speed, heading along their motion) and without ever overlapping
+    another car. Towns without multi-lane roads have no lane changes (Traffic.has_lc)."""
+    from keisim.config import town_config
+    from keisim.geometry import box_corners, obb_overlap
+
+    cfg = EnvConfig()
+    cfg.town = town_config("roadtypes")
+    env = KeiEnv(cfg)
+    env.reset(town_seed=1105, episode_seed=55, render=False)
+    assert not env.world.traffic.has_lc
+    cfg = EnvConfig()
+    cfg.town = town_config("suburban")
+    cfg.traffic.box_rule = cfg.traffic.release_hidden = True
+    cfg.traffic.max_vehicles *= 2
+    env = KeiEnv(cfg)
+    env.reset(town_seed=2001, episode_seed=113, route_length=600.0, render=False)
+    T, tr = env.world.town, env.world.traffic
+    assert tr.has_lc
+    lane0 = [tr.route[i][tr.ri[i]] for i in range(tr.n)]
+    xy0 = tr.xy.copy()
+    changes = 0
+    for _ in range(600):
+        _, _, done, info = env.step(env.expert_action())
+        assert not done or info["status"] == "success", info
+        lane1 = [tr.route[i][tr.ri[i]] for i in range(tr.n)]
+        changes += sum(lane1[i] in T.lanes[lane0[i]].siblings for i in range(tr.n))
+        d = tr.xy - xy0
+        dist = np.hypot(*d.T)
+        moved = (dist > 0.2) & (dist < 30.0)                     # (respawned cars jump far)
+        assert (dist[dist < 30.0] <= tr.v[dist < 30.0] * 0.1 + 0.5).all()
+        ang = np.abs((np.arctan2(d[:, 1], d[:, 0]) - tr.yaw + np.pi) % (2 * np.pi) - np.pi)
+        assert (ang[moved] < np.radians(12.0)).all()
+        bc = box_corners(tr.xy[:, 0], tr.xy[:, 1], tr.yaw, tr.dims[:, 0], tr.dims[:, 1])
+        near = np.hypot(*(tr.xy[:, None] - tr.xy[None]).transpose(2, 0, 1)) < 7.0
+        for i, j in zip(*np.nonzero(np.triu(near, 1))):
+            assert not obb_overlap(bc[i], bc[j][None])[0], (i, j)
+        lane0, xy0 = lane1, tr.xy.copy()
+        if done:
+            break
+    assert changes >= 10
+
+
+def test_ramp_town_style():
+    """'ramps' towns: at-grade left-turn ramps at corners of the main roads' signalised junctions. Each ramp lane
+    runs one lane width outside the approach lane A (deceleration lane) and the lane C it turns into (acceleration
+    lane), linked to both (Lane.links); the junction's own left turn from A into C goes. The ramp is road surface, with
+    no tree, building or signal pole on it and no sidewalk path across it. Suburban towns have no ramps."""
+    from keisim.config import town_config
+    from keisim.route import random_route
+
+    assert not Town(2002, town_config("suburban")).ramps
+    n_ramps = n_routes = 0
+    for seed in (2000, 2002, 2003):
+        T = Town(seed, town_config("ramps"))
+        n_ramps += len(T.ramps)
+        for rp in T.ramps:
+            R, A, C = T.lanes[rp["lane"]], T.lanes[rp["from"]], T.lanes[rp["to"]]
+            assert R.kind == "ramp" and not R.pred and not R.succ and R.id not in T.road_lanes
+            assert R.id in A.links and C.id in R.links and A.lane_index == 0 and C.lane_index == 0
+            assert not any(T.lanes[c].succ[0] == C.id for c in A.succ)           # no left turn at the junction
+            a_lo, a_hi, r_lo, sc = A.links[R.id]
+            for sa in np.linspace(a_lo, a_hi, 5):                             # one lane width beside A and C
+                d = np.hypot(*(R.poly.interp(r_lo + (sa - a_lo) * sc) - A.poly.interp(sa)))
+                assert abs(d - A.width) < 0.05
+            r_lo, r_hi, c_lo, sc = R.links[C.id]
+            for sr in np.linspace(r_lo, rp["r_spans"][3], 5):
+                d = np.hypot(*(R.poly.interp(sr) - C.poly.interp(c_lo + (sr - r_lo) * sc)))
+                assert abs(d - C.width) < 0.05
+            assert T.is_drivable(R.pts).all()
+            nrm = normals_of(R.pts)
+            assert T.is_drivable(np.concatenate([R.pts + nrm * 1.5, R.pts - nrm * 1.5])).all()
+        for t in T.trees:
+            assert not T.on_ramp([t["x"], t["y"]], 0.5)[0]
+        for sh in T.signal_heads:
+            assert not T.on_ramp(sh["pole"], 0.3)[0]
+        for w in T.walkways:
+            pts = w["poly"].pts
+            assert not T.on_ramp(np.concatenate([pts, (pts[1:] + pts[:-1]) / 2])).any()
+        ramp_ids = {rp["lane"] for rp in T.ramps}
+        for ep in range(40):                                                   # routes take the ramps
+            r = random_route(T, np.random.default_rng(ep), 1500.0)
+            for j in r.junctions:
+                if j["lane"] in ramp_ids:
+                    n_routes += 1
+                    assert j["turn"] == "left" and r.command(j["s_in"] - 3.0) == 0
+            assert np.hypot(*np.diff(r.poly.pts, axis=0).T).max() < 0.55
+    assert n_ramps >= 4 and n_routes >= 5
+
+
+def test_ramp_routes_take_a_ramp():
+    """route.ramp_route (the ramp_routes suite): every route takes one of the town's ramps, starting on the road
+    before it, on its approach lane or beside it (then changing into the approach lane first)."""
+    from keisim.config import town_config
+    from keisim.route import ramp_route
+
+    starts = set()
+    for seed in (2000, 2003):
+        T = Town(seed, town_config("ramps"))
+        ids = {rp["lane"] for rp in T.ramps}
+        approach = {rp["from"] for rp in T.ramps}
+        for ep in range(12):
+            r = ramp_route(T, np.random.default_rng(ep), 600.0)
+            j = [j for j in r.junctions if j["lane"] in ids]
+            assert j and j[0]["s_out"] < r.s_end and j[0]["turn"] == "left"
+            first = T.lanes[r.lanes[0]]
+            starts.add("approach" if first.id in approach else
+                       "beside" if set(first.siblings) & approach else "before")
+            assert np.hypot(*np.diff(r.poly.pts, axis=0).T).max() < 0.55
+    assert starts == {"approach", "beside", "before"}
+
+
+def test_export_lane_graph():
+    """scripts/export_town.py lane_graph, the lanes of the browser demo for 片側2車線 roads and ramps (web/src/lanes.js):
+    none for towns without them; else every road and ramp lane once with its siblings and links (siblings: scale
+    None, both ways; a ramp: from its approach lane, and on to the lane it merges into), every junction connector with
+    KeiSim's give-way table and signal phases. The bundled towns 2000 and 2002 are the current exports."""
+    import json
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
+    from export_town import export, lane_graph
+    from keisim.config import town_config, town_key
+
+    assert lane_graph(Town(1015, town_config("twophase"))) is None
+    T = Town(2000, town_config("ramps"))
+    g = lane_graph(T)
+    road = [l for l in T.lanes if l.kind in ("road", "ramp")]
+    assert len(g["lanes"]) == len(road) and len(g["conns"]) == sum(l.kind == "conn" for l in T.lanes)
+    ramps = [l for l in g["lanes"] if l["kind"] == "ramp"]
+    assert len(ramps) == len(T.ramps) > 0
+    for l in g["lanes"]:
+        for b, lo, hi, blo, scale in l["links"]:
+            if scale is None:
+                assert b in l["sib"] and l["id"] in g["lanes"][b]["sib"]
+            else:
+                assert lo < hi and (l["kind"] == "ramp") != (g["lanes"][b]["kind"] == "ramp")
+    for R in ramps:
+        assert len(R["links"]) == 1 and sum(any(k[0] == R["id"] for k in l["links"]) for l in g["lanes"]) == 1
+    assert any(len(l["sib"]) == 1 for l in g["lanes"]) and any("signal" in l for l in g["lanes"])
+    for c in g["conns"]:
+        assert g["lanes"][c["from"]]["kind"] == g["lanes"][c["to"]]["kind"] == "road"
+        assert all(0 <= y[0] < len(g["conns"]) for y in c.get("yields", ())) and (("yields" in c) == ("wait" in c))
+    assert any("yields" in c for c in g["conns"]) and g["truck_lanes"]
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for seed in (2000, 2002):
+        cfg = town_config("ramps")
+        with open(os.path.join(root, "web", "towns", f"town_{town_key(seed, cfg)}.json")) as f:
+            ref = json.load(f)
+        assert json.loads(json.dumps(export(seed, cfg))) == ref, seed
+
+
+def test_ramps_expert_and_npcs():
+    """The expert takes a ramp (it changes into the deceleration lane, goes round the corner and merges from the
+    acceleration lane) and completes its route; NPCs take ramps too, without any two cars overlapping."""
+    from keisim.config import town_config
+    from keisim.geometry import box_corners, obb_overlap
+
+    cfg = EnvConfig()
+    cfg.town = town_config("ramps")
+    cfg.traffic.box_rule = cfg.traffic.release_hidden = True
+    cfg.traffic.max_vehicles *= 2
+    cfg.traffic.max_peds *= 2
+    env = KeiEnv(cfg)
+    env.reset(town_seed=2000, episode_seed=432, route_length=800.0, weather="noon", render=False)
+    T, tr, R = env.world.town, env.world.traffic, env.route
+    ramp_ids = {rp["lane"] for rp in T.ramps}
+    ramp_k = [k for k, l in enumerate(R.lanes) if l in ramp_ids]
+    assert ramp_k
+    lane0 = [tr.route[i][tr.ri[i]] for i in range(tr.n)]
+    npc_ramps = 0
+    done = False
+    while not done:
+        _, _, done, info = env.step(env.expert_action())
+        lane1 = [tr.route[i][tr.ri[i]] for i in range(tr.n)]
+        npc_ramps += sum(lane1[i] in ramp_ids and lane0[i] not in ramp_ids for i in range(tr.n))
+        lane0 = lane1
+        bc = box_corners(tr.xy[:, 0], tr.xy[:, 1], tr.yaw, tr.dims[:, 0], tr.dims[:, 1])
+        near = np.hypot(*(tr.xy[:, None] - tr.xy[None]).transpose(2, 0, 1)) < 7.0
+        for i, j in zip(*np.nonzero(np.triu(near, 1))):
+            assert not obb_overlap(bc[i], bc[j][None])[0], (i, j)
+    assert info["status"] == "success", info
+    assert env.route.lane_index_at(env.s_ego) > ramp_k[0] + 1                    # past the ramp, merged
+    assert npc_ramps >= 1

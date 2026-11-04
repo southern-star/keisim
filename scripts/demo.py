@@ -44,8 +44,13 @@ def main():
                     help="a real town (keisim.realworld.osm_town, cached at data/osm/<name>.json) instead of --town; "
                          "the same --episode and --route as evaluate.py --osm_town give the same route and traffic")
     ap.add_argument("--osm_bbox", type=float, nargs=4, metavar=("S", "W", "N", "E"),
-                    default=[43.088, 141.360, 43.097, 141.372], help="--osm_town's box (default: Sapporo Higashi-ku)")
+                    default=None, help="--osm_town\'s box (default: the town\'s entry in keisim.realworld.OSM_BOXES)")
     args = ap.parse_args()
+    if args.osm_town and args.osm_bbox is None:
+        from keisim.realworld import OSM_BOXES
+        if args.osm_town not in OSM_BOXES:
+            ap.error(f"--osm_town {args.osm_town}: not in keisim.realworld.OSM_BOXES, give --osm_bbox S W N E")
+        args.osm_bbox = list(OSM_BOXES[args.osm_town])
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
 
     cfg = EnvConfig()

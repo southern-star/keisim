@@ -29,6 +29,7 @@ KeiSim Town(seed)  ──scripts/export_town.py──▶  web/towns/town_<seed>.
 ```bash
 uv run scripts/export_town.py --town 1000 1001 1002 1003     # web/towns/ に出力（サンプル 4 つは同梱）
 uv run scripts/export_town.py --town 1015 1018 --style twophase   # 二段階の信号の町 → town_1015-98782ab7.json など（同梱）
+uv run scripts/export_town.py --town 2000 2002 --style ramps      # 片側2車線とランプの町 → town_2000-8c5d282b.json など（同梱）
 uv run scripts/import_osm.py --name osm_sapporo --out web/towns     # 実在の町（札幌、OpenStreetMap）→ town_osm_sapporo.json（同梱、data/osm/ の抜き出しから）
 cd web && node tools/serve.mjs                               # → http://localhost:5174/?town=1000
 ```
@@ -76,7 +77,7 @@ uv run scripts/export_town.py --town 1000 --style roadtypes     # web/towns/town
 
 ```bash
 cd web && npm install                         # three + puppeteer-core（ツール用のみ）
-node tools/check.mjs --town 1000              # GPU なしのビルド検査（モジュールごとのエラー・ポリゴン数・時間）
+node tools/check.mjs --town 1000              # GPU なしのビルド検査（モジュールごとのエラー・ポリゴン数・時間、道路の上の電柱）
 node tools/check.mjs --town 1000 ground roads houses trees signals poles roaddeco   # 路面の作り込みも
 node tools/shot.mjs --town 1000 --views 1,2,3 --out shots/t1000     # 実レンダラでスクリーンショット（--roads detail、--tdir .towns も可）
 ```
@@ -153,6 +154,7 @@ cd web && node tools/serve.mjs                    # → http://localhost:5174/?p
       town 1015 と 1018 にはこの交差はありません。
     - 右折は待ち位置で、優先の車（自車も含む）が 5 秒以内に交わる所に来るあいだは待ちます。
     - 待ち位置と、譲る相手は、KeiSim の `Town._make_yields` と同じ手順で JavaScript で求めます。town 1015 では、KeiSim と同じ 14 本の右折が譲り、待ち位置の差は 0.25 m 以内です。
+  - 片側2車線とランプの町（下）では、周りの車も車線を変え、ランプを使います。
   - 自車のカメラに見えない所で 40 秒以上止まっている車は、別の場所に移します。
   - 自車と車体が重なると「接触」として数え、HUD に表示します。
   - 描画が重いときは、画面の「周りの車」ボタンか T キーで消せます（選んだ設定はブラウザに残ります）。`?traffic=0` でも消せます。周りの車の描画は、1 台を材質ごとに 1 つのメッシュにまとめて軽くしています（車 24 台が見えているとき、描画命令は 520 → 740、RTX 3060・1280×720 で 1 フレームあたり 2〜3 ms 増）。
@@ -164,21 +166,44 @@ cd web && node tools/serve.mjs                    # → http://localhost:5174/?p
   - `?cardetail=0` で、表示も簡易な形の車に戻せます。
 
   ![周りの車の詳しい形](../docs/keiview_cars.jpg)
+- **片側2車線とランプの町**: town 2000 と 2002（`?town=2000-8c5d282b`、`?town=2002-8c5d282b`、メニューの「片側2車線とランプ」）は KeiSim の ramps の街（[../README.md](../README.md) 3 章の郊外の街と平面の左折ランプ）です。
+  - 幹線道路は片側2車線、信号は二段階、道路の種類（幹線・通常・生活道路・路地）があります。
+  - 車線は JavaScript で作り直さず、KeiSim の車線をそのまま使います（エクスポートの `lane_graph`: 車線・隣の車線・ランプのつながり・交差点の接続・譲り合いの表・信号の現示）。共通の部分は `src/lanes.js` です。
+  - ナビのルート（`src/nav.js`）は、KeiSim の `route.lane_moves` / `pick_move` と同じく、次の交差点での動きを道路のどの車線のものからも選び、今の車線になければ隣の車線へ移ります（5 次曲線、40 m）。
+    ランプのある交差点の左折は、手前で分かれるランプ（減速車線 → カーブ → 加速車線から合流）を通ります。HUD は「左折（ランプ）」、車線変更は「車線変更 あと ○ m」と出ます。
+    ← ↑ → で曲がる方向を変えると、必要なら車線変更を入れてルートを作り直します（今いる道路の上でも、変更がまだ間に合えば）。
+  - この町では、ランプの手前 120 m から走り始めます（`?ramp=1` で 2 本目のランプ、`?ramp=-1` でふつうの出発点）。
+  - 電柱はふつう歩道の外側の端に立てますが、ランプの横ではそこがランプの車線になるので、外へずらしてランプの外側の歩道に立てます（town 2000 で 9 本、2002 で 5 本）。
+    道路の上かどうかは、エクスポートの路面の多角形で確かめます（`T.onRoad`、`src/town.js`）。`tools/check.mjs` は、道路の上に電柱があると失敗します。
+  - 周りの車（`src/traffic.js`）は `keisim/traffic.py` の車線変更をそのまま移しています。移り始める 12 m（またはその速度で止まれる距離）手前から、移る先の車線の前後の余裕（車間 2 m + 後ろの車の速さ × 0.8 s + 近づく速さ × 1.5 s、`route.change_room`、自車も含む）を確かめ、なければ移り始めを先へずらし、範囲の終わりでは止まって待ちます。
+    待っている車には、移る先の車線の後ろの車が間を空けます（ファスナー合流）。移り始めた車には、後ろの車がついて行きます。8 秒待っても入れなければ今の車線のまま進みます（ランプの上は行き止まりなので、入れるまで待ちます）。
+  - 道路ごとの制限速度、細い道のカーブの 1 台ずつの通行（KeiSim の譲り合いの表をそのまま使います）も KeiSim と同じです。
+    トラックは KeiSim の路地（車線 3.0 m 未満）だけでなく生活道路（3.0 m）にも、ほかに道がない所を除いて入りません。車体を経路に沿った箱で描くので、7 m のトラックが細い道との急なカーブで中央線を越えて、反対の車線で待つ車に重なるためです。
+  - モデルは車線変更とランプを学習していません（ゼロショット）。KeiSim の ramp_routes スイートでは v0.10 は 30/30 完走しましたが、分流・合流での横ずれは大きめです（[../README.md](../README.md)）。
+    ブラウザでも同じです。town 2000 のランプ 0 から 40 秒（`pilot_check.mjs --only ground,roads,signals,actors`、WASM）では、やり直しも接触もなくランプを抜けましたが、
+    分流の手前で早めに減速車線へ移り（ルートとの差 最大 3.7 m）、合流では加速車線に残り、その先の右折の前の車線変更にはついて行かず、左の車線から右折しました。
+    周りの車はこの 40 秒に 6 回車線を変えました。
+  - `node tools/traffic_check.mjs --town 2000-8c5d282b --sec 600 --cars 80 --ego 0`: ブラウザなしで周りの車だけを動かす検査です（node だけ）。town 2000 と 2002 で、40 台・80 台を各 5 シード 600 秒動かして、車どうしの接触は 0 回、車線変更は 1 回の検査あたり 62〜158 回、ランプの通過は 3〜17 回でした。60 秒以上止まったままの車もありません。
+    今までの町（1000、1015、札幌、西大井）の周りの車とナビのルートは、この変更の前と 1 ビットも変わらないことを、この検査の記録で確かめました。
 - ルートから 6 m 外れるか、90 秒動けないと、最初からやり直します（KeiSim の打ち切り条件と同じ）。
 - 推論 1 回の時間:
   - WebGPU（RTX 3060）は約 20〜40 ms です。
   - WASM（1 スレッド）は約 0.2〜0.35 秒です。WASM でも閉ループは回りますが、計画の更新が遅れるぶん反応が遅くなります。
 - モデルの重みは float16 で保存し、グラフの中で float32 に戻します（30 MB、計算は float32）。値は Release の重みと同じです。
 
-URL パラメータ: `?town=1001`（二段階の信号の町は `?town=1015-98782ab7`、札幌は `?town=osm_sapporo`）、`?q=low`（表示の画質。モデルの入力は常に medium）、`?ep=wasm` / `?ep=webgpu`（推論エンジンを固定）、`?model=<URL>`、`?traffic=0`（周りの車なし）、`?cars=20`（周りの車の台数）、`?cardetail=0`（周りの車を簡易な形で表示）
+URL パラメータ: `?town=1001`（二段階の信号の町は `?town=1015-98782ab7`、札幌は `?town=osm_sapporo`）、`?q=low`（表示の画質。モデルの入力は常に medium）、`?ep=wasm` / `?ep=webgpu`（推論エンジンを固定）、`?model=<URL>`、`?traffic=0`（周りの車なし）、`?cars=20`（周りの車の台数）、`?cardetail=0`（周りの車を簡易な形で表示）、`?tdir=.towns`（`scripts/import_osm.py` が `web/.towns` に書き出した町、例 `?tdir=.towns&town=osm_nishioi`: 一方通行の道路は中心線の上の車線 1 本で、周りの車もその向きにだけ走ります）、`?ramp=N`（ランプのある町: N 本目のランプの手前から。`-1` でふつうの出発点）、`?ort=node_modules/onnxruntime-web/dist/`（onnxruntime-web を CDN ではなくこのサイトから読む。同じサイトの相対パスだけ。CDN に出られない環境のテスト用: `npm install --no-save onnxruntime-web@1.20.1`）
 
 ```bash
 node tools/pilot_check.mjs --town 1000 --sec 60   # headless Chrome で 60 秒（シミュレーション時間）走らせて記録を表示
 node tools/pilot_check.mjs --url https://southern-star.github.io/keisim/ --sec 10   # 公開版を確かめる
 node tools/pilot_check.mjs --town osm_sapporo --sec 120 --model models/keipilot_v24.onnx   # 札幌で、別の ONNX（web/ の下）を走らせる
+node tools/pilot_check.mjs --town 2000-8c5d282b --sec 60 --ort node_modules/onnxruntime-web/dist/   # ランプの町（CDN なし）
+node tools/traffic_check.mjs --town 2002-8c5d282b --sec 600 --why   # 周りの車とナビだけを node で（接触の詳細つき）
 ```
 
 `pilot_check.mjs` は、モデルの計算を毎ステップ待つので、KeiSim と同じく推論の遅れがない状態で走ります。
+GPU のない環境（SwiftShader）では町全体（1000 万ポリゴン）の描画に 1 フレーム数秒かかるので、`--only ground,roads,signals,actors`（家・木・電柱なし）で動作を確かめます。
+家のない町はモデルにとって見慣れない絵ですが、town 1015 ではルートからのずれは 0.02 m のままでした。
 Linux では Vulkan を使い、GPU の WebGPU で推論します。フラグなしの headless Chrome の WebGPU は SwiftShader（CPU）で、1 回 6 秒かかります。
 ページ側も、SwiftShader の WebGPU しかないブラウザでは WASM を使います。
 
@@ -201,9 +226,10 @@ src/world/cars.js           表示用の詳しい形の車（8 車種）
 src/ego.js                  エゴモード（1 フレーム描画・セマンティックラベル・ライティングのランダム化）
 src/pilot.js                パイロットモード（モデルの入力の描画、onnxruntime-web、制御器と車両モデル、安全層、表示）
 src/nav.js                  パイロットモードのルート、コマンド、目標点（keisim/route.py と同じ規則）
+src/lanes.js                KeiSim の車線グラフ（片側2車線・ランプ）、車線変更、ナビと周りの車のルートの経路
 vendor/sakuragaoka/         Sakuragaoka Station から持ってきたコード（MIT、変更点は NOTICE.md）
-towns/                      エクスポート済みの街（1000〜1003、二段階の信号の 1015 と 1018、道路の種類の 1000-dae67d73）。エゴモードの街は .towns/ に自動で出力（git 対象外）
-tools/                      serve / check / shot / ego_server / pilot_check
+towns/                      エクスポート済みの街（1000〜1003、二段階の信号の 1015 と 1018、道路の種類の 1000-dae67d73、片側2車線とランプの 2000 と 2002）。エゴモードの街は .towns/ に自動で出力（git 対象外）
+tools/                      serve / check / shot / ego_server / pilot_check / traffic_check
 ```
 
 ## クレジット

@@ -1,6 +1,7 @@
 // Headless (node) build check for KeiView modules — no GPU, no browser. Adapted from Sakuragaoka
 // Station tools/check.mjs (MIT): stubbed DOM/canvas, builds the modules for a town, runs update()
-// for a while and prints errors, triangles, meshes, materials and build time per module.
+// for a while and prints errors, triangles, meshes, materials and build time per module, and fails if a utility
+// pole stands on the road surface.
 //   node tools/check.mjs [--town 1000] [--tdir .towns] [module ...]   (default: every module in src/main.js order)
 import fs from 'node:fs';
 import path from 'node:path';
@@ -94,5 +95,11 @@ for (const name of names.length ? names : MODULES) {
 }
 try { const b = batchStatic(ctx.staticRoot, { mat: ctx.mat }); log(`batch: ${b.sources} static meshes -> ${b.merged}`); } catch (e) { failed = true; log('batch error:', e.stack.split('\n').slice(0, 4).join('\n  ')); }
 log(`total ${Math.round(total)} tris, colliders ${ctx.physics.count}`);
+// utility poles (KeiView's own, src/world/poles.js) stand off the road surface, also beside KeiSim's ramps
+if (ctx.services.poles) {
+  const bad = ctx.services.poles.poles.filter((p) => town.onRoad(p.x, p.z));
+  log(`poles on the road surface: ${bad.length}${bad.length ? ` (${bad.map((p) => p.id).join(', ')})` : ''}`);
+  if (bad.length) failed = true;
+}
 log(failed ? 'RESULT: FAIL' : 'RESULT: OK');
 process.exit(failed ? 1 : 0);

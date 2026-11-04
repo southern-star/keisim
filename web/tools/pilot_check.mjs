@@ -6,7 +6,13 @@
 //   node tools/pilot_check.mjs [--town 1000] [--sec 60] [--every 2] [--ep webgpu|wasm] [--gl hw|soft] [--shot out.png]
 //                              [--traffic 0] [--cars 20]   (no other cars / their number)
 //                              [--model models/keipilot_v24.onnx]   (another ONNX under web/; default models/keipilot.onnx)
+//                              [--tdir .towns]   (a town exported there by scripts/import_osm.py, not one under towns/)
 //                              [--url https://southern-star.github.io/keisim/]   (a deployed copy instead of web/)
+//                              [--ort node_modules/onnxruntime-web/dist/]   (onnxruntime-web from web/, e.g. without CDN
+//                              access: npm install --no-save onnxruntime-web@1.20.1)
+//                              [--ramp N]   (towns with ramps: start before ramp N; -1: the usual start)
+//                              [--frames DIR]   (a screenshot at every report: DIR/f0001.png, ...)
+//                              [--only ground,roads,signals,actors]   (build only these modules: fast without a GPU)
 // Needs models/keipilot.onnx (scripts/export_onnx.py) and network access to cdn.jsdelivr.net (onnxruntime-web).
 import fs from 'node:fs';
 import puppeteer from 'puppeteer-core';
@@ -36,9 +42,10 @@ try {
   const page = await browser.newPage();
   page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warn') console.log(`[${m.type()}] ${m.text().slice(0, 300)}`); });
   page.on('pageerror', (e) => console.log(`[pageerror] ${e.message}`));
-  const q = new URLSearchParams({ pilot: '1', town, ...(args.ep ? { ep: args.ep } : {}),
+  const q = new URLSearchParams({ pilot: '1', town, ...(args.ep ? { ep: args.ep } : {}), ...(args.tdir ? { tdir: args.tdir } : {}),
     ...(args.traffic ? { traffic: args.traffic } : {}), ...(args.cars ? { cars: args.cars } : {}),
-    ...(args.model ? { model: args.model } : {}) });
+    ...(args.model ? { model: args.model } : {}), ...(args.ort ? { ort: args.ort } : {}), ...(args.ramp ? { ramp: args.ramp } : {}),
+    ...(args.only ? { only: args.only } : {}) });
   const t0 = Date.now();
   await page.goto(`${base}?${q}`, { waitUntil: 'load', timeout: 180000 });
   await page.waitForFunction('window.__pilotRun || /読み込めません/.test(document.getElementById("loadlabel").textContent)', { timeout: 600000, polling: 200 });
@@ -54,11 +61,12 @@ try {
   for (let t = every; t <= sec + 1e-6; t += every) {
     const s = await page.evaluate((d) => window.__pilotRun(d).then((r) => ({
       s: r.s, v: r.car.v, target: r.plan ? r.plan.target : null, tl: r.plan ? r.plan.tl : null,
-      turn: r.inputs.turn || 'straight', dist: r.inputs.dist, dev: r.deviation, resets: r.resets, ms: r.inferMs,
+      turn: (r.inputs.turn || 'straight') + (r.inputs.ramp ? '/ramp' : ''), dist: r.inputs.dist, dev: r.deviation, resets: r.resets, ms: r.inferMs,
       traffic: r.traffic, stand: r.useStand ? r.standM : null })), every);
+    if (args.frames) { fs.mkdirSync(args.frames, { recursive: true }); await page.screenshot({ path: `${args.frames}/f${String(Math.round(t / every)).padStart(4, '0')}.png` }); }
     const k = s.tl ? s.tl.indexOf(Math.max(...s.tl)) : 3;
     console.log(`${t.toFixed(0).padStart(4)} ${s.s.toFixed(0).padStart(5)} ${(s.v * 3.6).toFixed(0).padStart(5)} ${s.target === null ? '     -' : (s.target * 3.6).toFixed(0).padStart(6)}` +
-      `  ${names[k].padEnd(6)} ${s.turn.padEnd(8)} ${s.dist === null ? '' : `${s.dist.toFixed(0)} m`.padStart(6)} ${s.dev.toFixed(2).padStart(6)} ${String(s.resets).padStart(6)} ${s.ms.toFixed(0).padStart(6)} ms   ${s.traffic ? `${s.traffic.n}/${s.traffic.contacts}/${s.traffic.npcContacts}${s.traffic.stopSignStops ? ` 止まれ ${s.traffic.stopSignStops}` : ''}` : '-'}${s.stand === null ? '' : `   stood ${s.stand.toFixed(1)} m ago`}`);
+      `  ${names[k].padEnd(6)} ${s.turn.padEnd(8)} ${s.dist === null ? '' : `${s.dist.toFixed(0)} m`.padStart(6)} ${s.dev.toFixed(2).padStart(6)} ${String(s.resets).padStart(6)} ${s.ms.toFixed(0).padStart(6)} ms   ${s.traffic ? `${s.traffic.n}/${s.traffic.contacts}/${s.traffic.npcContacts}${s.traffic.stopSignStops ? ` 止まれ ${s.traffic.stopSignStops}` : ''}${s.traffic.laneChanges !== undefined ? `  lane changes ${s.traffic.laneChanges} ramps ${s.traffic.rampPassages}` : ''}` : '-'}${s.stand === null ? '' : `   stood ${s.stand.toFixed(1)} m ago`}`);
   }
   if (args.shot) { await page.screenshot({ path: args.shot }); console.log(`screenshot: ${args.shot}`); }
 } finally {

@@ -6,19 +6,25 @@ import math
 import numpy as np
 
 from .config import TL_GREEN, TL_RED, TL_YELLOW, TrafficConfig
-from .geometry import box_corners, rays_clear, wrap
+from .geometry import box_corners, curvature_of, rays_clear, wrap
+from .route import (LC_CHECK, LC_PUSH, LC_PUSH_TO, LC_START_MARGIN, blend_weight, change_room, change_window,
+                    lane_moves, link_map, pick_move)
 
 # ----------------------------------------------------------------------------
 # Lane-sequence lookahead
 # ----------------------------------------------------------------------------
 
 
-def lane_lookahead(town, lanes, idx, s, dist, step=2):
+def lane_lookahead(town, lanes, idx, s, dist, step=2, change_at=None):
     """Polyline following `lanes[idx:]` from arc length `s` for `dist` metres.
 
     Returns (pts (P,2), cum (P,), curv (P,), stops [(s_path, lane_id)], complete)
     `step` subsamples the 0.5 m lane points (2 -> ~1 m spacing).
+    Two sibling lanes in a row (a lane change, route.py) blend from one into the other: at A-local (a0, lc) from
+    change_at[A] (an NPC's planned change), else at the start of A's window.
     """
+    if any(lanes[k + 1] in town.lanes[lanes[k]].links for k in range(idx, len(lanes) - 1)):
+        return _lookahead_changes(town, lanes, idx, s, dist, step, change_at or {})
     pts_l, curv_l = [], []
     stops = []
     base = 0.0
@@ -57,6 +63,72 @@ def lane_lookahead(town, lanes, idx, s, dist, step=2):
     return pts[m], cum[m], curv[m], stops, total >= dist
 
 
+def _lookahead_changes(town, lanes, idx, s, dist, step, change_at):
+    """lane_lookahead with lane changes in `lanes[idx:]`."""
+    pts_l, curv_l, stops = [], [], []
+    base, lo, k = 0.0, float(s), idx
+    while k < len(lanes) and base < dist:
+        lane = town.lanes[lanes[k]]
+        sib = k + 1 < len(lanes) and lanes[k + 1] in lane.links
+        hi = lane.length
+        if sib:
+            if lane.id in change_at:
+                a0, lc = change_at[lane.id]
+            else:
+                win = change_window(lane, 0.0, town.lanes[lanes[k + 1]])
+                a0, lc = (win[0], win[2]) if win is not None else (max(0.0, lane.length / 2 - 12.5), 25.0)
+            hi = max(lo, a0)
+        if hi > lo + 1e-9 or not (pts_l or sib):
+            inner = np.nonzero((lane.s > lo + 1e-6) & (lane.s < hi - 1e-6))[0][::step]
+            ends = lane.poly.interp(np.array([lo, hi]))
+            seg = np.concatenate([ends[:1], lane.pts[inner], ends[1:]])
+            cv = np.concatenate([np.interp([lo], lane.s, lane.curv), lane.curv[inner], np.interp([hi], lane.s, lane.curv)])
+            if pts_l:
+                seg, cv = seg[1:], cv[1:]
+            pts_l.append(seg)
+            curv_l.append(cv)
+        for sl in (lane.stop_s,):
+            if sl is not None and lo - 1e-6 <= sl <= hi:
+                stops.append((base + sl - lo, lane.id))
+        base += hi - lo
+        if sib:
+            B = town.lanes[lanes[k + 1]]
+            u0 = min(1.0, max(0.0, (lo - a0) / lc))
+            m = max(2, int(math.ceil((1.0 - u0) * lc / (0.5 * step))))
+            u = np.linspace(u0, 1.0, m + 1)
+            sa = a0 + u * lc
+            w = blend_weight(u)[:, None]
+            seg = (1.0 - w) * lane.poly.interp(sa) + w * B.poly.interp(link_map(lane, B, sa))
+            cv = curvature_of(seg)
+            d = np.hypot(*np.diff(seg, axis=0).T)
+            pts_l.append(seg[1:] if pts_l else seg)          # (from mid-change: the blend is the start)
+            curv_l.append(cv[1:] if len(curv_l) else cv)
+            base += float(d.sum())
+            lo = link_map(lane, B, a0 + lc)
+        else:
+            lo = 0.0
+        k += 1
+    pts = np.concatenate(pts_l, 0)
+    curv = np.concatenate(curv_l, 0)
+    d = np.diff(pts, axis=0)
+    cum = np.concatenate([[0.0], np.cumsum(np.hypot(d[:, 0], d[:, 1]))])
+    m = cum <= dist + 1.0
+    m[:2] = True
+    return pts[m], cum[m], curv[m], stops, base >= dist
+
+
+def change_pose(A, B, a0, lc, s):
+    """Position and heading of a car changing from lane A to its sibling B, at A-local `s` in [a0, a0 + lc]."""
+    out = []
+    for si in (s, s + 0.3):
+        u = min(1.0, max(0.0, (si - a0) / lc))
+        w = blend_weight(u)
+        pa, pb = A.poly.interp1(min(si, A.length)), B.poly.interp1(min(link_map(A, B, si), B.length))
+        out.append(((1.0 - w) * pa[0] + w * pb[0], (1.0 - w) * pa[1] + w * pb[1]))
+    (x0, y0), (x1, y1) = out
+    return x0, y0, math.atan2(y1 - y0, x1 - x0)
+
+
 NCIRC = 4
 
 
@@ -79,6 +151,8 @@ def vehicle_circles(xy, yaw, length, width):
 
 GRID_MIN_PAIRS = 40000      # corridor_gaps: below this many (path, circle) pairs the dense test is faster
 YIELD_GAP = 5.0             # s: a yielding turn goes only if no car with priority reaches the crossing sooner
+LC_GIVE_UP = 8.0            # s: an NPC waiting this long at the end of its lane change window stays in its lane (two
+                            # cars side by side that want each other's lane would wait for ever)
 PASS_SPEED = 3.0            # m/s: passing someone who walks in the 路側帯 beside the lane (road types)
 LOOKBACK_LANE = 60.0        # m: min_arrival's look into the junction before a short approach lane (yield_lookback)
 STOP_SIGN_NPC_AT = 1.0      # m: 止まれ: NPCs stop with the front bumper this far before the line (as the expert)
@@ -214,6 +288,8 @@ class Traffic:
         self.stuck = np.zeros(0)
         self.target_n = n
         self.has_yields = any(getattr(l, "yields", None) for l in town.lanes)
+        self.has_lc = any(getattr(l, "links", None) for l in town.lanes)    # multi-lane roads, ramps: lane changes
+        self.lcp = {}           # car -> its coming lane change {from, to, a0, lc, a_min, a_max} (A-local, route.py)
 
     # --------------------------------------------------------------- spawning
     def _sample_dims(self):
@@ -305,9 +381,19 @@ class Traffic:
             succ = last.succ
             if self.kind[i] == 1 and last.kind == "road" and town.truck_lanes:      # trucks keep out of alleys
                 succ = [c for c in succ if town.lanes[c].succ[0] in town.truck_lanes] or succ
-            nxt = succ[rng.integers(len(succ))]
-            r.append(nxt)
-            rem += town.lanes[nxt].length
+            moves = []
+            if self.has_lc and last.links and not (len(r) > 1 and r[-2] in last.links):
+                moves = lane_moves(town, last, self.s[i] + LC_START_MARGIN if len(r) - 1 == k else 0.0,
+                                   town.truck_lanes if self.kind[i] == 1 else None)
+            if any(src != last.id or town.lanes[seq[-1]].kind == "road" for _, src, seq in moves):
+                # multi-lane road / ramp: the movement first (from any of its lanes), then the lane (as random_route)
+                src, seq = pick_move(rng, moves, last.id)
+                r.extend(seq)                   # (a lane change: the two lanes count as one road in `rem`)
+                rem += sum(town.lanes[x].length for x in seq if x != src)
+            else:
+                nxt = succ[rng.integers(len(succ))]
+                r.append(nxt)
+                rem += town.lanes[nxt].length
         # drop consumed lanes
         if k > 2:
             del r[: k - 1]
@@ -336,6 +422,7 @@ class Traffic:
             self.yaw[i] = float(lane.poly.heading(s))
             self.stuck[i] = 0.0
             self.ss_done.pop(i, None)
+            self.lcp.pop(i, None)
             return
 
     # ------------------------------------------------------------------- step
@@ -362,7 +449,15 @@ class Traffic:
 
     def _refresh(self, i):
         self._extend(i, self.CACHE_LEN + 5.0)
-        pts, cum, curv, stops, _ = lane_lookahead(self.town, self.route[i], self.ri[i], self.s[i], self.CACHE_LEN)
+        change_at = None
+        if self.has_lc:
+            p = self._lc_plan(i)
+            if p is not None:
+                change_at = {p["from"]: (p["a0"], p["lc"])}
+            elif self.ri[i] + 1 >= len(self.route[i]):              # a change too late was dropped
+                self._extend(i, self.CACHE_LEN + 5.0)
+        pts, cum, curv, stops, _ = lane_lookahead(self.town, self.route[i], self.ri[i], self.s[i], self.CACHE_LEN,
+                                                  change_at=change_at)
         m = min(self.PC, len(pts))
         self.c_pts[i, :m] = pts[:m]
         self.c_pts[i, m:] = pts[m - 1]
@@ -377,6 +472,168 @@ class Traffic:
             self.c_stop_lane[i, k] = lid
         self.c_odo0[i] = self.odo[i]
         self.c_len[i] = cum[m - 1]
+
+    # ------------------------------------------------------------------- lane changes (multi-lane roads)
+    def _lc_plan(self, i):
+        """Car i's coming lane change (route.py) if it is on the lane it changes from; made when first needed, with
+        the window from where the car is. A change too late for the window is dropped (the route then goes on from
+        the current lane: None, with the route cut after it)."""
+        r, k = self.route[i], self.ri[i]
+        if k + 1 >= len(r):
+            return None
+        A = self.town.lanes[r[k]]
+        if r[k + 1] not in A.links:
+            return None
+        p = self.lcp.get(i)
+        if p is not None and p["from"] == A.id and p["to"] == r[k + 1]:
+            return p
+        win = change_window(A, float(self.s[i]) + 2.0, self.town.lanes[r[k + 1]])
+        if win is None:
+            del r[k + 1:]
+            self.lcp.pop(i, None)
+            return None
+        p = {"from": A.id, "to": r[k + 1], "a0": win[0], "lc": win[2], "a_min": win[0], "a_max": win[1],
+             "fresh": True}
+        self.lcp[i] = p
+        return p
+
+    def cars_by_lane(self):
+        """lane id -> indices of the NPCs on it."""
+        out = {}
+        for j in range(self.n):
+            out.setdefault(self.route[j][self.ri[j]], []).append(j)
+        return out
+
+    def lane_cars(self, lane_id, by_lane=None, exclude=None, ego=None):
+        """(s, v, length) of the cars in lane `lane_id`, s along it: the NPCs on it, on the connectors into it (s < 0:
+        just out of the junction behind), changing into it (projected onto it), and the ego (xy, v, yaw, length) if it
+        is in it (projected: in it, changing into it or about to enter it)."""
+        lanes = self.town.lanes
+        L = lanes[lane_id]
+        by_lane = self.cars_by_lane() if by_lane is None else by_lane
+        out = [(float(self.s[j]), float(self.v[j]), float(self.dims[j, 0])) for j in by_lane.get(lane_id, ())
+               if j != exclude]
+        for c in L.pred:
+            cl = lanes[c].length
+            out += [(float(self.s[j]) - cl, float(self.v[j]), float(self.dims[j, 0])) for j in by_lane.get(c, ())
+                    if j != exclude]
+        out += [(sb, float(self.v[j]), float(self.dims[j, 0])) for j, sb in self.changing_into(lane_id) if j != exclude]
+        if ego is not None:
+            exy, ev, eyaw, elen = ego
+            sb, lat = L.poly.project(np.asarray(exy, float))
+            if abs(lat) < L.width / 2 + 0.3 and sb < L.length and math.cos(eyaw - L.poly.heading1(sb)) > 0.5:
+                out.append((sb, float(ev), float(elen)))
+        return out
+
+    def _lane_change_gaps(self, stop_gap, ego, ego_wait=None, dt=0.05):
+        """NPCs about to change lanes need room in the target lane (route.change_room; the ego counts too). Without
+        it the change starts later (LC_PUSH, while the window lasts) and the car falls in behind the car in the way
+        ahead of it (a virtual lead for IDM: returned bumper gaps and speeds); at the window's end it waits.
+        The cars in the target lane leave it a gap there (ファスナー合流): the ones coming up behind a car that waits at
+        the end of its window (an NPC, or the ego: ego_wait = (lane, s along it, length)) stop behind it. An NPC that
+        has waited there LC_GIVE_UP s, or came to its start too fast to stop without room, stays in its lane (its route
+        goes on from there)."""
+        n = self.n
+        gap, lead_v = np.full(n, np.inf), np.zeros(n)
+        lanes = self.town.lanes
+        by_lane = None
+        waiting = [] if ego_wait is None else [(-1, ego_wait[0], ego_wait[1], ego_wait[2])]
+        for i in range(n):
+            r, k = self.route[i], self.ri[i]
+            if k + 1 >= len(r) or r[k + 1] not in lanes[r[k]].links:
+                continue
+            p = self._lc_plan(i)
+            if p is None or p.pop("fresh", False):
+                self._refresh(i)
+                if p is None:
+                    continue
+                r, k = self.route[i], self.ri[i]                 # (the refresh may drop the lanes behind)
+            if p.get("go"):
+                continue                                         # under way
+            d = p["a0"] - self.s[i]
+            li, vi = float(self.dims[i, 0]), float(self.v[i])
+            dead_end = not lanes[r[k]].succ          # a ramp: it has to merge
+            if d <= 0.3 or (p.get("wait", 0.0) > LC_GIVE_UP and not dead_end):
+                # at its start without room (or past it: too fast to stop), or waiting there for too long
+                if p["a0"] < p["a_max"] and d <= 0.3:
+                    p["a0"] = min(p["a_max"], float(self.s[i]) + LC_PUSH_TO)
+                elif dead_end:      # past the last start on a ramp: it waits where it is
+                    p["a0"] = p["a_max"] = float(self.s[i]) + 0.5
+                else:               # it stays in its lane, and its route goes on from there
+                    del r[k + 1:]
+                    del self.lcp[i]
+                self._refresh(i)
+                continue
+            if d > max(LC_CHECK, vi * vi / 6.0 + 3.0):
+                continue                                         # not yet (checked from where it could stop)
+            if by_lane is None:
+                by_lane = self.cars_by_lane()
+            A, B = lanes[p["from"]], lanes[p["to"]]
+            s_e = link_map(A, B, float(self.s[i]))
+            bad = [(sn - s_e, vn, ln) for sn, vn, ln in self.lane_cars(B.id, by_lane, exclude=i, ego=ego)
+                   if not change_room(sn - s_e, vn, ln, vi, li)]
+            if not bad:
+                if d < 1.5:
+                    p["go"] = True                               # room right at its start: it changes
+                continue
+            if d < LC_PUSH and p["a0"] < p["a_max"]:
+                p["a0"] = min(p["a_max"], float(self.s[i]) + LC_PUSH_TO)
+                self._refresh(i)
+            for dx, vn, ln in bad:
+                g = dx - (li + ln) / 2
+                if dx > 0.0 and g < gap[i]:
+                    gap[i], lead_v[i] = max(g, 0.05), vn
+            if p["a0"] >= p["a_max"] - 1e-6:
+                stop_gap[i] = min(stop_gap[i], p["a0"] - float(self.s[i]) + 1.5)    # IDM stops 2.5 m short
+                if d < 4.0 and vi < 1.0:
+                    waiting.append((i, B.id, s_e, li))
+                    p["wait"] = p.get("wait", 0.0) + dt
+        for j, lane_id, s_w, l_w in waiting:     # a gap for the car waiting to change in
+            if by_lane is None:
+                by_lane = self.cars_by_lane()
+            B = lanes[lane_id]
+            followers = [(i, float(self.s[i])) for i in by_lane.get(B.id, ())]
+            for c in B.pred:
+                followers += [(i, float(self.s[i]) - lanes[c].length) for i in by_lane.get(c, ())]
+            for i, s_i in followers:
+                g = s_w - s_i - (self.dims[i, 0] + l_w) / 2
+                if g > 1.0 and g < gap[i]:                  # fully behind it (the ones beside it go on)
+                    gap[i], lead_v[i] = g, 0.0
+        # the cars in the target lane behind a car that has begun to change into it follow it from then on (a
+        # stopped car could otherwise speed up and come alongside before the changing car is in its corridor)
+        for j, s_b in self.changing_into():
+            p = self.lcp[j]
+            if by_lane is None:
+                by_lane = self.cars_by_lane()
+            B = lanes[p["to"]]
+            followers = [(i, float(self.s[i])) for i in by_lane.get(B.id, ())]
+            for c in B.pred:
+                followers += [(i, float(self.s[i]) - lanes[c].length) for i in by_lane.get(c, ())]
+            for i, s_i in followers:
+                if s_i < s_b:
+                    g = s_b - s_i - (self.dims[i, 0] + self.dims[j, 0]) / 2
+                    if g < gap[i]:
+                        gap[i], lead_v[i] = max(g, 0.05), float(self.v[j])
+        return gap, lead_v
+
+    def changing_into(self, lane_id=None):
+        """[(car, s)]: the cars changing lanes right now (into `lane_id` only, if given), s projected onto the lane
+        they change into."""
+        lanes = self.town.lanes
+        out = []
+        for j, p in self.lcp.items():
+            if (lane_id is None or p["to"] == lane_id) and p.get("go") and self.route[j][self.ri[j]] == p["from"] and \
+                    self.s[j] >= p["a0"]:
+                sb, _ = lanes[p["to"]].poly.project(self.xy[j])
+                out.append((j, sb))
+        return out
+
+    def _lane_end(self, i, k, p):
+        """Where car i leaves its route's lane k: the end of a lane change into the next lane, else the lane's end."""
+        r = self.route[i]
+        if p is not None and p.get("go") and r[k] == p["from"] and k + 1 < len(r) and r[k + 1] == p["to"]:
+            return p["a0"] + p["lc"]
+        return self.town.lanes[r[k]].length
 
     def occupancy(self):
         """lane id -> list of (s, v, length) of NPCs currently on that lane."""
@@ -629,7 +886,7 @@ class Traffic:
         return False
 
     def step(self, dt, t, ext_xy, ext_r, ext_owner, ext_speed, ext_yaw, ego_xy, ego_v=0.0, ego_yaw=None,
-             ego_info=None, ped_margin=None, pass_xy=None):
+             ego_info=None, ped_margin=None, pass_xy=None, ego_len=4.4, ego_wait=None):
         """ext_*: external obstacles (ego circles with owner -1, pedestrians owner -2-k). ped_margin: optional lateral
         margin per pedestrian (default 0.9 m); pass_xy: pedestrians walking in a 路側帯, passed at PASS_SPEED."""
         n = self.n
@@ -695,6 +952,10 @@ class Traffic:
             self._stop_sign_gaps(stop_gap, hl)
         if self.has_yields:          # two-phase signals: turns wait for a gap in the oncoming traffic
             self._yield_gaps(stop_gap, t, ego_info, hl)
+        lc_pair = ()
+        if self.has_lc:              # multi-lane roads: room for lane changes
+            ego = None if ego_yaw is None else (ego_xy, ego_v, ego_yaw, ego_len)
+            lc_pair = (self._lane_change_gaps(stop_gap, ego, ego_wait, dt),)
         # obstacles: other NPCs + external
         cxy, cr, cow = self.circles()
         csp = self.v[cow]
@@ -722,7 +983,7 @@ class Traffic:
         a_max, b, T, s0 = cfg.idm_a, cfg.idm_b, cfg.idm_T, cfg.idm_s0
         v0 = np.maximum(vmax, 0.5)
         acc = a_max * (1.0 - (v / v0) ** 4)
-        for g, vl in ((gap, lead_v), (stop_gap, np.zeros(n))):
+        for g, vl in ((gap, lead_v), (stop_gap, np.zeros(n))) + lc_pair:
             m = np.isfinite(g)
             if m.any():
                 gg = np.maximum(g[m], 0.05)
@@ -742,7 +1003,8 @@ class Traffic:
         for i in range(n):
             r = self.route[i]
             k = self.ri[i]
-            L = lanes[r[k]].length
+            p = self.lcp.get(i) if self.has_lc else None
+            L = lanes[r[k]].length if p is None else self._lane_end(i, k, p)
             while self.s[i] > L:
                 if k + 1 >= len(r):
                     self._extend(i, 10.0)
@@ -751,14 +1013,23 @@ class Traffic:
                     if k + 1 >= len(r):
                         self.s[i] = L
                         break
-                self.s[i] -= L
+                if p is not None and r[k] == p["from"] and r[k + 1] == p["to"]:   # lane change done
+                    self.s[i] = link_map(lanes[r[k]], lanes[r[k + 1]], L) + (self.s[i] - L)
+                    del self.lcp[i]
+                    p = None
+                else:
+                    self.s[i] -= L
                 k += 1
                 self.ri[i] = k
-                L = lanes[r[k]].length
-            poly = lanes[r[k]].poly
+                L = lanes[r[k]].length if p is None else self._lane_end(i, k, p)
             si = float(self.s[i])
-            self.xy[i, 0], self.xy[i, 1] = poly.interp1(si)
-            self.yaw[i] = poly.heading1(si)
+            if p is not None and p.get("go") and r[k] == p["from"] and si >= p["a0"]:      # changing lanes
+                self.xy[i, 0], self.xy[i, 1], self.yaw[i] = change_pose(lanes[p["from"]], lanes[p["to"]], p["a0"],
+                                                                        p["lc"], si)
+            else:
+                poly = lanes[r[k]].poly
+                self.xy[i, 0], self.xy[i, 1] = poly.interp1(si)
+                self.yaw[i] = poly.heading1(si)
         self.stuck = np.where(self.v < 0.1, self.stuck + dt, 0.0)
         self.release_stuck(ego_xy, ego_yaw)
 
@@ -774,6 +1045,8 @@ class Traffic:
             for j in range(k + 1, len(r)):
                 if d > 40.0:
                     break
+                if r[j] in lanes[r[j - 1]].siblings:
+                    continue                            # a lane change: the same road (and limit)
                 vj = lanes[r[j]].speed_limit
                 if vj < v:
                     v = min(v, math.sqrt(vj * vj + 3.0 * max(d, 0.0)))
@@ -841,7 +1114,7 @@ class Pedestrians:
         self.partner = np.zeros(len(ww), int)
         for i, a in enumerate(ww):
             for j, b in enumerate(ww):
-                if i != j and a["road"] == b["road"]:
+                if i != j and a["road"] == b["road"] and a.get("side") != b.get("side"):
                     self.partner[i] = j
         self._update_pose()
 
