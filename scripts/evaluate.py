@@ -318,8 +318,9 @@ def main():
     ap.add_argument("--yield_hold", type=float, nargs="*", default=None, metavar="X",
                     help="safety layer: stand until a car with priority the model's yield_tta head saw coming has passed "
                          "(keipilot.agent.YieldHold), held only from a yield the model itself began; no values: its defaults, "
-                         "or ON MARGIN V STAND [BRAKE] (BRAKE < 0: also without the model's own yield, as first "
-                         "evaluated); tag suffix _yh")
+                         "or ON MARGIN V STAND [BRAKE [NONE_P AFTER_M]] (BRAKE < 0: also without the model's own yield, "
+                         "as first evaluated; NONE_P AFTER_M: only where the light head sees no light with this "
+                         "probability, within AFTER_M m of the last stand); tag suffix _yh")
     ap.add_argument("--town_style", default=None, choices=list(TOWN_STYLES),
                     help="default: classic (long2: varied, long3: twophase)")
     ap.add_argument("--blocked_timeout", type=float, default=None, help="s without progress (default 90, long2 180)")
@@ -336,6 +337,8 @@ def main():
     ap.add_argument("--ego_patience", type=float, default=0.0,
                     help="s the ego may stand before the NPCs that give way to it stop waiting for it "
                          "(TrafficConfig.ego_patience_s; 0: they wait for ever); suffix _pat<S>")
+    ap.add_argument("--only", nargs="+", default=None, metavar="TOWN:EP",
+                    help="only these routes of the suite (e.g. 1018:9400), for checks on picked routes; give --out")
     args = ap.parse_args()
     if args.rig is None:
         from keipilot.agent import checkpoint_rig
@@ -369,6 +372,11 @@ def main():
         jobs = [(args.osm_town, args.episode0 + e) for e in range(args.routes)]
     else:
         jobs = SUITES[args.suite]
+    if args.only:
+        if not args.out:
+            ap.error("--only needs --out (a part of the suite must not take the suite's file name)")
+        keep = {tuple(int(x) for x in r.split(":")) for r in args.only}
+        jobs = [j for j in jobs if tuple(j) in keep]
     suffix = ("_dense" if args.dense else "") + ("" if args.weather == "random" else f"_{args.weather}") + \
         ("_keiview" if args.renderer == "keiview" else "") + \
         ("_kvdetail" if args.renderer == "keiview" and args.keiview_roads == "detail" else "") + \

@@ -6,6 +6,7 @@ from collections import deque
 import numpy as np
 import torch
 
+from keisim.config import TL_NONE
 from keisim.control import PlanFollower
 
 from .data import STAND_CAP, stand_update
@@ -82,31 +83,40 @@ class YieldHold:
     or below `brake`): the layer keeps a yield the model began until the car it saw has passed, but starts no stop
     on the head alone. Off its training frames (crossings where the ego has priority, scenery) the head often reads
     3-4 s with no car near, most of all while standing, and holds on those readings made 131 of 300 Sapporo routes
-    stand longer (11-01). brake None or negative: no such condition (the layer as first evaluated)."""
+    stand longer (11-01). brake None or negative: no such condition (the layer as first evaluated).
+    With `none_p` and `after_m`, a hold starts only where the model's light head sees no light (probability of
+    "none" at least none_p) and within after_m metres of the ego's last stand (stand_m; it saturates at
+    data.STAND_CAP = 10 m): moving off after a 止まれ or a give-way stop. Even with the yield condition, most holds
+    on the grid towns came while slowing in a queue at a light or for a pedestrian, where the head read 1-4 s,
+    and standing at the lights grew 2.7x (11-02). None or negative (the default): no such condition."""
 
-    def __init__(self, on=4.0, margin=1.0, v=3.5, stand=4.0, brake=0.5):
+    def __init__(self, on=4.0, margin=1.0, v=3.5, stand=4.0, brake=0.5, none_p=-1.0, after_m=-1.0):
         self.on, self.margin, self.v, self.stand = on, margin, v, stand
         self.brake = None if brake is None or brake < 0 else brake
+        self.none_p = None if none_p is None or none_p < 0 else none_p
+        self.after_m = None if after_m is None or after_m < 0 else after_m
         self.reset()
 
     def reset(self):
         self.t, self.until, self.stood = 0.0, -1.0, 0.0
 
-    def __call__(self, target, speed, tta, dt):
+    def __call__(self, target, speed, tta, dt, tl_probs=None, stand_m=None):
         self.t += dt
         self.stood = self.stood + dt if speed < 0.1 else 0.0
         if speed < self.v and tta < self.on:
             end = self.t + max(tta, 0.0) + self.margin
             if self.t < self.until:
                 self.until = min(self.until, end)
-            elif self.stood <= self.stand and (self.brake is None or target < max(speed - self.brake, self.brake)):
+            elif (self.stood <= self.stand and (self.brake is None or target < max(speed - self.brake, self.brake))
+                  and (self.none_p is None or float(tl_probs[TL_NONE]) >= self.none_p)
+                  and (self.after_m is None or stand_m < self.after_m)):
                 self.until = end
         return 0.0 if self.t < self.until else target
 
 
 class KeiPilotAgent:
     def __init__(self, ckpt, device=None, brake_hold=False, red_hold=False, yield_hold=None):
-        """yield_hold: None (off), True (YieldHold's defaults) or its (on, margin, v, stand[, brake])."""
+        """yield_hold: None (off), True (YieldHold's defaults) or its (on, margin, v, stand[, brake[, none_p, after_m]])."""
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.model = load_model(ckpt, self.device).to(memory_format=torch.channels_last)
         self.follower = PlanFollower()
@@ -185,6 +195,7 @@ class KeiPilotAgent:
         if self.red_hold:     # judged on the model's own target, before the brake hold capped it
             p["target_speed"] = min(p["target_speed"], self.red_hold(p["target_speed_raw"], speed, p["tl_probs"]))
         if self.yield_hold:
-            p["target_speed"] = min(p["target_speed"], self.yield_hold(p["target_speed_raw"], speed, p["yield_tta"], dt))
+            p["target_speed"] = min(p["target_speed"], self.yield_hold(p["target_speed_raw"], speed, p["yield_tta"], dt,
+                                                                       p["tl_probs"], self.stand_m))
         action = self.follower(p["path"], p["target_speed"], speed, dt)
         return action, p
