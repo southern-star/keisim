@@ -172,6 +172,28 @@ def lead_at_edge(env, plan, max_gap):
     return abs(route_turn_deg(plan["path"])) >= LEAD_TURN_DEG
 
 
+RAMP_LEAD = 40.0              # --focus_ramp / --ramp_early_drop: m before the route's change into a ramp
+RAMP_EARLY = 0.5              # --ramp_early_drop: m toward the ramp ahead of the route's path into it
+
+
+def ramp_state(env):
+    """(near, early) of the ego against the ramps its route takes: near, from RAMP_LEAD m before the change into a
+    ramp to the end of the ramp's junction (the acceleration lane's merge included); early, ahead of the route's path
+    into the ramp (RAMP_EARLY m or more toward the ramp before or during that change). The expert changes over where
+    the deceleration lane runs beside the lane, after its taper: a model that moves over in the taper gets a label
+    back out of the ramp it is meant to take, and mc9 learned from those to stay out of it (11-05)."""
+    T, rt, s = env.world.town, env.route, env.s_ego
+    near = early = False
+    for c in rt.changes:
+        if T.lanes[c["to"]].kind == "ramp" and c["s_a"] - RAMP_LEAD <= s <= c["s_b"]:
+            side = next(rp["side"] for rp in T.ramps if rp["lane"] == c["to"])
+            near, early = True, early or env.lat * side >= RAMP_EARLY
+    for j in rt.junctions:
+        if T.lanes[j["lane"]].kind == "ramp" and j["s_in"] - RAMP_LEAD <= s <= j["s_out"]:
+            near = True
+    return near, early
+
+
 def osm_spec(spec):
     """--osm_towns entry: NAME (a box of OSM_BOXES) or NAME:S,W,N,E."""
     name, _, box = spec.partition(":")
@@ -182,7 +204,7 @@ def osm_spec(spec):
 # (steps_*) and the kept frames
 STAT_KEYS = ("steps", "steps_focus", "steps_lead_edge", "frames", "focus", "lead_edge", "lead_edge_vehicle",
              "lead_edge_tl_none", "lead_edge_tl_none_red", "steps_freeze", "freeze", "freezes", "stand_perts",
-             "stand_pert")
+             "stand_pert", "steps_ramp", "ramp", "ramp_early_dropped")
 FREEZE_REASONS = ("curve", "cruise")    # --freeze_reasons: the expert drives on along the road, no one to wait for
 
 
@@ -356,12 +378,19 @@ def worker(wid, args, quota, out_dir, counter):
                 stopped = env.world.ego.v < 0.2 and plan["target_speed"] == 0.0
                 keep = standing or not stopped or rng.random() < args.stopped_keep
                 edge = args.focus_lead_edge > 0 and lead_at_edge(env, plan, args.focus_lead_edge)
+                near_ramp, early = ramp_state(env) if (args.focus_ramp or args.ramp_early_drop) and \
+                    env.world.town.ramps else (False, False)
                 focus = False
                 if args.focus_yield < 1.0:          # mostly frames around junction decisions, and model mistakes
                     focus = np.isfinite(plan.get("yield_tta", np.nan)) or plan["reason"] in args.focus_reasons or \
-                        (v_model is not None and abs(v_model - plan["target_speed"]) > args.focus_disagree) or edge
+                        (v_model is not None and abs(v_model - plan["target_speed"]) > args.focus_disagree) or edge \
+                        or (args.focus_ramp and near_ramp)
                     keep = keep and (focus or standing or rng.random() < args.focus_yield)
+                if args.ramp_early_drop and early and keep:
+                    keep = False
+                    stats["ramp_early_dropped"] += 1
                 stats["steps"] += 1
+                stats["steps_ramp"] += int(near_ramp)
                 stats["steps_focus"] += int(focus)
                 stats["steps_lead_edge"] += int(edge)
                 stats["steps_freeze"] += int(frozen_t > 0)
@@ -370,6 +399,7 @@ def worker(wid, args, quota, out_dir, counter):
                     stats["focus"] += int(focus)
                     stats["freeze"] += int(frozen_t > 0)
                     stats["stand_pert"] += int(standing)
+                    stats["ramp"] += int(near_ramp)
                     if edge:
                         stats["lead_edge"] += 1
                         stats["lead_edge_vehicle"] += int(plan["reason"] == "vehicle")
@@ -429,6 +459,9 @@ def report(out_dir):
     if tot["stand_perts"]:
         print(f"stands made (--stand_pert): {tot['stand_perts']}; frames kept from them: {tot['stand_pert']}"
               f" ({tot['stand_pert'] / fr:.1%})")
+    if tot.get("steps_ramp") or tot.get("ramp_early_dropped"):
+        print(f"recording steps by a ramp the route takes: {tot['steps_ramp']}; frames kept there: {tot['ramp']}"
+              f" ({tot['ramp'] / fr:.1%}); dropped ahead of the route's path into a ramp: {tot['ramp_early_dropped']}")
     return tot
 
 
@@ -491,6 +524,12 @@ def main():
     ap.add_argument("--via_ramp", type=float, default=0.0,
                     help="share of the episodes whose route takes one of the town's ramps (route.ramp_route, "
                          "evaluate.py --via_ramp; ramps towns: the random routes rarely do)")
+    ap.add_argument("--focus_ramp", type=int, default=0, choices=[0, 1],
+                    help="with --focus_yield < 1, frames by a ramp the route takes are in focus (ramp_state: from "
+                         "RAMP_LEAD m before the change into it to the end of its junction)")
+    ap.add_argument("--ramp_early_drop", type=int, default=0, choices=[0, 1],
+                    help="drop the frames where the ego is ahead of the route's path into a ramp (moved over in the "
+                         "taper): their label leads back out of the ramp (ramp_state)")
     ap.add_argument("--osm_seed0", type=int, default=1000, help="seeds of the real towns' variants (per worker)")
     ap.add_argument("--allow_eval_town", action="store_true", help="let --osm_towns include osm_sapporo (tests only)")
     ap.add_argument("--history", type=float, default=0.0, help="also store the frame this many s earlier (multi-frame)")
@@ -516,6 +555,8 @@ def main():
                **({"freeze_reasons": args.freeze_reasons} if args.freeze_takeover > 0 else {}),
                **({"stand_pert": args.stand_pert, "stand_hold": args.stand_hold} if args.stand_pert > 0 else {}),
                **({"via_ramp": args.via_ramp} if args.via_ramp > 0 else {}),
+               **({"focus_ramp": 1} if args.focus_ramp else {}),
+               **({"ramp_early_drop": 1} if args.ramp_early_drop else {}),
                **({"rig": args.rig, "cameras": [asdict(c) for c in set_camera_rig(EnvConfig(), args.rig).cameras]}
                   if args.rig != "front" else {}))
     ctx = mp.get_context("spawn" if args.mode == "dagger" else "fork")
