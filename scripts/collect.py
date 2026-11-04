@@ -296,7 +296,8 @@ def worker(wid, args, quota, out_dir, counter):
             left = args.episodes_per_town
         left -= 1
         ep_seed = int(rng.integers(1 << 40))
-        env.reset(town_seed=town, episode_seed=ep_seed, render=False)
+        via = args.via_ramp > 0 and bool(rng.random() < args.via_ramp)     # (no draw at 0: the old random streams)
+        env.reset(town_seed=town, episode_seed=ep_seed, render=False, via_ramp=via)
         env._step = 0
         weather_id = WEATHERS.get(env.weather.name, 0)
         pert = Perturbation(rng) if args.mode == "expert" else None
@@ -487,6 +488,9 @@ def main():
     ap.add_argument("--osm_towns", nargs="*", default=[], metavar="NAME[:S,W,N,E]",
                     help="drive real towns (keisim/realworld.py; boxes of OSM_BOXES or given) instead of procedural "
                          "ones; a town is picked per --episodes_per_town episodes. Use --jam_fixes 1 as evaluate.py does")
+    ap.add_argument("--via_ramp", type=float, default=0.0,
+                    help="share of the episodes whose route takes one of the town's ramps (route.ramp_route, "
+                         "evaluate.py --via_ramp; ramps towns: the random routes rarely do)")
     ap.add_argument("--osm_seed0", type=int, default=1000, help="seeds of the real towns' variants (per worker)")
     ap.add_argument("--allow_eval_town", action="store_true", help="let --osm_towns include osm_sapporo (tests only)")
     ap.add_argument("--history", type=float, default=0.0, help="also store the frame this many s earlier (multi-frame)")
@@ -511,6 +515,7 @@ def main():
                **({"ego_patience": args.ego_patience} if args.ego_patience else {}),
                **({"freeze_reasons": args.freeze_reasons} if args.freeze_takeover > 0 else {}),
                **({"stand_pert": args.stand_pert, "stand_hold": args.stand_hold} if args.stand_pert > 0 else {}),
+               **({"via_ramp": args.via_ramp} if args.via_ramp > 0 else {}),
                **({"rig": args.rig, "cameras": [asdict(c) for c in set_camera_rig(EnvConfig(), args.rig).cameras]}
                   if args.rig != "front" else {}))
     ctx = mp.get_context("spawn" if args.mode == "dagger" else "fork")
