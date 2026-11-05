@@ -269,7 +269,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
   const car = { x: 0, y: 0, yaw: 0, v: 0, steer: 0 };
   const speedCtl = createSpeedController(), safety = createSafety();
   let plan = null, action = [0, 0, 1], tick = 0, acc = 0, stillT = 0, gen = 0, standM = STAND_CAP;
-  let busy = false, sinceModel = CONTROL_DT, paused = false, inferMs = 0, captureMs = 0, captured = null, msg = '', msgT = 0, deviation = 0, resets = 0;
+  let busy = false, sinceModel = CONTROL_DT, paused = false, inferMs = 0, nInfer = 0, captureMs = 0, captured = null, msg = '', msgT = 0, deviation = 0, resets = 0;
 
   // lane graph towns with ramps: start before one (keisim route.ramp_route), unless ?ramp=-1
   const rampStart = nav.ramps && Number(params.get('ramp') ?? 0) >= 0 ? Number(params.get('ramp') ?? 0) : null;
@@ -492,6 +492,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
       if (useStand) feeds.stand = new ort.Tensor('float32', standFeatures(stand), [1, 3]);
       const out = await session.run(feeds);
       inferMs = performance.now() - t0;
+      nInfer++;
       const sp = out.speed_probs.data;
       let raw = 0;
       for (let i = 0; i < sp.length; i++) raw += sp[i] * i;     // expectation over the 0..11 m/s bins
@@ -599,7 +600,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     traffic, lanes, nav,                                    // for tests (tools/pilot_check.mjs --yields)
     rig: rig ? rig.map((r) => r.cam.name) : null,
     images: () => ins.map((i) => i.img),                   // the model's last input images (tests: tools/pilot_check.mjs)
-    state: () => ({ car: { ...car }, plan, s: nav.s, inputs: nav.inputs(), inferMs, captureMs, captured, deviation, resets, t: ctx.time, standM, useStand,
+    state: () => ({ car: { ...car }, plan, s: nav.s, inputs: nav.inputs(), inferMs, nInfer, captureMs, captured, deviation, resets, t: ctx.time, standM, useStand,
       cams: K, yieldHold: !!yieldHold, holding: !!yieldHold && yieldHold.holding(),
       traffic: trafficOn ? { n: traffic.n, contacts: traffic.contacts, npcContacts: traffic.npcContacts, twoPhase: traffic.twoPhase,
         stopSignStops: traffic.stopSignStops, laneChanges: traffic.laneChanges, rampPassages: traffic.rampPassages } : null }),

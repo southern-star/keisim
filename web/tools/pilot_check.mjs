@@ -14,6 +14,8 @@
 //                              [--frames DIR]   (a screenshot at every report: DIR/f0001.png, ...)
 //                              [--pilot mc]   (the multi-camera demo, models/keipilot_mc.onnx: ?pilot=mc)
 //                              [--images DIR]   (the model's input images at every report: DIR/i0001_c0.png, ...)
+//                              [--realtime SEC]   (first let the page drive in real time for SEC s and print its speed:
+//                              frames per second, model calls per second, inference and model-frame times)
 //                              [--only ground,roads,signals,actors]   (build only these modules: fast without a GPU)
 // Needs models/keipilot.onnx (scripts/export_onnx.py) and network access to cdn.jsdelivr.net (onnxruntime-web).
 import fs from 'node:fs';
@@ -59,6 +61,19 @@ try {
     gl: (() => { try { const g = document.getElementById('scene').getContext('webgl2'); const d = g.getExtension('WEBGL_debug_renderer_info'); return d ? g.getParameter(d.UNMASKED_RENDERER_WEBGL) : '?'; } catch (e) { return 'n/a'; } })() }));
   console.log(`town ${town}: ready in ${((Date.now() - t0) / 1000).toFixed(1)} s, backend ${info.backend}${info.adapter ? ` (${info.adapter})` : ''}, WebGL ${info.gl}${info.rig ? `, cameras ${info.rig.join(' + ')}` : ''}`);
   if (info.stopLines) console.log(`止まれ lines (other cars stop once): ${info.stopLines}`);
+  if (args.realtime) {          // the page's own frame loop, as a visitor sees it
+    const fps = [], infer = [], cap = [];
+    const n0 = await page.evaluate(() => window.__pilot.state().nInfer), w0 = Date.now();
+    for (let k = 0; k < Number(args.realtime) * 2; k++) {
+      await new Promise((r) => setTimeout(r, 500));
+      const r = await page.evaluate(() => { const s = window.__pilot.state(); return { fps: window.__stats.fps, infer: s.inferMs, cap: s.captureMs }; });
+      if (k >= 4) { fps.push(r.fps); infer.push(r.infer); cap.push(r.cap); }   // after 2 s of warm-up
+    }
+    const calls = (await page.evaluate(() => window.__pilot.state().nInfer)) - n0, wall = (Date.now() - w0) / 1000;
+    const med = (a) => [...a].sort((x, y) => x - y)[a.length >> 1], mean = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+    console.log(`real time ${wall.toFixed(0)} s: ${mean(fps).toFixed(1)} fps (min ${Math.min(...fps).toFixed(1)}), ${(calls / wall).toFixed(1)} model calls/s, ` +
+      `inference ${mean(infer).toFixed(1)} ms (median ${med(infer).toFixed(1)}), model frame ${mean(cap).toFixed(1)} ms (median ${med(cap).toFixed(1)})`);
+  }
   console.log('   t     s  km/h  target  light  next turn       dev  restarts  infer  frame   cars/ego/npc contacts');
   const names = ['red', 'yellow', 'green', 'none'];
   for (let t = every; t <= sec + 1e-6; t += every) {
