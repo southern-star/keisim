@@ -9,9 +9,15 @@
 // Towns with 片側2車線 roads and ramps (KeiSim's lane graph, src/lanes.js): the route changes lanes for its next turn,
 // the left turn at a junction with a ramp goes by the ramp, and the drive starts before a ramp (?ramp=N: which one,
 // ?ramp=-1: the usual start); the other cars change lanes and take the ramps too.
+// Multi-camera models (index.html?pilot=mc, models/keipilot_mc.onnx, whose image input scripts/export_onnx.py names
+// 'imgs'): the model sees KeiSim's wide_narrow rig as KeiView draws it for training (src/rig.js), a cylindrical 180 deg
+// wide camera stitched from three pinhole faces and a 50 deg narrow one, both 320x160, while the main view stays the
+// 100 deg car camera of ?pilot=1. Models with the yield head also get keipilot/agent.py's YieldHold, set as in the
+// multi-camera evaluations.
 // Keys: ← ↑ → turn at the next junction, Space pause, R back to the start, T other cars (or the buttons).
 import * as THREE from 'three';
 import { buildLanes, createNavigator } from './nav.js';
+import { makeRemap, rigShots, shotPose } from './rig.js';
 import { createTraffic } from './traffic.js';
 
 const ORT_VERSION = '1.20.1';
@@ -122,6 +128,28 @@ function createSafety() {
   };
 }
 
+/** keipilot/agent.py YieldHold as the multi-camera models are evaluated (--yield_hold 4 1 3.5 4 0.5 0.5 10): while the
+ *  car is slow and the model's yield head reads a car with priority arriving within `on` s, the target is held at 0
+ *  until that arrival plus `margin` s. A hold starts only while the model itself slows or stands, where its light head
+ *  sees no light, within `afterM` m of the last stand (moving off after a 止まれ or a give-way stop). */
+function createYieldHold({ on = 4, margin = 1, v = 3.5, stand = 4, brake = 0.5, noneP = 0.5, afterM = 10 } = {}) {
+  let t = 0, until = -1, stood = 0;
+  return {
+    reset() { t = 0; until = -1; stood = 0; },
+    holding: () => t < until,
+    apply(raw, speed, tta, dt, tl, standM) {
+      t += dt;
+      stood = speed < 0.1 ? stood + dt : 0;
+      if (speed < v && tta < on) {
+        const end = t + Math.max(tta, 0) + margin;
+        if (t < until) until = Math.min(until, end);
+        else if (stood <= stand && raw < Math.max(speed - brake, brake) && tl[3] >= noneP && standM < afterM) until = end;
+      }
+      return t < until ? 0 : raw;
+    },
+  };
+}
+
 // ------------------------------------------------------------------ loading
 async function fetchModel(url, progress) {
   const res = await fetch(url);
@@ -155,7 +183,7 @@ async function gpuAdapter() {
   return null;
 }
 
-export async function installPilot({ ctx, scene, renderer, camera, sunDir, modelPipeline, params, status, progress = () => {} }) {
+export async function installPilot({ ctx, scene, renderer, camera, sunDir, modelPipeline, mainSize, params, status, progress = () => {} }) {
   const T = ctx.town;
   const lanes = buildLanes(T.data);
   const nav = createNavigator(T.data, lanes);
@@ -180,7 +208,8 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
   if (adapter) ort.env.webgpu.adapter = adapter;
   if (!gpu) ort.env.wasm.proxy = true;                      // CPU inference in a worker, off the render loop
   const MB = (n) => (n / 1e6).toFixed(0);
-  const bytes = await fetchModel(params.get('model') || 'models/keipilot.onnx',
+  const mc = params.get('pilot') === 'mc';                  // the multi-camera demo
+  const bytes = await fetchModel(params.get('model') || (mc ? 'models/keipilot_mc.onnx' : 'models/keipilot.onnx'),
     (got, total) => { status(`運転モデルを読み込み中… ${MB(got)}${total >= got ? ` / ${MB(total)}` : ''} MB`); if (total) progress(0.9 * got / total); });
   status('運転モデルを準備中…');
   let session = null, backend = '';
@@ -189,6 +218,10 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
   }
   if (!session) throw new Error('推論エンジンを起動できませんでした');
   const useStand = session.inputNames.includes('stand');
+  // camera-rig models: what the rig draws for each model frame (src/rig.js), one image per camera
+  const rig = session.inputNames.includes('imgs') ? rigShots(params.get('rig') || 'wide_narrow') : null;
+  const K = rig ? rig.length : 1;
+  const yieldHold = session.outputNames.includes('yield_tta') ? createYieldHold() : null;
 
   // ---------------------------------------------------------------- page elements
   const overlay = document.createElement('canvas');
@@ -197,8 +230,9 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
   const o2d = overlay.getContext('2d');
   const hud = document.createElement('div');
   hud.id = 'pilot-hud';
-  hud.innerHTML = `<div><b>KeiPilot</b> <span class="ep" data-k="ep"></span></div>
-    <div>速度 <b data-k="v">0</b> km/h　目標 <b data-k="t">–</b> km/h</div>
+  hud.innerHTML = `<div><b>KeiPilot</b> <span class="cams">${rig ? 'Mc · 広角 180° + 望遠 50°' : '単眼 100°'}</span> <span class="ep" data-k="ep"></span></div>
+    <div class="switch" data-k="switch"></div>
+    <div>速度 <b data-k="v">0</b> km/h　目標 <b data-k="t">–</b> km/h <span class="hold" data-k="hold"></span></div>
     <div>信号 <b data-k="tl">–</b> <span data-k="tlp"></span></div>
     <div>次の交差点 <b data-k="cmd">–</b> <span data-k="dist"></span></div>
     <div class="lc" data-k="lc"></div>
@@ -209,20 +243,33 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
   document.body.appendChild(hud);
   const el = {};
   for (const e of hud.querySelectorAll('[data-k]')) el[e.dataset.k] = e;
+  // the other demo (single camera <-> multi-camera) with the same town, if this site has its model
+  const other = new URL(location.href);
+  other.searchParams.set('pilot', rig ? '1' : 'mc');
+  other.searchParams.delete('model');
+  fetch(rig ? 'models/keipilot.onnx' : 'models/keipilot_mc.onnx', { method: 'HEAD' }).then((r) => {
+    if (r.ok) el.switch.innerHTML = `<a href="${other.href}">${rig ? '単眼 100° 版で走る' : 'マルチカメラ（Mc）版で走る'} →</a>`;
+  }).catch(() => {});
   const side = document.createElement('div');
   side.id = 'pilot-side';
-  side.innerHTML = '<figure><canvas width="320" height="160"></canvas><figcaption>モデルへの入力 320×160</figcaption></figure>' +
-    '<figure><canvas width="80" height="40"></canvas><figcaption>モデルの領域分割</figcaption></figure>';
+  const CAMS_JA = { wide: '広角 180°（円筒）', narrow: '望遠 50°' };
+  const names = rig ? rig.map((r) => CAMS_JA[r.cam.name] || r.cam.name) : null;
+  side.innerHTML = !rig
+    ? '<figure><canvas width="320" height="160"></canvas><figcaption>モデルへの入力 320×160</figcaption></figure>' +
+      '<figure><canvas width="80" height="40"></canvas><figcaption>モデルの領域分割</figcaption></figure>'
+    : names.map((n) => `<figure><canvas width="320" height="160"></canvas><figcaption>${n} 320×160</figcaption></figure>`).join('') +
+      names.map((n) => `<figure><canvas width="80" height="40"></canvas><figcaption>${n}の領域分割</figcaption></figure>`).join('');
+  if (rig) side.classList.add('rig');
   document.body.appendChild(side);
-  const [inCanvas, segCanvas] = side.querySelectorAll('canvas');
-  const in2d = inCanvas.getContext('2d'), inImg = in2d.createImageData(CAM.W, CAM.H);
-  const s2d = segCanvas.getContext('2d'), segImg = s2d.createImageData(80, 40);
+  const canvases = [...side.querySelectorAll('canvas')];
+  const ins = canvases.slice(0, K).map((c) => { const g = c.getContext('2d'); return { g, img: g.createImageData(CAM.W, CAM.H) }; });
+  const segs = canvases.slice(K).map((c) => { const g = c.getContext('2d'); return { g, img: g.createImageData(80, 40) }; });
 
   // ---------------------------------------------------------------- state
   const car = { x: 0, y: 0, yaw: 0, v: 0, steer: 0 };
   const speedCtl = createSpeedController(), safety = createSafety();
   let plan = null, action = [0, 0, 1], tick = 0, acc = 0, stillT = 0, gen = 0, standM = STAND_CAP;
-  let busy = false, sinceModel = CONTROL_DT, paused = false, inferMs = 0, msg = '', msgT = 0, deviation = 0, resets = 0;
+  let busy = false, sinceModel = CONTROL_DT, paused = false, inferMs = 0, captureMs = 0, captured = null, msg = '', msgT = 0, deviation = 0, resets = 0;
 
   // lane graph towns with ramps: start before one (keisim route.ramp_route), unless ?ramp=-1
   const rampStart = nav.ramps && Number(params.get('ramp') ?? 0) >= 0 ? Number(params.get('ramp') ?? 0) : null;
@@ -231,6 +278,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     Object.assign(car, { x: p.x, y: p.y, yaw: p.yaw, v: 0, steer: 0 });
     plan = null; action = [0, 0, 1]; tick = 0; acc = 0; stillT = 0; gen++; standM = STAND_CAP;
     speedCtl.reset(); safety.reset();
+    if (yieldHold) yieldHold.reset();
     if (trafficOn) traffic.reset(car);
     if (why) { resets++; flash(`${why} — 最初から走り直します`); console.warn(`[pilot] ${why}`); }
   }
@@ -293,6 +341,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     standM = car.v < STAND_V ? 0 : Math.min(standM + car.v * CONTROL_DT, STAND_CAP);
     if (!plan) { action = [0, 0, 1]; return; }
     plan.target = safety.apply(plan.raw, car.v, CONTROL_DT, plan.tl);
+    if (yieldHold && plan.tta !== undefined) plan.target = Math.min(plan.target, yieldHold.apply(plan.raw, car.v, plan.tta, CONTROL_DT, plan.tl, standM));
     action = [purePursuit(egoPath(plan), car.v), ...speedCtl.control(plan.target, car.v, CONTROL_DT)];
   }
 
@@ -326,31 +375,99 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
   const modelPipe = modelPipeline();
   modelPipe.setSize(CAM.W, CAM.H, 1);
   const rgba = new Uint8Array(CAM.W * CAM.H * 4);
-  const img = new Float32Array(3 * CAM.W * CAM.H);
-  const vp = new THREE.Vector4();
+  const img = new Float32Array(K * 3 * CAM.W * CAM.H);
+  const vp = new THREE.Vector4(), buf = new THREE.Vector2();
 
-  /** Before the main view is drawn (same scene state and camera): render and read the 320x160 model frame. */
+  /** 320x160 RGB (top row first, 3 bytes per pixel) into camera k's planes of the model input and its side image. */
+  function putImage(k, rgb) {
+    const n = CAM.W * CAM.H, o = k * 3 * n, d = ins[k].img.data;
+    for (let j = 0; j < n; j++) {
+      img[o + j] = rgb[3 * j]; img[o + n + j] = rgb[3 * j + 1]; img[o + 2 * n + j] = rgb[3 * j + 2];
+      d[4 * j] = rgb[3 * j]; d[4 * j + 1] = rgb[3 * j + 1]; d[4 * j + 2] = rgb[3 * j + 2]; d[4 * j + 3] = 255;
+    }
+    ins[k].g.putImageData(ins[k].img, 0, 0);
+  }
+
+  // camera rigs: each camera's shots with one pipeline per image size, the faces of the cylinder without the vignette
+  // and the light leak (screen-space, they would show the seams), as src/ego.js draws them for KeiView
+  const views = rig ? rig.map(({ cam, shots, cyl }) => {
+    const w = shots[0].width, h = shots[0].height, pipe = modelPipeline();
+    pipe.setSize(w, h, 1);
+    pipe.compMat.uniforms.uExposure.value = modelPipe.compMat.uniforms.uExposure.value;
+    if (cyl) pipe.compMat.uniforms.uVignette.value = 0;
+    return { cam, shots, w, h, face: !!cyl, pipe, rgba: new Uint8Array(w * h * 4), atlas: new Uint8Array(shots.length * w * h * 3),
+      rgb: new Uint8Array(cam.width * cam.height * 3), remap: cyl ? makeRemap(shots.length * w, h, cyl.mapX, cyl.mapY) : null };
+  }) : null;
+  const rigW = rig ? Math.max(...views.map((v) => v.w)) : CAM.W, rigH = rig ? Math.max(...views.map((v) => v.h)) : CAM.H;
+
+  /** Render one pinhole shot of a rig (src/rig.js) at the car into the canvas' lower left corner and read it back. */
+  function shoot(v, s, first, t, pr) {
+    const p = shotPose(s, car.x, car.y, car.yaw);
+    const [X, Z] = T.P([p.pos[0], p.pos[1]]);
+    camera.fov = p.vfov; camera.aspect = v.w / v.h; camera.near = 0.1; camera.far = 2500;
+    camera.updateProjectionMatrix();
+    camera.position.set(X, p.pos[2], Z);
+    camera.up.set(0, 1, 0);
+    camera.lookAt(X + p.fwd[0], p.pos[2] + p.fwd[2], Z - p.fwd[1]);
+    camera.updateMatrixWorld();
+    renderer.setViewport(0, 0, v.w / pr, v.h / pr);
+    if (ctx.wires) ctx.wires.setResolution(v.w, v.h);
+    v.pipe.render(scene, camera, sunDir, t, { shadows: first, leak: !v.face });
+    gl.readPixels(0, 0, v.w, v.h, gl.RGBA, gl.UNSIGNED_BYTE, v.rgba);
+  }
+
+  /** Every camera of the rig in the same scene state: the faces side by side (top row first) stitched into the
+   *  cylinder, the pinhole cameras as they are. */
+  function captureRig(t, pr) {
+    let first = true;
+    views.forEach((v, k) => {
+      const out = v.face ? v.atlas : v.rgb, aw = v.shots.length * v.w;
+      v.shots.forEach((s, j) => {
+        shoot(v, s, first, t, pr);
+        first = false;
+        for (let y = 0; y < v.h; y++) {                     // GL rows are bottom-up
+          for (let x = 0, i = (v.h - 1 - y) * v.w * 4, o = 3 * (y * aw + j * v.w); x < v.w; x++, i += 4, o += 3) {
+            out[o] = v.rgba[i]; out[o + 1] = v.rgba[i + 1]; out[o + 2] = v.rgba[i + 2];
+          }
+        }
+      });
+      if (v.face) v.remap(v.atlas, v.rgb);
+      putImage(k, v.rgb);
+    });
+    if (ctx.wires && mainSize) { const m = mainSize(); ctx.wires.setResolution(m.x, m.y); }
+    placeCamera();                                          // back to the main view's camera
+  }
+
+  /** Before the main view is drawn (same scene state and camera): render and read the 320x160 model frame, or every
+   *  camera of the rig. */
+  const rgb1 = new Uint8Array(CAM.W * CAM.H * 3);
   function capture(t, dt) {
     sinceModel += dt;
     if (paused || busy || sinceModel < CONTROL_DT) return;
     sinceModel = 0;
+    const t0 = performance.now();
     renderer.getViewport(vp);
     const pr = renderer.getPixelRatio();
-    renderer.setViewport(0, 0, CAM.W / pr, CAM.H / pr);
+    renderer.getDrawingBufferSize(buf);
+    if (buf.x < rigW || buf.y < rigH) { flash('画面が小さすぎてカメラ画像を描けません（ウィンドウを広げてください）'); return; }
     const actors = ctx.services.actors;
     if (actors && actors.view) actors.view('model');             // the model sees the plain cars it was trained on
-    modelPipe.render(scene, camera, sunDir, t);
-    gl.readPixels(0, 0, CAM.W, CAM.H, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+    if (rig) captureRig(t, pr);
+    else {
+      renderer.setViewport(0, 0, CAM.W / pr, CAM.H / pr);
+      modelPipe.render(scene, camera, sunDir, t);
+      gl.readPixels(0, 0, CAM.W, CAM.H, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+      for (let y = 0; y < CAM.H; y++) {                     // GL rows are bottom-up
+        for (let x = 0, i = (CAM.H - 1 - y) * CAM.W * 4, j = 3 * y * CAM.W; x < CAM.W; x++, i += 4, j += 3) {
+          rgb1[j] = rgba[i]; rgb1[j + 1] = rgba[i + 1]; rgb1[j + 2] = rgba[i + 2];
+        }
+      }
+      putImage(0, rgb1);
+    }
     if (actors && actors.view) actors.view('main');
     renderer.setViewport(vp);
-    const n = CAM.W * CAM.H;
-    for (let y = 0; y < CAM.H; y++) {                       // GL rows are bottom-up
-      for (let x = 0, i = (CAM.H - 1 - y) * CAM.W * 4, j = y * CAM.W; x < CAM.W; x++, i += 4, j++) {
-        img[j] = rgba[i]; img[n + j] = rgba[i + 1]; img[2 * n + j] = rgba[i + 2];
-        inImg.data[4 * j] = rgba[i]; inImg.data[4 * j + 1] = rgba[i + 1]; inImg.data[4 * j + 2] = rgba[i + 2]; inImg.data[4 * j + 3] = 255;
-      }
-    }
-    in2d.putImageData(inImg, 0, 0);
+    captureMs = performance.now() - t0;
+    captured = { x: car.x, y: car.y, yaw: car.yaw, t };
     runModel({ x: car.x, y: car.y, yaw: car.yaw }, car.v, nav.inputs(), standM);
   }
 
@@ -368,7 +485,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     const t0 = performance.now();
     try {
       const feeds = {                                       // fresh buffers: the WASM worker takes them over
-        img: new ort.Tensor('float32', img.slice(), [1, 3, CAM.H, CAM.W]),
+        [rig ? 'imgs' : 'img']: new ort.Tensor('float32', img.slice(), rig ? [1, K, 3, CAM.H, CAM.W] : [1, 3, CAM.H, CAM.W]),
         cond: new ort.Tensor('float32', condFeatures(inp.cmd, tp), [1, 7]),
         speed: new ort.Tensor('float32', speedFeatures(v), [1, 3]),
       };
@@ -380,19 +497,23 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
       for (let i = 0; i < sp.length; i++) raw += sp[i] * i;     // expectation over the 0..11 m/s bins
       if (sp[0] > 0.5) raw = 0;
       if (g === gen) {
-        plan = { path: Array.from(out.path.data), raw, target: plan ? plan.target : raw, tl: Array.from(out.tl_probs.data), pose, inp };
+        plan = { path: Array.from(out.path.data), raw, target: plan ? plan.target : raw, tl: Array.from(out.tl_probs.data), pose, inp,
+          tta: out.yield_tta ? out.yield_tta.data[0] : undefined };
         drawSeg(out.seg.data);
       }
     } catch (e) { console.error('[pilot] inference failed', e); }
     busy = false;
   }
 
+  /** The model's segmentation of each camera (seg: K x 40 x 80 class ids). */
   function drawSeg(seg) {
-    for (let i = 0; i < 80 * 40; i++) {
-      const c = SEM_RGB[Number(seg[i])] || [0, 0, 0];
-      segImg.data[4 * i] = c[0]; segImg.data[4 * i + 1] = c[1]; segImg.data[4 * i + 2] = c[2]; segImg.data[4 * i + 3] = 255;
-    }
-    s2d.putImageData(segImg, 0, 0);
+    segs.forEach(({ g, img: si }, k) => {
+      for (let i = 0, o = k * 80 * 40; i < 80 * 40; i++) {
+        const c = SEM_RGB[Number(seg[o + i])] || [0, 0, 0];
+        si.data[4 * i] = c[0]; si.data[4 * i + 1] = c[1]; si.data[4 * i + 2] = c[2]; si.data[4 * i + 3] = 255;
+      }
+      g.putImageData(si, 0, 0);
+    });
   }
 
   // ---------------------------------------------------------------- overlay
@@ -443,9 +564,10 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     const tl = plan ? plan.tl : null;
     const k = tl ? tl.indexOf(Math.max(...tl)) : -1;
     const inp = nav.inputs(), j = nav.nextDecision();
-    el.ep.textContent = `${backend} · ${inferMs.toFixed(0)} ms`;
+    el.ep.textContent = `${backend} · 推論 ${inferMs.toFixed(0)} ms · 描画 ${captureMs.toFixed(0)} ms`;
     el.v.textContent = (car.v * 3.6).toFixed(0);
     el.t.textContent = plan ? (plan.target * 3.6).toFixed(0) : '–';
+    el.hold.textContent = yieldHold && yieldHold.holding() ? '（譲り待ち）' : '';
     el.tl.textContent = k < 0 ? '–' : `● ${TL_NAMES[k]}`;
     el.tl.style.color = k < 0 ? '' : TL_CSS[k];
     el.tlp.textContent = k < 0 ? '' : `${(tl[k] * 100).toFixed(0)}%`;
@@ -475,7 +597,10 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     adapter: backend === 'webgpu' && adapter && adapter.info ? `${adapter.info.vendor} ${adapter.info.architecture}`.trim() : '',
     idle: () => inflight || Promise.resolve(),             // the inference in flight (tests: window.__pilotRun)
     traffic, lanes, nav,                                    // for tests (tools/pilot_check.mjs --yields)
-    state: () => ({ car: { ...car }, plan, s: nav.s, inputs: nav.inputs(), inferMs, deviation, resets, t: ctx.time, standM, useStand,
+    rig: rig ? rig.map((r) => r.cam.name) : null,
+    images: () => ins.map((i) => i.img),                   // the model's last input images (tests: tools/pilot_check.mjs)
+    state: () => ({ car: { ...car }, plan, s: nav.s, inputs: nav.inputs(), inferMs, captureMs, captured, deviation, resets, t: ctx.time, standM, useStand,
+      cams: K, yieldHold: !!yieldHold, holding: !!yieldHold && yieldHold.holding(),
       traffic: trafficOn ? { n: traffic.n, contacts: traffic.contacts, npcContacts: traffic.npcContacts, twoPhase: traffic.twoPhase,
         stopSignStops: traffic.stopSignStops, laneChanges: traffic.laneChanges, rampPassages: traffic.rampPassages } : null }),
   };

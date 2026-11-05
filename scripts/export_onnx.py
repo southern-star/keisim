@@ -10,12 +10,15 @@ same values as the released float16 checkpoint. --fp32 keeps float32 weights.
 The small condition features are computed by the caller (web/src/pilot.js does it in JavaScript), so the graph
 only holds plain tensor ops:
   img   (1,3,160,320) float32  RGB 0..255
+  imgs  (1,K,3,160,320) float32  instead of img for camera rigs (keisim CAMERA_RIGS, the checkpoint's "rig"): one image
+                        per camera, in the rig's order (wide_narrow: the cylindrical 180 deg wide camera, then the narrow)
   cond  (1,7)  float32  KeiPilot.encode_cond(cmd, target_point)
   speed (1,3)  float32  KeiPilot.encode_speed(v)        (speed-input models)
   stand (1,3)  float32  KeiPilot.encode_mem(stand_m)    (memory-input models only: metres driven since the car last
                         stood, keipilot.data.stand_update, counted by the caller every control step)
 outputs: path (1,10,2) ego-frame waypoints [m], speed_probs (1,12) over 0..11 m/s, tl_probs (1,4) red/yellow/green/none,
-seg (1,40,80) int64 class ids (quarter resolution).
+seg (K,40,80) int64 class ids (quarter resolution, one per camera), and for models with the yield head
+(train.py --aux_weight) yield_tta (1,) [s], the input of keipilot.agent.YieldHold.
 """
 from __future__ import annotations
 
@@ -39,6 +42,9 @@ class Exported(nn.Module):
 
     def forward(self, img, cond, speed, stand=None):
         m = self.m
+        K = m.n_cams
+        if K > 1:                                   # (1,K,3,H,W): every camera through the same trunk
+            img = img.flatten(0, 1)
         x = (img / 255.0 - m.mean) / m.std
         x = m.stem(x)
         c1 = m.layer1(x)
@@ -50,8 +56,12 @@ class Exported(nn.Module):
         p = m.lat[1](c2) + F.interpolate(p, size=c2.shape[-2:], mode="bilinear", align_corners=False)
         p = m.lat[0](c1) + F.interpolate(p, size=c1.shape[-2:], mode="bilinear", align_corners=False)
         seg = m.seg_head(p).argmax(1)
-        t3 = (m.proj3(c3) + m.pos3).flatten(2).transpose(1, 2)
-        t4 = (m.proj4(c4) + m.pos4).flatten(2).transpose(1, 2)
+        if K > 1:                                   # each camera's tokens with its own positions (KeiPilot.forward)
+            t3 = (m.proj3(c3).unflatten(0, (1, K)) + m.pos3).flatten(3).transpose(2, 3).flatten(1, 2)
+            t4 = (m.proj4(c4).unflatten(0, (1, K)) + m.pos4).flatten(3).transpose(2, 3).flatten(1, 2)
+        else:
+            t3 = (m.proj3(c3) + m.pos3).flatten(2).transpose(1, 2)
+            t4 = (m.proj4(c4) + m.pos4).flatten(2).transpose(1, 2)
         mem = torch.cat([t3, t4], 1)
         c = m.cond(cond)
         if m.speed_input:
@@ -61,7 +71,10 @@ class Exported(nn.Module):
         q = m.queries[None] + c[:, None]
         h = m.decoder(q, mem)
         path = m.path_prior[None] + m.path_head(h[:, :N_PATH]) * 2.0
-        return path, m.speed_head(h[:, N_PATH]).softmax(-1), m.tl_head(h[:, N_PATH + 1]).softmax(-1), seg
+        out = (path, m.speed_head(h[:, N_PATH]).softmax(-1), m.tl_head(h[:, N_PATH + 1]).softmax(-1), seg)
+        if m.aux_yield:
+            out += (m.aux_tta_head(h[:, N_PATH]).squeeze(-1),)
+        return out
 
 
 def fp16_weights(path, min_size=256):
@@ -93,14 +106,19 @@ def main():
     assert not model.history, "history models are not exported (the browser demo feeds single frames)"
     net = Exported(model).eval()
     rng = np.random.default_rng(0)
-    img = torch.from_numpy(rng.integers(0, 256, (1, 3, 160, 320)).astype(np.float32))
+    K = model.n_cams
+    shape = (1, 3, 160, 320) if K == 1 else (1, K, 3, 160, 320)
+    img = torch.from_numpy(rng.integers(0, 256, shape).astype(np.float32))
     cmd, tp, v = torch.tensor([1]), torch.tensor([[18.0, -3.0]]), torch.tensor([5.0])
-    inputs = {"img": img, "cond": model.encode_cond(cmd, tp), "speed": model.encode_speed(v)}
+    inputs = {"img" if K == 1 else "imgs": img, "cond": model.encode_cond(cmd, tp), "speed": model.encode_speed(v)}
     if model.mem_input:
         inputs["stand"] = model.encode_mem(torch.tensor([3.0]))
+    names = ["path", "speed_probs", "tl_probs", "seg"] + (["yield_tta"] if model.aux_yield else [])
+    if K > 1:
+        print(f"camera rig {getattr(model, 'rig', '?')}: {K} images")
     os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
     torch.onnx.export(net, tuple(inputs.values()), dst, opset_version=17, dynamo=False,
-                      input_names=list(inputs), output_names=["path", "speed_probs", "tl_probs", "seg"])
+                      input_names=list(inputs), output_names=names)
     if "--fp32" not in sys.argv:
         print(f"float16 storage for {fp16_weights(dst)} weight tensors")
     # parity check against PyTorch (float32 weights)
@@ -110,9 +128,10 @@ def main():
         # ... and the wrapper against the model's own forward (an input left out of Exported would show here)
         own = model(img, cmd, tp, with_seg=False, speed=v, stand_m=torch.tensor([3.0]) if model.mem_input else None)
     print(f"Exported vs KeiPilot.forward: path {np.abs(own['path'].numpy() - ref[0]).max():.2e}, speed_probs "
-          f"{np.abs(own['speed_logits'].softmax(-1).numpy() - ref[1]).max():.2e}")
+          f"{np.abs(own['speed_logits'].softmax(-1).numpy() - ref[1]).max():.2e}"
+          + (f", yield_tta {np.abs(own['yield_tta'].numpy() - ref[4]).max():.2e}" if model.aux_yield else ""))
     out = ort.InferenceSession(dst).run(None, {k: t.numpy() for k, t in inputs.items()})
-    for name, a, b in zip(["path", "speed_probs", "tl_probs", "seg"], ref, out):
+    for name, a, b in zip(names, ref, out):
         err = float(np.abs(a.astype(np.float64) - b.astype(np.float64)).max()) if name != "seg" else float((a != b).mean())
         print(f"{name:12s} shape {tuple(b.shape)}  max |torch - onnx| {err:.2e}" + ("  (fraction of differing pixels)" if name == "seg" else ""))
     print(f"{dst}: {os.path.getsize(dst) / 1e6:.1f} MB")

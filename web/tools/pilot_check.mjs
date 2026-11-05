@@ -12,6 +12,8 @@
 //                              access: npm install --no-save onnxruntime-web@1.20.1)
 //                              [--ramp N]   (towns with ramps: start before ramp N; -1: the usual start)
 //                              [--frames DIR]   (a screenshot at every report: DIR/f0001.png, ...)
+//                              [--pilot mc]   (the multi-camera demo, models/keipilot_mc.onnx: ?pilot=mc)
+//                              [--images DIR]   (the model's input images at every report: DIR/i0001_c0.png, ...)
 //                              [--only ground,roads,signals,actors]   (build only these modules: fast without a GPU)
 // Needs models/keipilot.onnx (scripts/export_onnx.py) and network access to cdn.jsdelivr.net (onnxruntime-web).
 import fs from 'node:fs';
@@ -42,7 +44,7 @@ try {
   const page = await browser.newPage();
   page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warn') console.log(`[${m.type()}] ${m.text().slice(0, 300)}`); });
   page.on('pageerror', (e) => console.log(`[pageerror] ${e.message}`));
-  const q = new URLSearchParams({ pilot: '1', town, ...(args.ep ? { ep: args.ep } : {}), ...(args.tdir ? { tdir: args.tdir } : {}),
+  const q = new URLSearchParams({ pilot: args.pilot || '1', town, ...(args.ep ? { ep: args.ep } : {}), ...(args.tdir ? { tdir: args.tdir } : {}),
     ...(args.traffic ? { traffic: args.traffic } : {}), ...(args.cars ? { cars: args.cars } : {}),
     ...(args.model ? { model: args.model } : {}), ...(args.ort ? { ort: args.ort } : {}), ...(args.ramp ? { ramp: args.ramp } : {}),
     ...(args.only ? { only: args.only } : {}) });
@@ -53,20 +55,30 @@ try {
   if (!(await page.evaluate(() => !!window.__pilotRun))) throw new Error(label);
   const info = await page.evaluate(() => ({ backend: window.__pilot.backend, adapter: window.__pilot.adapter,
     stopLines: window.__pilot.lanes.filter((L) => L.stopSign != null).length,
+    rig: window.__pilot.rig,
     gl: (() => { try { const g = document.getElementById('scene').getContext('webgl2'); const d = g.getExtension('WEBGL_debug_renderer_info'); return d ? g.getParameter(d.UNMASKED_RENDERER_WEBGL) : '?'; } catch (e) { return 'n/a'; } })() }));
-  console.log(`town ${town}: ready in ${((Date.now() - t0) / 1000).toFixed(1)} s, backend ${info.backend}${info.adapter ? ` (${info.adapter})` : ''}, WebGL ${info.gl}`);
+  console.log(`town ${town}: ready in ${((Date.now() - t0) / 1000).toFixed(1)} s, backend ${info.backend}${info.adapter ? ` (${info.adapter})` : ''}, WebGL ${info.gl}${info.rig ? `, cameras ${info.rig.join(' + ')}` : ''}`);
   if (info.stopLines) console.log(`止まれ lines (other cars stop once): ${info.stopLines}`);
-  console.log('   t     s  km/h  target  light  next turn       dev  restarts  infer   cars/ego/npc contacts');
+  console.log('   t     s  km/h  target  light  next turn       dev  restarts  infer  frame   cars/ego/npc contacts');
   const names = ['red', 'yellow', 'green', 'none'];
   for (let t = every; t <= sec + 1e-6; t += every) {
     const s = await page.evaluate((d) => window.__pilotRun(d).then((r) => ({
       s: r.s, v: r.car.v, target: r.plan ? r.plan.target : null, tl: r.plan ? r.plan.tl : null,
-      turn: (r.inputs.turn || 'straight') + (r.inputs.ramp ? '/ramp' : ''), dist: r.inputs.dist, dev: r.deviation, resets: r.resets, ms: r.inferMs,
+      turn: (r.inputs.turn || 'straight') + (r.inputs.ramp ? '/ramp' : ''), dist: r.inputs.dist, dev: r.deviation, resets: r.resets, ms: r.inferMs, cap: r.captureMs, hold: r.holding,
       traffic: r.traffic, stand: r.useStand ? r.standM : null })), every);
+    if (args.images) {
+      fs.mkdirSync(args.images, { recursive: true });
+      const urls = await page.evaluate(() => window.__pilot.images().map((im) => {
+        const c = document.createElement('canvas'); c.width = im.width; c.height = im.height;
+        c.getContext('2d').putImageData(im, 0, 0); return c.toDataURL('image/png'); }));
+      urls.forEach((u, k) => fs.writeFileSync(`${args.images}/i${String(Math.round(t / every)).padStart(4, '0')}_c${k}.png`, Buffer.from(u.split(',')[1], 'base64')));
+      const st = await page.evaluate(() => { const r = window.__pilot.state(); return { car: r.captured, t: r.captured && r.captured.t }; });   // the pose and time of those images
+      fs.writeFileSync(`${args.images}/i${String(Math.round(t / every)).padStart(4, '0')}.json`, JSON.stringify(st));
+    }
     if (args.frames) { fs.mkdirSync(args.frames, { recursive: true }); await page.screenshot({ path: `${args.frames}/f${String(Math.round(t / every)).padStart(4, '0')}.png` }); }
     const k = s.tl ? s.tl.indexOf(Math.max(...s.tl)) : 3;
     console.log(`${t.toFixed(0).padStart(4)} ${s.s.toFixed(0).padStart(5)} ${(s.v * 3.6).toFixed(0).padStart(5)} ${s.target === null ? '     -' : (s.target * 3.6).toFixed(0).padStart(6)}` +
-      `  ${names[k].padEnd(6)} ${s.turn.padEnd(8)} ${s.dist === null ? '' : `${s.dist.toFixed(0)} m`.padStart(6)} ${s.dev.toFixed(2).padStart(6)} ${String(s.resets).padStart(6)} ${s.ms.toFixed(0).padStart(6)} ms   ${s.traffic ? `${s.traffic.n}/${s.traffic.contacts}/${s.traffic.npcContacts}${s.traffic.stopSignStops ? ` 止まれ ${s.traffic.stopSignStops}` : ''}${s.traffic.laneChanges !== undefined ? `  lane changes ${s.traffic.laneChanges} ramps ${s.traffic.rampPassages}` : ''}` : '-'}${s.stand === null ? '' : `   stood ${s.stand.toFixed(1)} m ago`}`);
+      `  ${names[k].padEnd(6)} ${s.turn.padEnd(8)} ${s.dist === null ? '' : `${s.dist.toFixed(0)} m`.padStart(6)} ${s.dev.toFixed(2).padStart(6)} ${String(s.resets).padStart(6)} ${s.ms.toFixed(0).padStart(6)} ms ${s.cap.toFixed(0).padStart(4)} ms${s.hold ? ' hold' : ''}   ${s.traffic ? `${s.traffic.n}/${s.traffic.contacts}/${s.traffic.npcContacts}${s.traffic.stopSignStops ? ` 止まれ ${s.traffic.stopSignStops}` : ''}${s.traffic.laneChanges !== undefined ? `  lane changes ${s.traffic.laneChanges} ramps ${s.traffic.rampPassages}` : ''}` : '-'}${s.stand === null ? '' : `   stood ${s.stand.toFixed(1)} m ago`}`);
   }
   if (args.shot) { await page.screenshot({ path: args.shot }); console.log(`screenshot: ${args.shot}`); }
 } finally {

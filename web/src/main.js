@@ -21,15 +21,21 @@ const EGO = params.has('ego');                    // KeiSim ego-camera mode (src
 // road surface detailing (src/world/roaddeco.js): opt-in, the default "plain" is the look the KeiView-trained models know
 const ROADS = params.get('roads') === 'detail' ? 'detail' : 'plain';
 const PILOT = params.has('pilot');                // KeiPilot drives in the browser (src/pilot.js)
+const PILOT_MC = params.get('pilot') === 'mc';     // ... with the multi-camera model (two cameras, src/rig.js)
 if (PILOT) {                                      // the intro board describes the driving demo, not the walk
   document.body.classList.add('pilot-mode');
-  document.title = 'KeiPilot — ブラウザで自動運転';
+  document.title = PILOT_MC ? 'KeiPilot Mc — マルチカメラで自動運転' : 'KeiPilot — ブラウザで自動運転';
   const set = (sel, html) => { const e = document.querySelector(sel); if (e) e.innerHTML = html; };
-  set('#intro .kana', 'KeiPilot · ブラウザで自動運転');
+  set('#intro .kana', PILOT_MC ? 'KeiPilot Mc · マルチカメラで自動運転' : 'KeiPilot · ブラウザで自動運転');
   set('#intro .no', 'KeiSim<br>town');
-  set('#townsum', `<p>カメラ画像 1 枚と自車の速度だけを見て運転する E2E モデル <b>KeiPilot</b> が、ブラウザの中で KeiSim の街を走ります。
-    信号を読み、前の車について走り、ナビの指示どおりに交差点を曲がります。</p>
-    <ul><li>推論は onnxruntime-web（WebGPU、なければ WASM）。運転モデル（30 MB）を読み込みます。</li>
+  set('#townsum', `${PILOT_MC
+    ? `<p>前向きのカメラ 2 台（180° の広角と 50° の望遠）の画像と自車の速度を見て運転する E2E モデル <b>KeiPilot Mc</b> が、
+    ブラウザの中で KeiSim の街を走ります。広角は止まれの線から左右の優先道路を、望遠は遠くの信号と車を見ます。
+    画面はカメラ 1 枚の版（<code>?pilot=1</code>）と同じ 100° の車載カメラで、右下にモデルが見ている 2 台の画像が出ます。</p>`
+    : `<p>カメラ画像 1 枚と自車の速度だけを見て運転する E2E モデル <b>KeiPilot</b> が、ブラウザの中で KeiSim の街を走ります。
+    信号を読み、前の車について走り、ナビの指示どおりに交差点を曲がります。</p>`}
+    <ul><li>推論は onnxruntime-web（WebGPU、なければ WASM）。運転モデル（30 MB）を読み込みます。${PILOT_MC
+      ? 'カメラ 1 枚の版より推論は約 2 倍、モデル用の描画は約 3 倍の重さです。' : ''}</li>
     <li>← ↑ → 次の交差点で曲がる方向　Space 一時停止　R 最初から　T 周りの車（画面のボタンでも操作できます）</li>
     <li>ピンクはモデルが描いた走行経路、水色はナビのルート。右下はモデルへの入力画像と、モデルの領域分割です。</li>
     <li>周りの車は「周りの車」ボタン、T キー、<code>?traffic=0</code> で消せます（描画が重いとき。選んだ設定はこのブラウザに残ります）。</li>
@@ -280,7 +286,7 @@ async function main() {
       const modelPipeline = () => createRenderPipeline(renderer, QUALITY.medium);
       setProgress.model = true;
       const progress = (f) => setProgress(0.45 + 0.55 * Math.min(1, f));
-      pilot = await installPilot({ ctx, scene, renderer, camera, sunDir, modelPipeline, params, status, progress });
+      pilot = await installPilot({ ctx, scene, renderer, camera, sunDir, modelPipeline, mainSize: () => pipeline.size, params, status, progress });
     } catch (e) {
       console.error(e); errors.push({ module: 'pilot', message: String(e && e.stack || e) });
       status(`運転モデルを読み込めませんでした: ${e.message || e}`);
