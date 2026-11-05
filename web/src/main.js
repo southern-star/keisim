@@ -305,7 +305,7 @@ async function main() {
         ctx.physics.refreshDynamic();
         stepUpdates(dt, simT);
         sky.update(simT, camera);
-        pilot.capture(simT, dt);
+        pilot.capture(simT, dt, true);                // read the model frame back at once (KeiSim's closed loop)
         pipeline.render(scene, camera, sunDir, simT);
         pilot.after(dt);
         await pilot.idle();

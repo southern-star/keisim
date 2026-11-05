@@ -422,8 +422,38 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
   const gl = renderer.getContext();
   const modelPipe = modelPipeline();
   modelPipe.setSize(CAM.W, CAM.H, 1);
-  const rgba = new Uint8Array(CAM.W * CAM.H * 4);
   const img = new Float32Array(K * 3 * CAM.W * CAM.H);
+  const syncRead = params.get('readback') === 'sync';      // ?readback=sync: wait for the GPU as before (tests, A/B)
+  // ?hz=N: at most N model calls a second in real time (default 10, KeiSim's control rate): in towns where the GPU is the
+  // limit (Sapporo), fewer model frames leave more of it to the view
+  const hz = Number(params.get('hz'));
+  const MODEL_DT = hz > 0 ? Math.max(CONTROL_DT, 1 / hz) : CONTROL_DT;
+  const calls = [];                                         // when the last model calls finished (the HUD's rate)
+
+  /** n read-backs of w x h RGBA from the canvas' lower left corner: at once (sync), or into pixel buffers that
+   *  fetch() copies out once the GPU has drawn them (WebGL2 PIXEL_PACK_BUFFER; the caller polls a fence), so the
+   *  main thread does not stop to wait for the GPU in the middle of a frame. */
+  function pixelReader(w, h, n) {
+    const bufs = Array.from({ length: n }, () => new Uint8Array(w * h * 4));
+    const pbos = bufs.map(() => gl.createBuffer());
+    return {
+      bufs,
+      read(j, sync) {
+        if (sync) { gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, bufs[j]); return; }
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pbos[j]);
+        // fresh storage every time: written again into the old storage, Chrome drops the copy it makes for the
+        // read-back at the fence (with this page's antialias: false / alpha: false context) and warns every frame
+        gl.bufferData(gl.PIXEL_PACK_BUFFER, w * h * 4, gl.STREAM_READ);
+        gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, 0);
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+      },
+      fetch() {
+        pbos.forEach((b, j) => { gl.bindBuffer(gl.PIXEL_PACK_BUFFER, b); gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, bufs[j]); });
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+      },
+    };
+  }
+  const single = rig ? null : pixelReader(CAM.W, CAM.H, 1);
   const vp = new THREE.Vector4(), buf = new THREE.Vector2();
 
   /** 320x160 RGB (top row first, 3 bytes per pixel) into camera k's planes of the model input and its side image. */
@@ -443,13 +473,14 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     pipe.setSize(w, h, 1);
     pipe.compMat.uniforms.uExposure.value = modelPipe.compMat.uniforms.uExposure.value;
     if (cyl) pipe.compMat.uniforms.uVignette.value = 0;
-    return { cam, shots, w, h, face: !!cyl, pipe, rgba: new Uint8Array(w * h * 4), atlas: new Uint8Array(shots.length * w * h * 3),
+    return { cam, shots, w, h, face: !!cyl, pipe, reader: pixelReader(w, h, shots.length), atlas: new Uint8Array(shots.length * w * h * 3),
       rgb: new Uint8Array(cam.width * cam.height * 3), remap: cyl ? makeRemap(shots.length * w, h, cyl.mapX, cyl.mapY) : null };
   }) : null;
   const rigW = rig ? Math.max(...views.map((v) => v.w)) : CAM.W, rigH = rig ? Math.max(...views.map((v) => v.h)) : CAM.H;
 
-  /** Render one pinhole shot of a rig (src/rig.js) at the car into the canvas' lower left corner and read it back. */
-  function shoot(v, s, first, t, pr) {
+  /** Render one pinhole shot of a rig (src/rig.js) at the car into the canvas' lower left corner and read it back
+   *  (shot j of camera v). */
+  function shoot(v, s, j, first, t, pr, sync) {
     const p = shotPose(s, car.x, car.y, car.yaw);
     const [X, Z] = T.P([p.pos[0], p.pos[1]]);
     camera.fov = p.vfov; camera.aspect = v.w / v.h; camera.near = 0.1; camera.far = 2500;
@@ -461,37 +492,47 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     renderer.setViewport(0, 0, v.w / pr, v.h / pr);
     if (ctx.wires) ctx.wires.setResolution(v.w, v.h);
     v.pipe.render(scene, camera, sunDir, t, { shadows: first, leak: !v.face });
-    gl.readPixels(0, 0, v.w, v.h, gl.RGBA, gl.UNSIGNED_BYTE, v.rgba);
+    v.reader.read(j, sync);
   }
 
-  /** Every camera of the rig in the same scene state: the faces side by side (top row first) stitched into the
-   *  cylinder, the pinhole cameras as they are. */
-  function captureRig(t, pr) {
+  /** Every camera of the rig in the same scene state, each shot read back (stitchRig puts them together). */
+  function drawRig(t, pr, sync) {
     let first = true;
+    views.forEach((v) => v.shots.forEach((s, j) => { shoot(v, s, j, first, t, pr, sync); first = false; }));
+    if (ctx.wires && mainSize) { const m = mainSize(); ctx.wires.setResolution(m.x, m.y); }
+    placeCamera();                                          // back to the main view's camera
+  }
+
+  /** The rig's images from its shots: the faces side by side (top row first) stitched into the cylinder, the
+   *  pinhole cameras as they are. */
+  function stitchRig() {
     views.forEach((v, k) => {
       const out = v.face ? v.atlas : v.rgb, aw = v.shots.length * v.w;
-      v.shots.forEach((s, j) => {
-        shoot(v, s, first, t, pr);
-        first = false;
+      v.reader.bufs.forEach((rgba, j) => {
         for (let y = 0; y < v.h; y++) {                     // GL rows are bottom-up
           for (let x = 0, i = (v.h - 1 - y) * v.w * 4, o = 3 * (y * aw + j * v.w); x < v.w; x++, i += 4, o += 3) {
-            out[o] = v.rgba[i]; out[o + 1] = v.rgba[i + 1]; out[o + 2] = v.rgba[i + 2];
+            out[o] = rgba[i]; out[o + 1] = rgba[i + 1]; out[o + 2] = rgba[i + 2];
           }
         }
       });
       if (v.face) v.remap(v.atlas, v.rgb);
       putImage(k, v.rgb);
     });
-    if (ctx.wires && mainSize) { const m = mainSize(); ctx.wires.setResolution(m.x, m.y); }
-    placeCamera();                                          // back to the main view's camera
   }
 
-  /** Before the main view is drawn (same scene state and camera): render and read the 320x160 model frame, or every
-   *  camera of the rig. */
+  /** Before the main view is drawn (same scene state and camera): render the 320x160 model frame, or every camera of
+   *  the rig, and read it back when the GPU has drawn it, a frame or two later (the model then sees the frame of the
+   *  car state it was drawn at, as before); sync (window.__pilotRun, ?readback=sync): read it at once. */
   const rgb1 = new Uint8Array(CAM.W * CAM.H * 3);
-  function capture(t, dt) {
+  let pending = null, drawMs = 0, readMs = 0;
+  function capture(t, dt, sync = false) {
     sinceModel += dt;
-    if (paused || busy || sinceModel < CONTROL_DT) return;
+    if (pending) {
+      if (!sync) { collect(); return; }
+      gl.deleteSync(pending.fence);                         // a test takes over (window.__pilotRun): draw its frame now
+      pending = null;
+    }
+    if (paused || busy || sinceModel < (sync ? CONTROL_DT : MODEL_DT)) return;
     sinceModel = 0;
     const t0 = performance.now();
     renderer.getViewport(vp);
@@ -500,11 +541,39 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     if (buf.x < rigW || buf.y < rigH) { flash('画面が小さすぎてカメラ画像を描けません（ウィンドウを広げてください）'); return; }
     const actors = ctx.services.actors;
     if (actors && actors.view) actors.view('model');             // the model sees the plain cars it was trained on
-    if (rig) captureRig(t, pr);
+    sync = sync || syncRead;
+    if (rig) drawRig(t, pr, sync);
     else {
       renderer.setViewport(0, 0, CAM.W / pr, CAM.H / pr);
       modelPipe.render(scene, camera, sunDir, t);
-      gl.readPixels(0, 0, CAM.W, CAM.H, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+      single.read(0, sync);
+    }
+    if (actors && actors.view) actors.view('main');
+    renderer.setViewport(vp);
+    const at = { pose: { x: car.x, y: car.y, yaw: car.yaw }, v: car.v, inp: nav.inputs(), stand: standM, t, g: gen, t1: performance.now() };
+    drawMs = at.t1 - t0;
+    if (sync) { readMs = 0; finish(at); return; }
+    at.fence = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+    gl.flush();
+    pending = at;
+  }
+
+  /** Every frame while a model frame is being read back: once the GPU is done, copy it out and run the model. */
+  function collect() {
+    if (gl.clientWaitSync(pending.fence, 0, 0) === gl.TIMEOUT_EXPIRED) return;
+    const at = pending;
+    pending = null;
+    gl.deleteSync(at.fence);
+    (rig ? views.map((v) => v.reader) : [single]).forEach((r) => r.fetch());
+    readMs = performance.now() - at.t1;
+    if (at.g === gen) finish(at);                           // not after a reset
+  }
+
+  function finish(at) {
+    const t0 = performance.now();
+    if (rig) stitchRig();
+    else {
+      const rgba = single.bufs[0];
       for (let y = 0; y < CAM.H; y++) {                     // GL rows are bottom-up
         for (let x = 0, i = (CAM.H - 1 - y) * CAM.W * 4, j = 3 * y * CAM.W; x < CAM.W; x++, i += 4, j += 3) {
           rgb1[j] = rgba[i]; rgb1[j + 1] = rgba[i + 1]; rgb1[j + 2] = rgba[i + 2];
@@ -512,11 +581,9 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
       }
       putImage(0, rgb1);
     }
-    if (actors && actors.view) actors.view('main');
-    renderer.setViewport(vp);
-    captureMs = performance.now() - t0;
-    captured = { x: car.x, y: car.y, yaw: car.yaw, t };
-    runModel({ x: car.x, y: car.y, yaw: car.yaw }, car.v, nav.inputs(), standM);
+    captureMs = drawMs + performance.now() - t0;            // the main thread's share of the model frame
+    captured = { ...at.pose, t: at.t };
+    runModel(at.pose, at.v, at.inp, at.stand);
   }
 
   let inflight = null;
@@ -541,6 +608,8 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
       const out = await session.run(feeds);
       inferMs = performance.now() - t0;
       nInfer++;
+      calls.push(performance.now());
+      while (calls.length && calls[0] < calls[calls.length - 1] - 2000) calls.shift();
       const sp = out.speed_probs.data;
       let raw = 0;
       for (let i = 0; i < sp.length; i++) raw += sp[i] * i;     // expectation over the 0..11 m/s bins
@@ -613,7 +682,8 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     const tl = plan ? plan.tl : null;
     const k = tl ? tl.indexOf(Math.max(...tl)) : -1;
     const inp = nav.inputs(), j = nav.nextDecision();
-    el.ep.textContent = `${backend} · 推論 ${inferMs.toFixed(0)} ms · 描画 ${captureMs.toFixed(0)} ms`;
+    const now = performance.now(), rate = calls.filter((c) => c > now - 2000).length / 2;
+    el.ep.textContent = `${backend} · 判断 ${rate.toFixed(1)} 回/秒 · 推論 ${inferMs.toFixed(0)} ms · 描画 ${captureMs.toFixed(0)} ms`;
     el.v.textContent = (car.v * 3.6).toFixed(0);
     el.t.textContent = plan ? (plan.target * 3.6).toFixed(0) : '–';
     el.hold.textContent = yieldHold && yieldHold.holding() ? '（譲り待ち）' : '';
@@ -648,7 +718,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     traffic, lanes, nav,                                    // for tests (tools/pilot_check.mjs --yields)
     rig: rig ? rig.map((r) => r.cam.name) : null,
     images: () => ins.map((i) => i.img),                   // the model's last input images (tests: tools/pilot_check.mjs)
-    state: () => ({ car: { ...car }, plan, s: nav.s, inputs: nav.inputs(), inferMs, nInfer, captureMs, captured, deviation, resets, t: ctx.time, standM, useStand,
+    state: () => ({ car: { ...car }, plan, s: nav.s, inputs: nav.inputs(), inferMs, nInfer, captureMs, readMs, captured, deviation, resets, t: ctx.time, standM, useStand,
       cams: K, yieldHold: !!yieldHold, holding: !!yieldHold && yieldHold.holding(),
       traffic: trafficOn ? { n: traffic.n, contacts: traffic.contacts, npcContacts: traffic.npcContacts, twoPhase: traffic.twoPhase,
         stopSignStops: traffic.stopSignStops, laneChanges: traffic.laneChanges, rampPassages: traffic.rampPassages } : null }),

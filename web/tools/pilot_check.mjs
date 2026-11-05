@@ -18,6 +18,8 @@
 //                              frames per second, model calls per second, inference and model-frame times)
 //                              [--only ground,roads,signals,actors]   (build only these modules: fast without a GPU)
 //                              [--infer main]   (the model on the page's main thread, as before src/infer_worker.js)
+//                              [--readback sync]   (read the model frame back at once, waiting for the GPU, as before)
+//                              [--hz N]   (at most N model calls a second in real time)
 // Needs models/keipilot.onnx (scripts/export_onnx.py) and network access to cdn.jsdelivr.net (onnxruntime-web).
 import fs from 'node:fs';
 import puppeteer from 'puppeteer-core';
@@ -50,7 +52,8 @@ try {
   const q = new URLSearchParams({ pilot: args.pilot || '1', town, ...(args.ep ? { ep: args.ep } : {}), ...(args.tdir ? { tdir: args.tdir } : {}),
     ...(args.traffic ? { traffic: args.traffic } : {}), ...(args.cars ? { cars: args.cars } : {}),
     ...(args.model ? { model: args.model } : {}), ...(args.ort ? { ort: args.ort } : {}), ...(args.ramp ? { ramp: args.ramp } : {}),
-    ...(args.only ? { only: args.only } : {}), ...(args.infer ? { infer: args.infer } : {}) });
+    ...(args.only ? { only: args.only } : {}), ...(args.infer ? { infer: args.infer } : {}),
+    ...(args.readback ? { readback: args.readback } : {}), ...(args.hz ? { hz: args.hz } : {}) });
   const t0 = Date.now();
   await page.goto(`${base}?${q}`, { waitUntil: 'load', timeout: 180000 });
   await page.waitForFunction('window.__pilotRun || /読み込めません/.test(document.getElementById("loadlabel").textContent)', { timeout: 600000, polling: 200 });
@@ -63,17 +66,18 @@ try {
   console.log(`town ${town}: ready in ${((Date.now() - t0) / 1000).toFixed(1)} s, backend ${info.backend}${info.adapter ? ` (${info.adapter})` : ''}${info.inferIn === 'main' ? ' on the main thread' : info.inferIn ? ' in a worker' : ''}, WebGL ${info.gl}${info.rig ? `, cameras ${info.rig.join(' + ')}` : ''}`);
   if (info.stopLines) console.log(`止まれ lines (other cars stop once): ${info.stopLines}`);
   if (args.realtime) {          // the page's own frame loop, as a visitor sees it
-    const fps = [], infer = [], cap = [];
+    const fps = [], infer = [], cap = [], read = [];
     const n0 = await page.evaluate(() => window.__pilot.state().nInfer), w0 = Date.now();
     for (let k = 0; k < Number(args.realtime) * 2; k++) {
       await new Promise((r) => setTimeout(r, 500));
-      const r = await page.evaluate(() => { const s = window.__pilot.state(); return { fps: window.__stats.fps, infer: s.inferMs, cap: s.captureMs }; });
-      if (k >= 4) { fps.push(r.fps); infer.push(r.infer); cap.push(r.cap); }   // after 2 s of warm-up
+      const r = await page.evaluate(() => { const s = window.__pilot.state(); return { fps: window.__stats.fps, infer: s.inferMs, cap: s.captureMs, read: s.readMs }; });
+      if (k >= 4) { fps.push(r.fps); infer.push(r.infer); cap.push(r.cap); read.push(r.read || 0); }   // after 2 s of warm-up
     }
     const calls = (await page.evaluate(() => window.__pilot.state().nInfer)) - n0, wall = (Date.now() - w0) / 1000;
     const med = (a) => [...a].sort((x, y) => x - y)[a.length >> 1], mean = (a) => a.reduce((x, y) => x + y, 0) / a.length;
     console.log(`real time ${wall.toFixed(0)} s: ${mean(fps).toFixed(1)} fps (min ${Math.min(...fps).toFixed(1)}), ${(calls / wall).toFixed(1)} model calls/s, ` +
-      `inference ${mean(infer).toFixed(1)} ms (median ${med(infer).toFixed(1)}), model frame ${mean(cap).toFixed(1)} ms (median ${med(cap).toFixed(1)})`);
+      `inference ${mean(infer).toFixed(1)} ms (median ${med(infer).toFixed(1)}), model frame ${mean(cap).toFixed(1)} ms (median ${med(cap).toFixed(1)})` +
+      (mean(read) > 0 ? `, read back after ${mean(read).toFixed(1)} ms` : ''));
   }
   console.log('   t     s  km/h  target  light  next turn       dev  restarts  infer  frame   cars/ego/npc contacts');
   const names = ['red', 'yellow', 'green', 'none'];
