@@ -1,6 +1,7 @@
 // KeiPilot in the browser (index.html?pilot=1): KeiSim's closed loop, with the town drawn by KeiView. Ten times a
 // second the car camera is rendered at the model's 320x160 exactly as in ego mode (src/ego.js), the driving model
-// (scripts/export_onnx.py -> models/keipilot.onnx, run by onnxruntime-web on WebGPU or WASM) plans a path and a
+// (scripts/export_onnx.py -> models/keipilot.onnx, run by onnxruntime-web on WebGPU or WASM in a worker,
+// src/infer_worker.js; ?infer=main: on the page's main thread as before) plans a path and a
 // target speed from that frame, and the car follows the plan with KeiSim's controllers and vehicle model
 // (keisim/control.py, keisim/vehicle.py) behind the two safety layers of keipilot/agent.py. The route and the
 // model's route inputs (next turn, target point) come from src/nav.js. Signals switch with KeiSim's timing (split
@@ -183,6 +184,58 @@ async function gpuAdapter() {
   return null;
 }
 
+/** The model in a worker (src/infer_worker.js), off the main thread: {backend, adapter, inputNames, outputNames,
+ *  run(feeds)} with feeds {name: {data: Float32Array, dims}} (the buffers are handed over) and outputs {name: {data}}. */
+function workerSession(ort, gpu, force, bytes) {
+  return new Promise((resolve, reject) => {
+    let w;
+    try { w = new Worker(new URL('./infer_worker.js', import.meta.url), { type: 'module' }); } catch (e) { reject(e); return; }
+    const pending = new Map();
+    let next = 0;
+    const fail = (e) => { clearTimeout(timer); w.terminate(); reject(e); };
+    const timer = setTimeout(() => fail(new Error('the worker did not start the model')), 120000);
+    w.onerror = (e) => fail(new Error(e.message || 'worker error'));
+    w.onmessage = ({ data: m }) => {
+      if (m.type === 'ready') {
+        clearTimeout(timer);
+        resolve({ backend: m.backend, adapter: m.adapter, inputNames: m.inputNames, outputNames: m.outputNames, where: 'worker',
+          run: (feeds) => new Promise((res, rej) => {
+            const id = next++;
+            pending.set(id, { res, rej });
+            w.postMessage({ type: 'run', id, feeds }, Object.values(feeds).map((f) => f.data.buffer));
+          }) });
+      } else if (m.id === undefined) fail(new Error(m.message));
+      else {
+        const p = pending.get(m.id);
+        pending.delete(m.id);
+        if (p) { if (m.type === 'out') p.res(m.out); else p.rej(new Error(m.message)); }
+      }
+    };
+    w.postMessage({ type: 'init', ort, gpu, force, bytes });
+  });
+}
+
+/** The model on the main thread (?infer=main, or browsers without the worker): the same interface. */
+async function mainSession(ortDir, gpu, adapter, bytes) {
+  const ort = await import(`${ortDir}${gpu ? 'ort.webgpu.min.mjs' : 'ort.wasm.min.mjs'}`);
+  ort.env.wasm.wasmPaths = ortDir;
+  if (adapter) ort.env.webgpu.adapter = adapter;
+  if (!gpu) ort.env.wasm.proxy = true;                      // CPU inference in a worker, off the render loop
+  for (const ep of gpu ? ['webgpu', 'wasm'] : ['wasm']) {
+    try {
+      const s = await ort.InferenceSession.create(bytes, { executionProviders: [ep] });
+      return { backend: ep, adapter: ep === 'webgpu' && adapter && adapter.info ? `${adapter.info.vendor} ${adapter.info.architecture}`.trim() : '',
+        inputNames: s.inputNames, outputNames: s.outputNames, where: 'main',
+        run: (feeds) => {
+          const t = {};
+          for (const [k, f] of Object.entries(feeds)) t[k] = new ort.Tensor('float32', f.data, f.dims);
+          return s.run(t);
+        } };
+    } catch (e) { console.warn(`[pilot] ${ep} unavailable`, e); }
+  }
+  throw new Error('推論エンジンを起動できませんでした');
+}
+
 export async function installPilot({ ctx, scene, renderer, camera, sunDir, modelPipeline, mainSize, params, status, progress = () => {} }) {
   const T = ctx.town;
   const lanes = buildLanes(T.data);
@@ -202,21 +255,16 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
   const ORT = ortDir && /^[\w-]+(\/[\w.-]+)*\/$/.test(ortDir) && !ortDir.includes('..') ? new URL(ortDir, location.href).href : ORT_URL;
   const adapter = want === 'wasm' ? null : await gpuAdapter();
   const gpu = want === 'webgpu' || !!adapter;
-  status('推論エンジンを読み込み中…');
-  const ort = await import(`${ORT}${gpu ? 'ort.webgpu.min.mjs' : 'ort.wasm.min.mjs'}`);
-  ort.env.wasm.wasmPaths = ORT;
-  if (adapter) ort.env.webgpu.adapter = adapter;
-  if (!gpu) ort.env.wasm.proxy = true;                      // CPU inference in a worker, off the render loop
   const MB = (n) => (n / 1e6).toFixed(0);
   const mc = params.get('pilot') === 'mc';                  // the multi-camera demo
   const bytes = await fetchModel(params.get('model') || (mc ? 'models/keipilot_mc.onnx' : 'models/keipilot.onnx'),
     (got, total) => { status(`運転モデルを読み込み中… ${MB(got)}${total >= got ? ` / ${MB(total)}` : ''} MB`); if (total) progress(0.9 * got / total); });
   status('運転モデルを準備中…');
-  let session = null, backend = '';
-  for (const ep of gpu ? ['webgpu', 'wasm'] : ['wasm']) {
-    try { session = await ort.InferenceSession.create(bytes, { executionProviders: [ep] }); backend = ep; break; } catch (e) { console.warn(`[pilot] ${ep} unavailable`, e); }
-  }
-  if (!session) throw new Error('推論エンジンを起動できませんでした');
+  // the model runs in a worker unless ?infer=main or the worker cannot start it
+  const session = (params.get('infer') !== 'main' && await workerSession(ORT, gpu, want === 'webgpu', bytes)
+    .catch((e) => { console.warn('[pilot] no inference worker, the model runs on the main thread', e); return null; }))
+    || await mainSession(ORT, gpu, adapter, bytes);
+  const backend = session.backend;
   const useStand = session.inputNames.includes('stand');
   // camera-rig models: what the rig draws for each model frame (src/rig.js), one image per camera
   const rig = session.inputNames.includes('imgs') ? rigShots(params.get('rig') || 'wide_narrow') : null;
@@ -484,12 +532,12 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     const tp = [c * dx + s * dy, -s * dx + c * dy];
     const t0 = performance.now();
     try {
-      const feeds = {                                       // fresh buffers: the WASM worker takes them over
-        [rig ? 'imgs' : 'img']: new ort.Tensor('float32', img.slice(), rig ? [1, K, 3, CAM.H, CAM.W] : [1, 3, CAM.H, CAM.W]),
-        cond: new ort.Tensor('float32', condFeatures(inp.cmd, tp), [1, 7]),
-        speed: new ort.Tensor('float32', speedFeatures(v), [1, 3]),
+      const feeds = {                                       // fresh buffers: the worker takes them over
+        [rig ? 'imgs' : 'img']: { data: img.slice(), dims: rig ? [1, K, 3, CAM.H, CAM.W] : [1, 3, CAM.H, CAM.W] },
+        cond: { data: condFeatures(inp.cmd, tp), dims: [1, 7] },
+        speed: { data: speedFeatures(v), dims: [1, 3] },
       };
-      if (useStand) feeds.stand = new ort.Tensor('float32', standFeatures(stand), [1, 3]);
+      if (useStand) feeds.stand = { data: standFeatures(stand), dims: [1, 3] };
       const out = await session.run(feeds);
       inferMs = performance.now() - t0;
       nInfer++;
@@ -595,7 +643,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
   status('');
   return {
     update, capture, after, backend, reset,
-    adapter: backend === 'webgpu' && adapter && adapter.info ? `${adapter.info.vendor} ${adapter.info.architecture}`.trim() : '',
+    adapter: session.adapter, inferIn: session.where,      // 'worker' or 'main' (?infer=main)
     idle: () => inflight || Promise.resolve(),             // the inference in flight (tests: window.__pilotRun)
     traffic, lanes, nav,                                    // for tests (tools/pilot_check.mjs --yields)
     rig: rig ? rig.map((r) => r.cam.name) : null,

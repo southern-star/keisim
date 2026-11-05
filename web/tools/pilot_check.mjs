@@ -17,6 +17,7 @@
 //                              [--realtime SEC]   (first let the page drive in real time for SEC s and print its speed:
 //                              frames per second, model calls per second, inference and model-frame times)
 //                              [--only ground,roads,signals,actors]   (build only these modules: fast without a GPU)
+//                              [--infer main]   (the model on the page's main thread, as before src/infer_worker.js)
 // Needs models/keipilot.onnx (scripts/export_onnx.py) and network access to cdn.jsdelivr.net (onnxruntime-web).
 import fs from 'node:fs';
 import puppeteer from 'puppeteer-core';
@@ -49,17 +50,17 @@ try {
   const q = new URLSearchParams({ pilot: args.pilot || '1', town, ...(args.ep ? { ep: args.ep } : {}), ...(args.tdir ? { tdir: args.tdir } : {}),
     ...(args.traffic ? { traffic: args.traffic } : {}), ...(args.cars ? { cars: args.cars } : {}),
     ...(args.model ? { model: args.model } : {}), ...(args.ort ? { ort: args.ort } : {}), ...(args.ramp ? { ramp: args.ramp } : {}),
-    ...(args.only ? { only: args.only } : {}) });
+    ...(args.only ? { only: args.only } : {}), ...(args.infer ? { infer: args.infer } : {}) });
   const t0 = Date.now();
   await page.goto(`${base}?${q}`, { waitUntil: 'load', timeout: 180000 });
   await page.waitForFunction('window.__pilotRun || /読み込めません/.test(document.getElementById("loadlabel").textContent)', { timeout: 600000, polling: 200 });
   const label = await page.evaluate(() => document.getElementById('loadlabel').textContent);
   if (!(await page.evaluate(() => !!window.__pilotRun))) throw new Error(label);
-  const info = await page.evaluate(() => ({ backend: window.__pilot.backend, adapter: window.__pilot.adapter,
+  const info = await page.evaluate(() => ({ backend: window.__pilot.backend, adapter: window.__pilot.adapter, inferIn: window.__pilot.inferIn,
     stopLines: window.__pilot.lanes.filter((L) => L.stopSign != null).length,
     rig: window.__pilot.rig,
     gl: (() => { try { const g = document.getElementById('scene').getContext('webgl2'); const d = g.getExtension('WEBGL_debug_renderer_info'); return d ? g.getParameter(d.UNMASKED_RENDERER_WEBGL) : '?'; } catch (e) { return 'n/a'; } })() }));
-  console.log(`town ${town}: ready in ${((Date.now() - t0) / 1000).toFixed(1)} s, backend ${info.backend}${info.adapter ? ` (${info.adapter})` : ''}, WebGL ${info.gl}${info.rig ? `, cameras ${info.rig.join(' + ')}` : ''}`);
+  console.log(`town ${town}: ready in ${((Date.now() - t0) / 1000).toFixed(1)} s, backend ${info.backend}${info.adapter ? ` (${info.adapter})` : ''}${info.inferIn === 'main' ? ' on the main thread' : info.inferIn ? ' in a worker' : ''}, WebGL ${info.gl}${info.rig ? `, cameras ${info.rig.join(' + ')}` : ''}`);
   if (info.stopLines) console.log(`止まれ lines (other cars stop once): ${info.stopLines}`);
   if (args.realtime) {          // the page's own frame loop, as a visitor sees it
     const fps = [], infer = [], cap = [];
