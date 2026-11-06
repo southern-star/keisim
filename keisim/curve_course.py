@@ -9,6 +9,9 @@ driven back the other way every curve turns the other way. Variants differ only 
     nolines_guard  no paint, a guardrail (ガードレール) along both edges
     lines_guard    white lines and guardrails
 
+Each variant also comes without buildings: <variant>_nobld (e.g. nolines_guard_nobld) has no KeiSim buildings and no
+KeiView lots (houses, fields, parking), only the road, its guardrails and KeiView's utility poles in open grass.
+
 Every variant has 3.0 m lanes, a 0.5 m shoulder and no sidewalk (the road surface, then grass or a building lot),
 30 km/h. KeiView fills its extra lots (houses, fields) only within PARCEL_REACH of the road and draws no far-town
 ring around the course: beyond, grass. The town is a Town.from_graph (buildings along the road as KeiSim places them, no signals), named
@@ -39,6 +42,16 @@ VARIANTS = {
     "nolines_guard": {"center": "none", "edge": "none", "guardrail": "both"},
     "lines_guard": {"center": "dashed", "edge": "lane", "guardrail": "both"},
 }
+NOBLD = "_nobld"                     # variant suffix: no buildings (the guardrails stay)
+VARIANT_NAMES = list(VARIANTS) + [v + NOBLD for v in VARIANTS]
+
+
+def split_variant(variant):
+    """(the VARIANTS key, whether the course has buildings) of a variant name (VARIANT_NAMES)."""
+    base = variant.removesuffix(NOBLD)
+    if base not in VARIANTS:
+        raise ValueError(f"unknown curve course variant {variant!r} (known: {VARIANT_NAMES})")
+    return base, base == variant
 
 
 def course_line(radii=RADII, lead=LEAD, gap=GAP):
@@ -80,14 +93,16 @@ def course_line(radii=RADII, lead=LEAD, gap=GAP):
 
 
 def curve_town(variant="nolines", radii=RADII, seed=0, cfg=None):
-    """The course of `variant` (VARIANTS) as a Town; town.course = {variant, curves (centre-line spans)}."""
-    spec = RoadSpec("residential", 3.0, 0.5, 0.0, 30 / 3.6, **VARIANTS[variant])
+    """The course of `variant` (VARIANT_NAMES) as a Town; town.course = {variant, curves (centre-line spans)}."""
+    base, with_buildings = split_variant(variant)
+    spec = RoadSpec("residential", 3.0, 0.5, 0.0, 30 / 3.6, **VARIANTS[base])
     pts, curves = course_line(radii)
     cfg = cfg or town_config("roadtypes")
     town = Town.from_graph(seed, cfg, [tuple(pts[0]), tuple(pts[-1])], [(0, 1, pts, spec)],
-                           name=f"curve_{variant}_{COURSE_VERSION}")
+                           buildings=None if with_buildings else [], name=f"curve_{variant}_{COURSE_VERSION}")
     town.course = {"variant": variant, "centre": pts, "curves": curves}
     town.parcel_reach = PARCEL_REACH           # KeiView's extra lots (scripts/export_town.py): only near the road
+    town.extra_lots = with_buildings           # _nobld: none at all
     return town
 
 

@@ -26,7 +26,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from keisim.config import EnvConfig  # noqa: E402
-from keisim.curve_course import COURSE_VERSION, VARIANTS, course_route, curve_town  # noqa: E402
+from keisim.curve_course import COURSE_VERSION, VARIANT_NAMES, VARIANTS, course_route, curve_town  # noqa: E402
 from keisim.env import KeiEnv  # noqa: E402
 from keisim.geometry import world_to_local  # noqa: E402
 
@@ -127,13 +127,13 @@ def table(results):
     for r in results:
         for c in r["curves"]:
             if not c.get("reached"):
-                rows.append(f"{r['variant']:14s} {'rev' if r['reverse'] else 'fwd'} {c['turn']:5s} R{c['radius']:5.1f}  "
+                rows.append(f"{r['variant']:20s} {'rev' if r['reverse'] else 'fwd'} {c['turn']:5s} R{c['radius']:5.1f}  "
                             f"(not reached: {r['status']})")
                 continue
-            rows.append(f"{r['variant']:14s} {'rev' if r['reverse'] else 'fwd'} {c['turn']:5s} R{c['radius']:5.1f}  "
+            rows.append(f"{r['variant']:20s} {'rev' if r['reverse'] else 'fwd'} {c['turn']:5s} R{c['radius']:5.1f}  "
                         f"mean {c['mean_in']:+5.2f}  max {c['max_in']:+5.2f}  grows {c['grows']:+5.2f}  "
                         f"{c['speed'] * 3.6:4.1f} km/h  off road {c['off_road_s']:.1f} s")
-        rows.append(f"{r['variant']:14s} {'rev' if r['reverse'] else 'fwd'} end: {r['status']} at {r['s_end']:.0f} / "
+        rows.append(f"{r['variant']:20s} {'rev' if r['reverse'] else 'fwd'} end: {r['status']} at {r['s_end']:.0f} / "
                     f"{r['route_end']:.0f} m, straights mean {r['straight']['mean_left']:+.2f} m (+ left)")
     return "\n".join(rows)
 
@@ -144,7 +144,8 @@ def main():
     ap.add_argument("--ckpt", default="runs/keipilot_v10.pt")
     ap.add_argument("--brake_hold", action="store_true")
     ap.add_argument("--red_hold", action="store_true")
-    ap.add_argument("--variants", nargs="+", default=list(VARIANTS), choices=list(VARIANTS))
+    ap.add_argument("--variants", nargs="+", default=list(VARIANTS), choices=VARIANT_NAMES,
+                    help="default: the five with buildings; <variant>_nobld: without (keisim/curve_course.py)")
     ap.add_argument("--directions", nargs="+", default=["fwd", "rev"], choices=["fwd", "rev"])
     ap.add_argument("--renderer", default="keisim", choices=["keisim", "keiview"])
     ap.add_argument("--weather", default="noon")

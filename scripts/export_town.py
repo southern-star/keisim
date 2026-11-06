@@ -336,7 +336,8 @@ def export_town(town: Town) -> dict:
         "crosswalks": [r2(simplify(p, LINE_EPS, True)) for p in town.crosswalks],
         "roads": roads, "junctions": junctions, "signals": signals, **({"stop_signs": stop_signs} if stop_signs else {}),
         "buildings": buildings, "trees": trees,
-        "parcels": make_parcels(town, buildings),
+        # no KeiView lots for towns that ask for none (curve courses without buildings)
+        "parcels": make_parcels(town, buildings) if getattr(town, "extra_lots", True) else [],
         **({"far_town": False} if getattr(town, "parcel_reach", None) else {}),   # no far-town ring (curve courses)
         **({"markings_yellow": [r2(simplify(p, LINE_EPS, True)) for p in town.markings_yellow]} if mixed else {}),
         **real_town_fields(town),

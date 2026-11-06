@@ -1064,8 +1064,9 @@ def test_ramps_expert_and_npcs():
 
 def test_curve_course():
     """keisim/curve_course.py: one open two-way road (dead ends at both ends) of 90 deg left and right curves; the
-    variants differ only in paint and guardrails. A guardrail runs GUARDRAIL_OFFSET outside each road edge, is a static
-    obstacle and is drawn (pole class); the expert drives the course end to end within 0.35 m of its lane."""
+    variants differ only in paint and guardrails (<variant>_nobld: also no buildings, no KeiView lots). A guardrail
+    runs GUARDRAIL_OFFSET outside each road edge, is a static obstacle and is drawn (pole class); the expert drives the
+    course end to end within 0.35 m of its lane."""
     from keisim.config import SEM, EnvConfig
     from keisim.curve_course import RADII, course_route, curve_town
     from keisim.render.meshes import StaticScene
@@ -1074,6 +1075,15 @@ def test_curve_course():
     T = curve_town("nolines_guard")
     assert len(T.roads) == 1 and [len(J.arms) for J in T.junctions] == [1, 1] and not T.markings
     assert len(curve_town("lines").markings) > 50 and not curve_town("lines").guardrails
+    assert T.buildings and T.extra_lots
+    N = curve_town("nolines_guard_nobld")      # without buildings: no KeiSim boxes, no KeiView lots, same guardrails
+    assert not N.buildings and not N.extra_lots and N.name != T.name
+    assert [g["side"] for g in N.guardrails] == [g["side"] for g in T.guardrails]
+    assert all(np.allclose(a["pts"], b["pts"]) for a, b in zip(N.guardrails, T.guardrails))
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
+    from export_town import export_town
+    d = export_town(N)
+    assert not d["buildings"] and not d["parcels"] and len(d["guardrails"]) == 2 and d["far_town"] is False
     road = T.roads[0]
     assert sorted(g["side"] for g in T.guardrails) == [-1.0, 1.0]
     for g in T.guardrails:
