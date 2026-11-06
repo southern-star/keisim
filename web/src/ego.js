@@ -14,7 +14,7 @@ export const SEM = {
 const ROAD_COLORS = { '6f7176': SEM.road, 'b9b8b1': SEM.road, 'd5d0c5': SEM.sidewalk, 'c7c5bd': SEM.sidewalk, 'f2f0ea': SEM.marking,
   'f0b52e': SEM.marking };
 const MODULE_SEM = { ground: SEM.terrain, roads: SEM.road, houses: SEM.building, trees: SEM.vegetation,
-  signals: SEM.pole, poles: SEM.pole };
+  signals: SEM.pole, poles: SEM.pole, guardrails: SEM.pole };
 
 const _box = new THREE.Box3();
 

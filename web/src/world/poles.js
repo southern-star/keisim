@@ -89,8 +89,10 @@ function planPoles(T, R) {
   let serial = 0;
   for (const r of T.roads) {
     if (r.len < 12) continue;
-    const off = r.sidewalk > 0 ? r.wo - 0.3 : r.hw + 0.35;   // sidewalk's outer edge, or just off the road
     const side = poleSide(r);
+    // sidewalk's outer edge, or just off the road (behind a guardrail on that side: keisim/curve_course.py)
+    const guard = r.guardrail === 'both' || (r.guardrail === 'left' && side > 0) || (r.guardrail === 'right' && side < 0);
+    const off = r.sidewalk > 0 ? r.wo - 0.3 : r.hw + (guard ? 0.9 : 0.35);
     const cls = r.len > 55 ? 'main' : 'alley';
     const n = Math.max(2, Math.round((r.len - 10) / 32) + 1);
     const line = DISTRICTS[r.id % DISTRICTS.length] + (cls === 'main' ? '幹' : '支');

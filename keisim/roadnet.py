@@ -83,10 +83,11 @@ class RoadSpec:
     raised sidewalk on each side (0: none). center / edge: paint (see config.ROAD_KINDS). oneway: a single lane on
     the centre line, driven from the road's junction a to b (Town.from_graph towns), no centre line paint.
     lanes: lanes per direction (two-way roads; 2 = 片側2車線), side by side from the centre line outwards, with
-    dashed white lane lines between them."""
+    dashed white lane lines between them. guardrail: ガードレール along the road's edges (Town.from_graph roads:
+    "both", "left" / "right" of the direction a -> b, or None), GUARDRAIL_OFFSET outside the road surface."""
 
     def __init__(self, kind, lane_width, shoulder, sidewalk, speed_limit, center="dashed", edge="classic",
-                 oneway=False, lanes=1):
+                 oneway=False, lanes=1, guardrail=None):
         self.kind = kind
         self.lane_width, self.shoulder, self.sidewalk = lane_width, shoulder, sidewalk
         self.speed_limit = speed_limit
@@ -95,6 +96,9 @@ class RoadSpec:
         if self.oneway and lanes != 1:
             raise ValueError("one-way roads have a single lane")
         self.lanes = int(lanes)
+        if guardrail not in (None, "both", "left", "right"):
+            raise ValueError(f"guardrail: {guardrail!r}")
+        self.guardrail = guardrail
         # the lanes' outer edge, from the centre line
         self.lane_outer = lane_width / 2.0 if oneway else lane_width * self.lanes
         self.half_width = self.lane_outer + shoulder  # road surface, centre line to edge
@@ -155,6 +159,8 @@ class Road:
 
 
 YIELD_CLEAR = 2.4        # clearance of a waiting car's front circle from the paths it yields to
+GUARDRAIL_OFFSET = 0.3   # m: a guardrail's beam stands this far outside the road surface (RoadSpec.guardrail)
+GUARDRAIL_DS = 2.0       # m: its collision boxes / beam panels
 
 
 def _two_phase_groups(angles):
@@ -393,6 +399,7 @@ class Town:
         self._building_edges = None          # building_edges(), built on first use
         self.max_vehicle_dims = None         # (length, width) cap of the NPC cars (keisim.realworld: narrow roads)
         self.ramps: list[dict] = []          # at-grade left-turn ramps (_make_ramps)
+        self.guardrails: list[dict] = []     # ガードレール (RoadSpec.guardrail): {road, side (+1 left of a -> b), pts}
 
     # ------------------------------------------------------------------ build
     def _build(self):
@@ -482,7 +489,7 @@ class Town:
     def _size_junction(J, wo, specs=None):
         """Sort the arms counter-clockwise and set the junction radius from the tightest angle between neighbouring
         arms and the widest arm's walk_outer `wo` (3+ arms: at least 9.5 m, or graph_min_radius of the arms'
-        cross-sections `specs` when those are given, i.e. in Town.from_graph; bends: at least 3 m)."""
+        cross-sections `specs` when those are given, i.e. in Town.from_graph; bends: at least 3 m; dead ends: 3 m)."""
         J.arms.sort(key=lambda a: a["angle"])
         angs = np.array([a["angle"] for a in J.arms])
         gaps = np.diff(np.concatenate([angs, [angs[0] + 2 * math.pi]]))
@@ -490,6 +497,8 @@ class Town:
         if len(J.arms) >= 3:
             floor = 9.5 if specs is None else Town.graph_min_radius(specs, gmin)
             J.radius = max(floor, wo / math.tan(gmin / 2.0) + 1.5)
+        elif len(J.arms) == 1:                     # a dead end (Town.from_graph, e.g. keisim/curve_course.py)
+            J.radius = 3.0
         else:
             J.radius = max(3.0, wo / math.tan(min(gmin, 2 * math.pi - gmin) / 2.0) + 1.0)
 
@@ -664,6 +673,7 @@ class Town:
         self._make_markings()
         self._make_signal_heads()
         self._make_stop_sign_posts()
+        self._make_guardrails()
         self._make_buildings_and_trees(buildings)
         self._finalize_static()
 
@@ -1434,9 +1444,25 @@ class Town:
                                     if len(b) else np.zeros(0))
         return self._building_edges
 
+    def _make_guardrails(self):
+        """Guardrails along the roads whose RoadSpec has one: a line GUARDRAIL_OFFSET outside the road surface on
+        that side, over the road's length between its junctions (cut back by the junction radius)."""
+        for road in self.roads:
+            g = road.spec.guardrail
+            if g is None:
+                continue
+            for sgn in ((1.0, -1.0) if g == "both" else (1.0,) if g == "left" else (-1.0,)):
+                pts = resample(offset_polyline(road.center, sgn * (road.half_width + GUARDRAIL_OFFSET)), GUARDRAIL_DS)
+                self.guardrails.append({"road": road.id, "side": sgn, "pts": pts})
+
     def _finalize_static(self):
-        """Arrays of static collision boxes: (x, y, yaw, l, w)."""
+        """Arrays of static collision boxes: (x, y, yaw, l, w) (guardrails: one per GUARDRAIL_DS panel)."""
         boxes = []
+        for gr in self.guardrails:
+            p = gr["pts"]
+            for a, b in zip(p[:-1], p[1:]):
+                d = b - a
+                boxes.append(((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, math.atan2(d[1], d[0]), math.hypot(*d), 0.2))
         for b in self.buildings:
             boxes.append((b["x"], b["y"], b["yaw"], b["l"], b["w"]))
         for t in self.trees:

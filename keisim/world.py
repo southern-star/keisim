@@ -22,8 +22,8 @@ class World:
         n_veh = int(min(tc.max_vehicles, town.total_lane_length() / rng.uniform(*tc.vehicle_spacing)))
         self.traffic = Traffic(town, tc, rng, n_veh)
         ego_xy = self.ego.xy[None]
-        # a few vehicles ahead of the ego on its route -> car-following situations
-        if route is not None and rng.random() < 0.7:
+        # a few vehicles ahead of the ego on its route -> car-following situations (none with max_vehicles 0)
+        if route is not None and tc.max_vehicles > 0 and rng.random() < 0.7:
             first = route.lanes[0]
             s0 = route.s_start
             L = town.lanes[first].length

@@ -1081,10 +1081,14 @@ class Pedestrians:
     def __init__(self, town, cfg: TrafficConfig, rng, n):
         self.town, self.cfg, self.rng = town, cfg, rng
         ww = town.walkways
+        if not ww:                      # no sidewalk nor 路側帯 anywhere (keisim/curve_course.py): nobody walks
+            n = 0
         self.n = n
         lens = np.array([w["poly"].length for w in ww])
-        p = lens / lens.sum()
-        self.w = rng.choice(len(ww), size=n, p=p)
+        if ww:
+            self.w = rng.choice(len(ww), size=n, p=lens / lens.sum())
+        else:
+            self.w = np.zeros(0, int)
         self.s = np.array([rng.uniform(1.0, ww[k]["poly"].length - 1.0) for k in self.w])
         self.dir = rng.choice([-1.0, 1.0], size=n)
         self.speed = rng.uniform(1.0, 1.6, n)
