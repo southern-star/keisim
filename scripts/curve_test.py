@@ -152,17 +152,33 @@ def main():
     ap.add_argument("--tag", default=None)
     args = ap.parse_args()
     a = vars(args)
-    jobs = [(v, d == "rev", a) for v in args.variants for d in args.directions]
-    workers = 1 if args.renderer == "keiview" else min(args.workers, len(jobs))
-    if workers > 1:
-        with Pool(workers) as pool:
-            results = pool.map(run_one, jobs)
-    else:
-        results = [run_one(j) for j in jobs]
-    print(table(results))
     tag = args.tag or (f"{args.agent}" + (f"_{os.path.splitext(os.path.basename(args.ckpt))[0]}" if args.agent == "model" else "")
                        + f"_{args.renderer}_{args.weather}" + (f"_tp{args.tp}" if args.tp != "route" else ""))
-    os.makedirs("runs/eval/curve", exist_ok=True)
+    # every run is saved when it ends (runs/eval/curve/<tag>/), and a run already saved there is not run again
+    part_dir = f"runs/eval/curve/{tag}"
+    os.makedirs(part_dir, exist_ok=True)
+    part = lambda v, rev: os.path.join(part_dir, f"{v}_{'rev' if rev else 'fwd'}.json")   # noqa: E731
+    jobs = [(v, d == "rev", a) for v in args.variants for d in args.directions]
+    todo = [j for j in jobs if not os.path.exists(part(j[0], j[1]))]
+    workers = 1 if args.renderer == "keiview" else max(1, min(args.workers, len(todo)))
+
+    def save(r):
+        with open(part(r["variant"], r["reverse"]), "w") as f:
+            json.dump(r, f)
+        print(f"done {r['variant']} {'rev' if r['reverse'] else 'fwd'}: {r['status']}", flush=True)
+
+    if workers > 1:
+        with Pool(workers) as pool:
+            for r in pool.imap_unordered(run_one, todo):
+                save(r)
+    else:
+        for j in todo:
+            save(run_one(j))
+    results = []
+    for v, rev, _ in jobs:
+        with open(part(v, rev)) as f:
+            results.append(json.load(f))
+    print(table(results))
     out = f"runs/eval/curve/{tag}.json"
     with open(out, "w") as f:
         json.dump({"args": {k: v for k, v in a.items()}, "results": results}, f, indent=1)

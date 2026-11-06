@@ -1060,3 +1060,44 @@ def test_ramps_expert_and_npcs():
     assert info["status"] == "success", info
     assert env.route.lane_index_at(env.s_ego) > ramp_k[0] + 1                    # past the ramp, merged
     assert npc_ramps >= 1
+
+
+def test_curve_course():
+    """keisim/curve_course.py: one open two-way road (dead ends at both ends) of 90 deg left and right curves; the
+    variants differ only in paint and guardrails. A guardrail runs GUARDRAIL_OFFSET outside each road edge, is a static
+    obstacle and is drawn (pole class); the expert drives the course end to end within 0.35 m of its lane."""
+    from keisim.config import SEM, EnvConfig
+    from keisim.curve_course import RADII, course_route, curve_town
+    from keisim.render.meshes import StaticScene
+    from keisim.roadnet import GUARDRAIL_OFFSET
+
+    T = curve_town("nolines_guard")
+    assert len(T.roads) == 1 and [len(J.arms) for J in T.junctions] == [1, 1] and not T.markings
+    assert len(curve_town("lines").markings) > 50 and not curve_town("lines").guardrails
+    road = T.roads[0]
+    assert sorted(g["side"] for g in T.guardrails) == [-1.0, 1.0]
+    for g in T.guardrails:
+        d = np.hypot(*(g["pts"][::20, None, :] - road.center[None, ::2]).transpose(2, 0, 1)).min(axis=1)
+        assert np.all(np.abs(d - (road.half_width + GUARDRAIL_OFFSET)) < 0.05)
+    assert len(T.static_boxes) > sum(len(g["pts"]) - 1 for g in T.guardrails) - 1
+    sc = StaticScene(T)
+    assert (sc.faces["sem"] == SEM["pole"]).sum() > 1000
+    for rev in (False, True):
+        r, curves = course_route(T, reverse=rev)
+        assert len(curves) == 2 * len(RADII) and {c["turn"] for c in curves} == {"left", "right"}
+    cfg = EnvConfig()
+    cfg.traffic.max_vehicles = 0
+    cfg.traffic.max_peds = 0
+    cfg.render_rgb = cfg.render_seg = False
+    env = KeiEnv(cfg)
+    route, curves = course_route(T, reverse=True)
+    env.reset(town_seed=T, episode_seed=0, route=route)
+    assert env.world.traffic.n == 0 and env.world.peds.n == 0
+    worst = 0.0
+    done = False
+    while not done and env.s_ego < route.s_end - 3.0:
+        e, s = env.world.ego, env.s_ego
+        p, h = route.poly.interp1(s), route.poly.heading1(s)
+        worst = max(worst, abs(-(e.x - p[0]) * np.sin(h) + (e.y - p[1]) * np.cos(h)))
+        _, _, done, info = env.step(env.expert_action())
+    assert not done and env.s_ego >= route.s_end - 3.0 and worst < 0.35, (env.status, worst)
