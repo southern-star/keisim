@@ -97,12 +97,11 @@ def course_route(town, reverse=False, margin=8.0, start=None):
     lane = town.lanes[lid]
     r = Route(town, [lid], max(margin, start or 0.0), s_end=lane.length - margin)
     centre = Polyline(town.course["centre"])
-    L = centre.length
     out = []
     for c in town.course["curves"]:
-        s0, s1 = (L - c["s1"], L - c["s0"]) if reverse else (c["s0"], c["s1"])
         turn = c["turn"] if not reverse else ("right" if c["turn"] == "left" else "left")
-        a, b = (r.poly.project(centre.interp1(x))[0] for x in (s0, s1))
+        # the curve's own ends projected onto the route (driven the other way, the route meets them in reverse order)
+        a, b = (r.poly.project(centre.interp1(x))[0] for x in (c["s0"], c["s1"]))
         # the lane runs half a lane inside the centre line on a left curve (left-hand traffic), outside on a right one
         side = 1.0 if town.cfg.left_hand_traffic else -1.0
         rad = c["radius"] - side * (1 if turn == "left" else -1) * lane.width / 2

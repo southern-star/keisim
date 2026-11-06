@@ -1082,9 +1082,12 @@ def test_curve_course():
     assert len(T.static_boxes) > sum(len(g["pts"]) - 1 for g in T.guardrails) - 1
     sc = StaticScene(T)
     assert (sc.faces["sem"] == SEM["pole"]).sum() > 1000
-    for rev in (False, True):
+    for rev in (False, True):                # every curve's span on the route has its turn and radius
         r, curves = course_route(T, reverse=rev)
         assert len(curves) == 2 * len(RADII) and {c["turn"] for c in curves} == {"left", "right"}
+        for c in curves:
+            k = float(np.median(r.curv[(r.poly.s > c["s0"] + 3) & (r.poly.s < c["s1"] - 3)]))
+            assert (k > 0) == (c["turn"] == "left") and abs(1 / abs(k) - c["radius"]) < 0.05 * c["radius"], (rev, c)
     cfg = EnvConfig()
     cfg.traffic.max_vehicles = 0
     cfg.traffic.max_peds = 0
