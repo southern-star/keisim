@@ -17,14 +17,23 @@ from .route import LC_CHECK, LC_PUSH, LC_PUSH_TO, change_room, link_map
 from .traffic import PASS_SPEED, YIELD_GAP, Traffic, corridor_gaps, vehicle_circles
 
 PATH_S = np.arange(1, 11) * 2.0          # label waypoints every 2 m up to 20 m
-LABEL_VERSION = 6                        # 3: yellow per traffic law; 4: at yellow, stop whenever the ego still can;
+LABEL_VERSION = 7                        # 3: yellow per traffic law; 4: at yellow, stop whenever the ego still can;
                                          # 5: and always when creeping (< 1 m/s) with the bumper at the line;
-                                         # 6: 止まれ: 徐行 (CROSSING_V) from the stop line to the wait point
+                                         # 6: 止まれ: 徐行 (CROSSING_V) from the stop line to the wait point;
+                                         # 7: past a turn's wait point every crossing ahead counts (not only the
+                                         # first); a slow car that cannot stop at the line for a full exit or a busy
+                                         # box stops short of the junction's entry
 YELLOW_VERSION = 5                       # the last label version that changed the yellow rule
 TL_MARGIN = 2.5                          # stop this far before the stop line (keeps it in view)
+BOX_V = 3.0                              # m/s: slower than this, a car past the point where it can stop at the line
+                                         # for a full exit or a busy box still stops short of the junction's entry
+BOX_MARGIN = 1.0                         # m: ... while its front bumper can stop this far before the entry
+BOX_IN = 5.0                             # m: the stop line to the junction's entry (TownConfig.stop_line_setback) for
+                                         # frames recorded before lt_in
 YIELD_TTA_MAX = 8.0                      # yield_tta labels are clipped here (8 s or more: nobody coming)
 LATE_COMMIT = 1.0                        # m: past its wait point, a right turn still stops for oncoming traffic until
-                                         # its front bumper is this close to the first crossing (centre lines)
+                                         # its front bumper is this close to the crossing (centre lines), at each
+                                         # crossing still ahead
 LATE_MARGIN = 1.0                        # s: ... if a moving car with priority arrives sooner than it clears + this
 CROSSING_V = 10.0 / 3.6                  # m/s: 徐行 at the wait point of an unsignalised crossing the ego gives way at
 CROSSING_B = 1.6                         # m/s^2: ... slowing down towards it (the curve envelope's deceleration)
@@ -50,9 +59,10 @@ def stop_profile(x, b=2.5):
     return min(math.sqrt(2 * b * x), 0.8 * x + 0.2)
 
 
-def light_stop(v, d, st, t_rem, exit_blocked):
-    """The expert's decision at the next stop line, `d` >= 0 metres ahead of the front bumper, at ego speed `v`:
-    the reason it stops there, or None. This is the only place where the ego speed enters the plan.
+def light_stop(v, d, st, t_rem, exit_blocked, d_in=BOX_IN):
+    """The expert's decision at the next stop line, `d` metres ahead of the front bumper (< 0: past it, short of
+    the junction's entry `d_in` m beyond the line), at ego speed `v`: (the reason it stops, metres to its stopping
+    point for stop_profile), or None. This is the only place where the ego speed enters the plan.
     Red and yellow: stop unless even a hard stop (6 m/s^2) is impossible. Japanese traffic law lets a car go on at
     yellow only when it is too close to stop safely. Label version 3 read "safely" as a comfortable 3.5 m/s^2, but
     that per-frame rule could flip to "go" halfway through a stop when the ego braked a little late (it then
@@ -61,22 +71,27 @@ def light_stop(v, d, st, t_rem, exit_blocked):
     The remaining yellow time `t_rem` is not used: a camera + speed model could not see it.
     Label version 5: the 0.3 m margin (a moving car whose bumper is about at the line) does not apply below 1 m/s,
     so a car creeping up a queue with its bumper at the line stops there at yellow and red instead of following the
-    car ahead across it (seen in queues behind cars waiting to turn right inside two-phase junctions)."""
+    car ahead across it (seen in queues behind cars waiting to turn right inside two-phase junctions).
+    Label version 7: a car slower than BOX_V that can no longer stop at the line for a full exit or a busy box (it
+    crept up to the line or over it, e.g. a model setting off before the box was clear) stops where it is, short of
+    the junction's entry, while it still can. Before, the label said "go" as soon as the line was out of reach (from
+    0.4 m before it at 4.5 km/h), which taught models that edging over the line commits them: mc10 set off early,
+    passed the line at 5 km/h and hit the car still clearing the junction (grid long3c_dense 1018/9401, long3d_dense
+    1014/9500 and 9501: three of its nine collisions)."""
     can_stop = d > v * v / (2 * 6.0) + (0.3 if v >= 1.0 else 0.0)
-    if st in (TL_RED, TL_YELLOW):
-        stop = can_stop
-    else:
-        stop = False
-    if stop:
-        return "red_light"
-    if d < 12.0 and can_stop and exit_blocked:
-        return "junction_blocked"            # don't block the box: wait at the stop line if the exit is full
+    if st in (TL_RED, TL_YELLOW) and can_stop:
+        return "red_light", d - TL_MARGIN
+    if d < 12.0 and exit_blocked:
+        if can_stop:                         # don't block the box: wait at the stop line if the exit is full
+            return "junction_blocked", d - TL_MARGIN
+        if v < BOX_V and d + d_in - BOX_MARGIN > v * v / (2 * 6.0) + 0.3:
+            return "junction_blocked", 0.0
     return None
 
 
 def target_for_speed(v, lab):
     """The expert's target speed had the ego been driving at `v`, from the speed-independent parts of its plan
-    (target_nolight, lt_over, lt_d, lt_st, lt_trem, lt_blocked; see Expert.plan). Relabels recorded frames with
+    (target_nolight, lt_over, lt_d, lt_st, lt_trem, lt_blocked, optional lt_in; see Expert.plan). Relabels recorded frames with
     counterfactual ego speeds, so a speed-input model learns how the speed changes the decision.
     止まれ (optional ss_d, ss_go: the pending stop line ahead and the target without it): standing (v < STOP_SIGN_V)
     within STOP_SIGN_MARGIN + STOP_SIGN_ZONE of the line, the stop is made and the ego goes on (ss_go); at any other
@@ -90,8 +105,12 @@ def target_for_speed(v, lab):
     if lab["lt_over"] and v < 3.0:
         target = 0.0
     d = float(lab["lt_d"])
-    if math.isfinite(d) and light_stop(v, d, int(lab["lt_st"]), float(lab["lt_trem"]), bool(lab["lt_blocked"])):
-        target = min(target, stop_profile(d - TL_MARGIN, Expert.B_COMF))
+    if math.isfinite(d):
+        d_in = float(lab.get("lt_in", math.nan))
+        stop = light_stop(v, d, int(lab["lt_st"]), float(lab["lt_trem"]), bool(lab["lt_blocked"]),
+                          d_in if math.isfinite(d_in) else BOX_IN)
+        if stop:
+            target = min(target, stop_profile(stop[1], Expert.B_COMF))
     return 0.0 if target < 0.3 else target
 
 
@@ -251,6 +270,7 @@ class Expert:
         # stops short of the oncoming lane when a moving car with priority would arrive before the ego has cleared
         # the crossing (plus LATE_MARGIN): earlier labels said "go on" there, which taught models to keep rolling
         # into the oncoming lane after an overshoot. This late check uses the ego speed (rare, on-policy frames).
+        # At signals it looks at each crossing still ahead (label version 7), at priority crossings at the first.
         # Unsignalised crossings with 3+ arms (Town.from_graph: priority crossings) where the ego gives way: 徐行
         # (CROSSING_V) at the wait point, whether a car is coming or not (道路交通法 36 / 42 条: the minor road's
         # approach to a crossing with poor visibility). The cars with priority come from the sides, mostly outside
@@ -297,11 +317,30 @@ class Expert:
                             v_y = stop_profile(max(d_wait, 0.0), self.B_COMF)
                             if v_y < target:
                                 target, reason = v_y, "yield"
-                    elif d_cross > LATE_COMMIT:
-                        tta = tr.min_arrival(conn, w.t, tables(), moving_only=True)
-                        yield_tta = min(tta, YIELD_TTA_MAX)
-                        if tta < clear_time(d_cross, v, ego.LENGTH) + LATE_MARGIN:
-                            target, reason = 0.0, "yield"
+                    elif not jn["signalized"]:
+                        # priority crossings: the first crossing only (past the near lane, a stop for the far one
+                        # would leave the car standing across the near one)
+                        if d_cross > LATE_COMMIT:
+                            tta = tr.min_arrival(conn, w.t, tables(), moving_only=True)
+                            yield_tta = min(tta, YIELD_TTA_MAX)
+                            if tta < clear_time(d_cross, v, ego.LENGTH) + LATE_MARGIN:
+                                target, reason = 0.0, "yield"
+                    else:
+                        # signalised (label version 7): every crossing still ahead, each against the time the ego
+                        # needs to clear it. With the first one only, a right turn that had passed the oncoming lane
+                        # went on into the oncoming left turn merging into the same exit: mc10 rolled through the
+                        # wait point and the labels said "go" from there (5 of its 9 grid collisions, e.g. long3e
+                        # 1013/9601, long3f 1011/9700)
+                        on = None
+                        for y in conn.yields:
+                            d_y = jn["s_in"] + y[1] - s_front
+                            if d_y <= LATE_COMMIT:
+                                continue
+                            on = tables() if on is None else on
+                            tta = tr.min_arrival(conn, w.t, on, moving_only=True, yields=(y,))
+                            yield_tta = min(tta, YIELD_TTA_MAX) if math.isnan(yield_tta) else min(yield_tta, tta)
+                            if tta < clear_time(d_y, v, ego.LENGTH) + LATE_MARGIN:
+                                target, reason = 0.0, "yield"
                 break
 
         # --- 止まれ (Town.from_graph: the minor road's approaches to priority crossings, Lane.stop_sign_s). The ego
@@ -332,12 +371,29 @@ class Expert:
                     target, reason = v_s, "stop_sign"
                 break
 
+        # --- the box, just past the stop line (label version 7; before the line light_stop does it): a car slower
+        # than BOX_V that has rolled over the line stops short of the junction's entry while the exit is full or (box
+        # rule) another approach's car is still inside, if it still can. Uses the ego speed, so the counterfactual
+        # labels keep it as it is (rare, on-policy frames: a model that set off too early).
+        s_front = s + hl
+        if v < BOX_V:
+            for s_stop, lid in route.stops:
+                d = s_stop - s_front
+                if d >= 0.0:
+                    break
+                lane = w.town.lanes[lid]
+                if d + lane.length - lane.stop_s - BOX_MARGIN <= v * v / (2 * 6.0) + 0.3:
+                    continue            # in the junction, or too close to its entry to stop short of it
+                if self.blocked_at(route, s_stop):
+                    target, reason = 0.0, "junction_blocked"
+                break
+
         # --- traffic light. The speed-independent inputs of the decision are returned too (lt_*), so recorded
         # frames can be relabelled for other ego speeds (and for later versions of the rule).
         tl = TL_NONE
         target_nolight = target
-        lt = {"lt_over": False, "lt_d": math.nan, "lt_st": TL_NONE, "lt_trem": math.nan, "lt_blocked": False}
-        s_front = s + hl
+        lt = {"lt_over": False, "lt_d": math.nan, "lt_st": TL_NONE, "lt_trem": math.nan, "lt_blocked": False,
+              "lt_in": math.nan}
         for s_stop, lid in route.stops:
             d = s_stop - s_front
             if d < -3.0:
@@ -357,20 +413,15 @@ class Expert:
             if st == TL_YELLOW:
                 J = w.town.junctions[w.town.lanes[lid].signal[0]]
                 t_rem = J.remaining(w.town.lanes[lid].signal[1], w.t)
-            blocked = False
-            if d < 12.0:
-                k = route.lane_index_at(s_stop)
-                if k + 2 < len(route.lanes):
-                    occ = w.traffic.occupancy()
-                    blocked = w.traffic.exit_blocked(route.lanes[k + 1], route.lanes[k + 2], ego.LENGTH + 3.0, occ)
-                    if not blocked and w.traffic.cfg.box_rule:      # another approach's vehicle still inside
-                        blocked = w.traffic.box_busy(route.lanes[k + 1], w.traffic.box_occupants(occ))
-            lt.update(lt_d=d, lt_st=st, lt_trem=t_rem, lt_blocked=blocked)
-            why = light_stop(v, d, st, t_rem, blocked)
-            if why:
-                v_tl = stop_profile(d - TL_MARGIN, self.B_COMF)
+            blocked = d < 12.0 and self.blocked_at(route, s_stop)
+            lane = w.town.lanes[lid]
+            d_in = lane.length - lane.stop_s                # the line to the junction's entry
+            lt.update(lt_d=d, lt_st=st, lt_trem=t_rem, lt_blocked=blocked, lt_in=d_in)
+            stop = light_stop(v, d, st, t_rem, blocked, d_in)
+            if stop:
+                v_tl = stop_profile(stop[1], self.B_COMF)
                 if v_tl < target:
-                    target, reason = v_tl, why
+                    target, reason = v_tl, stop[0]
             break
         if target < 0.3:
             target = 0.0
@@ -378,6 +429,18 @@ class Expert:
         return {"path": path, "target_speed": float(target), "tl_state": int(tl), "reason": reason,
                 "gap": g, "lead_owner": int(lead_o[0]), "target_nolight": float(target_nolight),
                 "yield_tta": float(yield_tta), "ss_d": float(ss_d), "ss_go": float(ss_go), "ss_creep": ss_creep, **lt}
+
+    def blocked_at(self, route, s_stop):
+        """Don't block the box: True if the exit beyond the junction of the route's stop line at `s_stop` has no
+        room for the ego, or (box rule) a vehicle from another approach is still inside that junction."""
+        w = self.env.world
+        k = route.lane_index_at(s_stop)
+        if k + 2 >= len(route.lanes):
+            return False
+        occ = w.traffic.occupancy()
+        if w.traffic.exit_blocked(route.lanes[k + 1], route.lanes[k + 2], w.ego.LENGTH + 3.0, occ):
+            return True
+        return bool(w.traffic.cfg.box_rule and w.traffic.box_busy(route.lanes[k + 1], w.traffic.box_occupants(occ)))
 
     def act(self, plan=None):
         env = self.env

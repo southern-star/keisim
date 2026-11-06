@@ -236,7 +236,7 @@ def record(env, writer, rng, v_prob, weather_id, virtual_prob, offset=False, rgb
                # inputs of the expert's traffic-light decision -> labels for counterfactual ego speeds
                target_nolight=np.float32(plan["target_nolight"]), lt_over=np.bool_(plan["lt_over"]),
                lt_d=np.float32(plan["lt_d"]), lt_st=np.int8(plan["lt_st"]), lt_trem=np.float32(plan["lt_trem"]),
-               lt_blocked=np.bool_(plan["lt_blocked"]),
+               lt_blocked=np.bool_(plan["lt_blocked"]), lt_in=np.float32(plan.get("lt_in", np.nan)),
                # auxiliary label: earliest arrival of a car with priority at the next right turn that gives way
                yield_tta=np.float32(plan.get("yield_tta", np.nan)),
                # 止まれ: the pending stop line ahead and the target without it (counterfactual standing frames)
@@ -286,6 +286,7 @@ def worker(wid, args, quota, out_dir, counter):
     if args.vehicle_spacing is not None:
         cfg.traffic.vehicle_spacing = tuple(args.vehicle_spacing)
     cfg.traffic.ego_patience_s = args.ego_patience
+    cfg.traffic.light_past_line = bool(args.npc_past_line)
     if args.mode == "dagger":
         cfg.blocked_timeout = 40.0
     env = KeiEnv(cfg)
@@ -508,6 +509,9 @@ def main():
     ap.add_argument("--ego_patience", type=float, default=0.0,
                     help="s the ego may stand before the NPCs that give way to it stop waiting for it "
                          "(TrafficConfig.ego_patience_s; 0: they wait for ever)")
+    ap.add_argument("--npc_past_line", type=int, default=0, choices=[0, 1],
+                    help="1: NPCs standing a little past their stop line still obey its light "
+                         "(TrafficConfig.light_past_line)")
     ap.add_argument("--renderer", default="keisim", choices=["keisim", "keiview"], help="camera renderer")
     ap.add_argument("--keiview_roads", default="plain", choices=["plain", "detail"],
                     help="KeiView road surface: plain (every KeiView dataset so far) or detail (markings, signs, ...)")
@@ -552,6 +556,7 @@ def main():
                **({"keiview_roads": args.keiview_roads} if args.keiview_roads != "plain" else {}),
                **({"yield_visible": 1} if args.yield_visible else {}),
                **({"ego_patience": args.ego_patience} if args.ego_patience else {}),
+               **({"npc_past_line": 1} if args.npc_past_line else {}),
                **({"freeze_reasons": args.freeze_reasons} if args.freeze_takeover > 0 else {}),
                **({"stand_pert": args.stand_pert, "stand_hold": args.stand_hold} if args.stand_pert > 0 else {}),
                **({"via_ramp": args.via_ramp} if args.via_ramp > 0 else {}),

@@ -83,20 +83,31 @@ def test_counterfactual_speed_labels_match_expert():
 
 def test_light_rules():
     """Red and yellow: stop at the line unless even a hard stop (6 m/s^2) is impossible, whatever the remaining
-    yellow time; green: go (unless the junction exit is full)."""
+    yellow time; green: go (unless the junction exit is full or the box busy). light_stop -> (reason, metres to the
+    stopping point) or None."""
     from keisim.config import TL_GREEN, TL_RED, TL_YELLOW
-    from keisim.expert import light_stop
+    from keisim.expert import TL_MARGIN, light_stop
 
-    assert light_stop(5.0, 10.0, TL_YELLOW, 2.4, False) == "red_light"      # 3.9 m needed: stop, time left or not
-    assert light_stop(10.0, 8.0, TL_YELLOW, 0.5, False) is None             # 8.6 m needed: too close, go on
-    assert light_stop(10.0, 12.0, TL_YELLOW, 0.5, False) == "red_light"     # still possible -> stop (v3 went on)
-    assert light_stop(10.0, 9.0, TL_RED, 0.0, False) == "red_light"         # red: 8.6 m needed at 6 m/s^2
-    assert light_stop(11.0, 8.0, TL_RED, 0.0, False) is None                # 10.4 m needed: cannot stop
-    assert light_stop(8.0, 6.0, TL_GREEN, 0.0, False) is None
-    assert light_stop(3.0, 8.0, TL_GREEN, 0.0, True) == "junction_blocked"  # don't block the box
-    assert light_stop(0.5, 0.1, TL_RED, 0.0, False) == "red_light"          # v5: creeping with the bumper at the
-    assert light_stop(0.5, 0.1, TL_YELLOW, 2.0, False) == "red_light"       # line, it stays (no follow across)
-    assert light_stop(5.0, 0.1, TL_YELLOW, 2.0, False) is None              # at speed it still goes on
+    def why(*a):
+        r = light_stop(*a)
+        return None if r is None else r[0]
+
+    assert why(5.0, 10.0, TL_YELLOW, 2.4, False) == "red_light"      # 3.9 m needed: stop, time left or not
+    assert why(10.0, 8.0, TL_YELLOW, 0.5, False) is None             # 8.6 m needed: too close, go on
+    assert why(10.0, 12.0, TL_YELLOW, 0.5, False) == "red_light"     # still possible -> stop (v3 went on)
+    assert why(10.0, 9.0, TL_RED, 0.0, False) == "red_light"         # red: 8.6 m needed at 6 m/s^2
+    assert why(11.0, 8.0, TL_RED, 0.0, False) is None                # 10.4 m needed: cannot stop
+    assert why(8.0, 6.0, TL_GREEN, 0.0, False) is None
+    assert light_stop(3.0, 8.0, TL_GREEN, 0.0, True) == ("junction_blocked", 8.0 - TL_MARGIN)   # don't block the box
+    assert why(0.5, 0.1, TL_RED, 0.0, False) == "red_light"          # v5: creeping with the bumper at the
+    assert why(0.5, 0.1, TL_YELLOW, 2.0, False) == "red_light"       # line, it stays (no follow across)
+    assert why(5.0, 0.1, TL_YELLOW, 2.0, False) is None              # at speed it still goes on
+    # v7: slow, too close to stop at the line for a busy box (it crept up to it), it stops short of the entry
+    assert light_stop(1.25, 0.35, TL_GREEN, 0.0, True) == ("junction_blocked", 0.0)
+    assert light_stop(0.0, -2.0, TL_GREEN, 0.0, True, 5.0) == ("junction_blocked", 0.0)    # over the line too
+    assert why(1.25, 0.35, TL_GREEN, 0.0, False) is None             # a free box: go on
+    assert why(4.0, 0.35, TL_GREEN, 0.0, True) is None               # at BOX_V or faster: committed, as before
+    assert why(2.0, -3.5, TL_GREEN, 0.0, True, 5.0) is None          # too close to the entry to stop short of it
 
 
 def test_camera_render_shapes():
@@ -565,7 +576,8 @@ def test_load_shards_fills_buffers_in_place(tmp_path):
 def test_late_yield_after_overshoot():
     """A right turn past its wait point (a driving model came in too fast) still stops short of the oncoming lane
     when a moving car with priority would arrive before it clears the crossing; closer than LATE_COMMIT to the
-    crossing it goes on. Standing cars with priority do not count there (they wait for the ego)."""
+    crossing it goes on. Standing cars with priority do not count there (they wait for the ego). At signals each
+    crossing still ahead counts (label version 7)."""
     from keisim.config import town_config
     from keisim.expert import LATE_COMMIT
 
@@ -583,8 +595,10 @@ def test_late_yield_after_overshoot():
     tr, ego, hl = env.world.traffic, env.world.ego, env.world.ego.LENGTH / 2
     calls = []
 
-    def plan_at(s_front, tta, v=1.0):
-        tr.min_arrival = lambda c, t, on_lane, moving_only=False: calls.append(moving_only) or tta
+    def plan_at(s_front, tta, v=1.0, later=float("inf")):
+        # tta: the first crossing's car (or the earliest of all, before the wait point); later: the crossings after it
+        tr.min_arrival = lambda c, t, on_lane, moving_only=False, yields=None: calls.append(moving_only) or (
+            tta if yields is None or yields[0] == c.yields[0] else later)
         ego.v = v
         s = s_front - hl
         p0, p1 = env.route.poly.interp(np.array([s, s + 0.5]))
@@ -600,6 +614,15 @@ def test_late_yield_after_overshoot():
     p = plan_at(s_wait + 1.0, 9.0)                          # nobody coming soon: go on
     assert p["reason"] != "yield" and p["target_speed"] > 1.0
     p = plan_at(s_cross - LATE_COMMIT + 0.3, 1.5)          # almost at the crossing: clear it rather than stop in it
+    assert p["reason"] != "yield" and p["target_speed"] > 1.0
+    # label version 7 (signals): past the first crossing, a car about to reach a later one (the oncoming left turn
+    # merging into the same exit) still stops the turn, while it is LATE_COMMIT or more short of that crossing
+    assert jn["signalized"] and len(conn.yields) > 1
+    s_last = jn["s_in"] + conn.yields[-1][1]
+    assert s_last - LATE_COMMIT > s_cross - LATE_COMMIT + 0.3
+    p = plan_at(s_cross - LATE_COMMIT + 0.3, 9.0, later=1.0)
+    assert p["reason"] == "yield" and p["target_speed"] == 0.0 and p["yield_tta"] == 1.0
+    p = plan_at(s_last - LATE_COMMIT + 0.3, 9.0, later=1.0)  # almost at that one too: go on
     assert p["reason"] != "yield" and p["target_speed"] > 1.0
 
 

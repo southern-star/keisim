@@ -112,6 +112,7 @@ def run_route(job):
     cfg.keiview_roads = args.get("keiview_roads", "plain")
     cfg.expert_yield_visible = bool(args.get("yield_visible", False))
     cfg.traffic.ego_patience_s = float(args.get("ego_patience", 0.0))
+    cfg.traffic.light_past_line = bool(args.get("npc_past_line", False))
     if args.get("dense"):
         cfg.traffic.vehicle_spacing = (20.0, 28.0)
         cfg.traffic.ped_spacing = (14.0, 20.0)
@@ -357,6 +358,9 @@ def main():
     ap.add_argument("--ego_patience", type=float, default=0.0,
                     help="s the ego may stand before the NPCs that give way to it stop waiting for it "
                          "(TrafficConfig.ego_patience_s; 0: they wait for ever); suffix _pat<S>")
+    ap.add_argument("--npc_past_line", action="store_true",
+                    help="NPCs standing a little past their stop line still obey its light "
+                         "(TrafficConfig.light_past_line); suffix _npcline")
     ap.add_argument("--only", nargs="+", default=None, metavar="TOWN:EP",
                     help="only these routes of the suite (e.g. 1018:9400), for checks on picked routes; give --out")
     args = ap.parse_args()
@@ -408,7 +412,7 @@ def main():
         ("" if args.town_style == suite_style else f"_{args.town_style}") + \
         ("" if int(args.jam_fixes) == suite_fixes else ("_jamfix" if args.jam_fixes else "_nojamfix")) + \
         ("" if args.blocked_timeout == suite_timeout else f"_wait{args.blocked_timeout:.0f}") + \
-        (f"_pat{args.ego_patience:g}" if args.ego_patience else "")
+        (f"_pat{args.ego_patience:g}" if args.ego_patience else "") + ("_npcline" if args.npc_past_line else "")
     if args.osm_town:
         suffix = suffix.replace("_twophase", "")
         fail_dir = os.path.join("runs", "failures", args.osm_town, f"{tag}{suffix}")
@@ -421,7 +425,8 @@ def main():
          "yield_hold": None if args.yield_hold is None else (tuple(args.yield_hold) or True),
          "red_hold": args.red_hold, "town_style": args.town_style, "jam_fixes": bool(args.jam_fixes),
          "blocked_timeout": args.blocked_timeout, "osm_bbox": args.osm_bbox, "yield_visible": bool(args.yield_visible),
-         "rig": args.rig, "ego_patience": args.ego_patience, "via_ramp": bool(args.via_ramp)}
+         "rig": args.rig, "ego_patience": args.ego_patience, "via_ramp": bool(args.via_ramp),
+         "npc_past_line": args.npc_past_line}
     t0 = time.time()
     ctx = mp.get_context("spawn")
     with ctx.Pool(args.workers) as pool:

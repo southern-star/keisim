@@ -140,6 +140,11 @@ class TrafficConfig:
     # for a standing ego for ever, and a model that cannot tell a standing car from a coming one waits for the NPC:
     # neither goes (about three quarters of mc5b's long stands in Sapporo). Drivers go when the other car stays put.
     ego_patience_s: float = 0.0
+    # An NPC standing or creeping (< 1 m/s) up to NPC_OVER m past its stop line still obeys the light there (and the
+    # box rule). Without it, one that had stopped with its front a little over the line at green (in a queue, or
+    # braking for the box rule) counted as past the line and drove into the junction at red (grid long3d_dense
+    # 1018/9500: into the ego setting off at its green). Off by default: the old evaluations stay reproducible.
+    light_past_line: bool = False
 
 
 @dataclass

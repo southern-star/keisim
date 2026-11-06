@@ -157,6 +157,7 @@ PASS_SPEED = 3.0            # m/s: passing someone who walks in the 路側帯 be
 LOOKBACK_LANE = 60.0        # m: min_arrival's look into the junction before a short approach lane (yield_lookback)
 STOP_SIGN_NPC_AT = 1.0      # m: 止まれ: NPCs stop with the front bumper this far before the line (as the expert)
 STOP_SIGN_NPC_ZONE = 3.0    # m: ... and the stop counts when they stand within this much of it
+NPC_OVER = 3.0              # m: TrafficConfig.light_past_line: a standing NPC this far past its stop line still obeys it
 
 
 def near_pairs(origin, radius, cxy):
@@ -722,12 +723,13 @@ class Traffic:
         YIELD_GAP seconds (see min_arrival)."""
         return self.min_arrival(conn, t, on_lane) < YIELD_GAP
 
-    def min_arrival(self, conn, t, on_lane, moving_only=False):
+    def min_arrival(self, conn, t, on_lane, moving_only=False, yields=None):
         """Earliest time [s] a car with priority over connector `conn` can be in its crossing (0: already in it;
         inf: none coming). Cars that will stop at a red or yellow light do not count, nor do cars queued behind
         one that is standing still to go elsewhere (e.g. an oncoming car waiting to turn right itself).
         moving_only: standing cars (and the ones queued behind them) do not count either: for a turn that is already
         past its wait point, a standing car with priority is waiting for it.
+        yields: only these of conn.yields (default: all of them).
         A waiting ego (yield_tables) never counts before the crossing, nor do the cars queued behind it: the cars that
         give way to it wait for it only TrafficConfig.ego_patience_s.
         Towns with yield_lookback (Town.from_graph) at unsignalised junctions: when the approach lane before the
@@ -739,7 +741,7 @@ class Traffic:
         lanes = town.lanes
         best = math.inf
         lookback = town.yield_lookback and not town.junctions[conn.junction].signalized
-        for b, _, s2 in conn.yields:
+        for b, _, s2 in (conn.yields if yields is None else yields):
             vmax = 1.05 * lanes[b].speed_limit
             for s, v, L, ego, *_, waits in on_lane.get(b, ()):
                 d = s2 - (s + L / 2)
@@ -923,6 +925,8 @@ class Traffic:
         d_stop = self.c_stop - off[:, None] - hl[:, None]
         stop_gap = np.full(n, np.inf)
         ahead = d_stop >= -0.5
+        if cfg.light_past_line:     # standing a little over the line: it still binds (TrafficConfig.light_past_line)
+            ahead |= (d_stop >= -NPC_OVER) & (v[:, None] < 1.0)
         has = ahead.any(1)
         first = np.argmax(ahead, 1)
         occ = box = None
@@ -932,7 +936,7 @@ class Traffic:
                 continue
             lid = int(self.c_stop_lane[i, first[i]])
             st = town.signal_state_for_lane(lid, t)
-            if st == TL_RED or (st == TL_YELLOW and d > v[i] * v[i] / (2 * 3.5) + 1.0):
+            if st == TL_RED or (st == TL_YELLOW and (d > v[i] * v[i] / (2 * 3.5) + 1.0 or d < -0.5)):
                 stop_gap[i] = d - 0.6
             elif d < 12.0:
                 # don't block the box: only enter if the exit has room

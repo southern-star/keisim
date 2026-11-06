@@ -27,6 +27,10 @@ CF_DEFAULTS = {"target_nolight": np.float32(np.nan), "lt_over": False, "lt_d": n
 # 2026-10-24, NaN where missing (older shards keep their light counterfactuals: these keys are optional)
 SS_KEYS = ("ss_d", "ss_go")
 SS_DEFAULTS = {"ss_d": np.float32(np.nan), "ss_go": np.float32(np.nan)}
+# the stop line to the junction's entry [m] (label version 7's box rule, keisim.expert.light_stop); recorded since
+# 2026-11-06, NaN where missing (target_for_speed then takes keisim.expert.BOX_IN)
+SS_KEYS += ("lt_in",)
+SS_DEFAULTS["lt_in"] = np.float32(np.nan)
 SS_STAND_PROB = 0.5     # counterfactual frames before a pending stop line: chance of the speed 0 (standing at it)
 # the ego's one piece of memory (memory-input models): how far it has driven since it last stood (v < STAND_V), as
 # the expert remembers a stop made at a 止まれ line. Without it a single frame cannot tell a car that is still to stop
