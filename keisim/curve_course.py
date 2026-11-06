@@ -24,8 +24,8 @@ from .geometry import Polyline
 from .roadnet import RoadSpec, Town
 from .route import Route
 
-COURSE_VERSION = "v1"
-RADII = (15.0, 25.0, 40.0, 60.0)     # m, centre line
+COURSE_VERSION = "v2"
+RADII = (15.0, 25.0, 40.0, 60.0, 100.0, 150.0)     # m, centre line
 LEAD = 70.0                          # m of straight from the start before the first curve (and after the last)
 GAP = 50.0                           # m of straight between curves
 DS = 0.5
@@ -88,14 +88,14 @@ def curve_town(variant="nolines", radii=RADII, seed=0, cfg=None):
     return town
 
 
-def course_route(town, reverse=False, margin=8.0):
+def course_route(town, reverse=False, margin=8.0, start=None):
     """The route along the whole course: from its west end (reverse: from its east end, every curve turned the other
-    way), margin m in from the dead end, to margin m before the other one. Also the curves along it: [{s0, s1 (route
-    s), radius (of the lane driven), turn}]."""
+    way), margin m in from the dead end (or from route s `start`), to margin m before the other one. Also the curves
+    along it: [{s0, s1 (route s), radius (of the lane driven), turn}]."""
     road = town.roads[0]
     lid = road.lanes_ba[0] if reverse else road.lanes_ab[0]
     lane = town.lanes[lid]
-    r = Route(town, [lid], margin, s_end=lane.length - margin)
+    r = Route(town, [lid], max(margin, start or 0.0), s_end=lane.length - margin)
     centre = Polyline(town.course["centre"])
     L = centre.length
     out = []

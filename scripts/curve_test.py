@@ -1,6 +1,6 @@
 """Curve test: does a driving model cut the inside of curves where the road gives few cues (no white lines, a
 guardrail)? Drives the curve courses of keisim/curve_course.py (one open road of 90 deg left and right curves of
-radius 15-60 m) end to end, both ways, without other cars or pedestrians, and measures the car's lateral offset from
+radius 15-150 m) end to end, both ways, without other cars or pedestrians, and measures the car's lateral offset from
 the centre of its lane on every curve.
 
     python scripts/curve_test.py --agent model --ckpt runs/keipilot_v10.pt --brake_hold --red_hold
@@ -26,7 +26,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from keisim.config import EnvConfig  # noqa: E402
-from keisim.curve_course import VARIANTS, course_route, curve_town  # noqa: E402
+from keisim.curve_course import COURSE_VERSION, VARIANTS, course_route, curve_town  # noqa: E402
 from keisim.env import KeiEnv  # noqa: E402
 from keisim.geometry import world_to_local  # noqa: E402
 
@@ -44,7 +44,7 @@ def run_one(job):
     cfg.terminate_on_collision = True
     env = KeiEnv(cfg)
     town = curve_town(variant)
-    route, curves = course_route(town, reverse=reverse)
+    route, curves = course_route(town, reverse=reverse, start=a.get("from_s"))
     obs = env.reset(town_seed=town, episode_seed=a["episode"], weather=a["weather"], route=route)
     agent = None
     if a["agent"] == "model":
@@ -154,6 +154,7 @@ def main():
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--threads", type=int, default=None, help="torch threads per worker (default: CPUs / workers)")
     ap.add_argument("--video", default=None, help="directory for one mp4 per run")
+    ap.add_argument("--from_s", type=float, default=None, help="start at this route s (m) instead of the course's end")
     ap.add_argument("--max_s", type=float, default=None, help="stop after this many metres of the route (KeiView without a "
                     "GPU: about 2 s per frame)")
     ap.add_argument("--tag", default=None)
@@ -161,7 +162,8 @@ def main():
     a = vars(args)
     tag = args.tag or (f"{args.agent}" + (f"_{os.path.splitext(os.path.basename(args.ckpt))[0]}" if args.agent == "model" else "")
                        + f"_{args.renderer}_{args.weather}" + (f"_tp{args.tp}" if args.tp != "route" else "")
-                       + (f"_{args.max_s:.0f}m" if args.max_s else ""))
+                       + (f"_from{args.from_s:.0f}" if args.from_s else "") + (f"_{args.max_s:.0f}m" if args.max_s else "")
+                       + f"_{COURSE_VERSION}")
     # every run is saved when it ends (runs/eval/curve/<tag>/), and a run already saved there is not run again
     part_dir = f"runs/eval/curve/{tag}"
     os.makedirs(part_dir, exist_ok=True)
