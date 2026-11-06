@@ -20,7 +20,7 @@ import json
 import math
 import os
 import sys
-from multiprocessing import Pool
+import multiprocessing as mp
 
 import numpy as np
 
@@ -48,6 +48,8 @@ def run_one(job):
     obs = env.reset(town_seed=town, episode_seed=a["episode"], weather=a["weather"], route=route)
     agent = None
     if a["agent"] == "model":
+        import torch
+        torch.set_num_threads(a["threads"])       # the workers share the CPU (one thread each by default)
         from keipilot.agent import KeiPilotAgent
         agent = KeiPilotAgent(a["ckpt"], brake_hold=a["brake_hold"], red_hold=a["red_hold"])
         agent.reset()
@@ -88,12 +90,14 @@ def run_one(job):
         obs, _, done, info = env.step(action)
         if not done and env.s_ego >= route.s_end - 3.0:      # at the end (the car stops just short of it)
             done, info = True, {"status": "finished"}
+        if not done and a.get("max_s") and env.s_ego >= a["max_s"]:
+            done, info = True, {"status": "max_s"}
     if vw is not None:
         vw.close()
     status = info["status"]
     L = np.array(log)
     res = {"variant": variant, "reverse": reverse, "status": status, "s_end": float(L[-1, 0]),
-           "route_end": float(route.s_end), "curves": [], "infractions": [i[0] for i in env.infractions]}
+           "route_end": float(route.s_end), "curves": [], "infractions": [{k: i[k] for k in ("type", "s")} for i in env.infractions]}
     in_curve = np.zeros(len(L), bool)
     for c in curves:
         m = (L[:, 0] >= c["s0"]) & (L[:, 0] <= c["s1"])
@@ -148,12 +152,16 @@ def main():
     ap.add_argument("--tp", default="route", choices=["route", "ahead"],
                     help="model's target point: KeiSim's (the route's end: no junction on the course) or 50 m ahead")
     ap.add_argument("--workers", type=int, default=4)
+    ap.add_argument("--threads", type=int, default=None, help="torch threads per worker (default: CPUs / workers)")
     ap.add_argument("--video", default=None, help="directory for one mp4 per run")
+    ap.add_argument("--max_s", type=float, default=None, help="stop after this many metres of the route (KeiView without a "
+                    "GPU: about 2 s per frame)")
     ap.add_argument("--tag", default=None)
     args = ap.parse_args()
     a = vars(args)
     tag = args.tag or (f"{args.agent}" + (f"_{os.path.splitext(os.path.basename(args.ckpt))[0]}" if args.agent == "model" else "")
-                       + f"_{args.renderer}_{args.weather}" + (f"_tp{args.tp}" if args.tp != "route" else ""))
+                       + f"_{args.renderer}_{args.weather}" + (f"_tp{args.tp}" if args.tp != "route" else "")
+                       + (f"_{args.max_s:.0f}m" if args.max_s else ""))
     # every run is saved when it ends (runs/eval/curve/<tag>/), and a run already saved there is not run again
     part_dir = f"runs/eval/curve/{tag}"
     os.makedirs(part_dir, exist_ok=True)
@@ -161,6 +169,7 @@ def main():
     jobs = [(v, d == "rev", a) for v in args.variants for d in args.directions]
     todo = [j for j in jobs if not os.path.exists(part(j[0], j[1]))]
     workers = 1 if args.renderer == "keiview" else max(1, min(args.workers, len(todo)))
+    a["threads"] = args.threads or max(1, (os.cpu_count() or 1) // workers)
 
     def save(r):
         with open(part(r["variant"], r["reverse"]), "w") as f:
@@ -168,7 +177,7 @@ def main():
         print(f"done {r['variant']} {'rev' if r['reverse'] else 'fwd'}: {r['status']}", flush=True)
 
     if workers > 1:
-        with Pool(workers) as pool:
+        with mp.get_context("spawn").Pool(workers) as pool:      # (fork deadlocks torch's thread pool)
             for r in pool.imap_unordered(run_one, todo):
                 save(r)
     else:
