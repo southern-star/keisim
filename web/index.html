@@ -48,6 +48,9 @@
   @media (max-width: 760px) {
     #pilot-hud { font-size: 13px; padding: 8px 10px; }
     body.pilot #pilot-hud { top: calc(60px + env(safe-area-inset-top, 0px)); }             /* below the clock and the town / quality menus */
+    /* which stay on one row for that: the town menu takes the width the clock and the quality menu leave, its label cut short */
+    body.pilot #corner { flex-wrap: nowrap; }
+    body.pilot #townsel { min-width: 0; }
     #pilot-hud .keys { display: none; }
     #pilot-side canvas { width: 128px; height: 64px; }
   }
@@ -84,6 +87,7 @@
     align-items: center; max-width: calc(100vw - 32px); pointer-events: auto; }
   #clock { font: 700 15px/1 var(--round); color: var(--navy); background: var(--glass); border-radius: 999px; padding: 8px 12px; font-variant-numeric: tabular-nums; }
   .chip, select { font: 500 12px/1 var(--sans); color: var(--ink); background: var(--glass); border: 0; border-radius: 999px; padding: 8px 11px; cursor: pointer; }
+  select { text-overflow: ellipsis; }   /* a menu cut short (pilot on phones) ends in "…"; set from the start: Chrome does not pass a later change on to the label */
   #help { bottom: calc(16px + env(safe-area-inset-bottom, 0px)); left: 16px; font: 500 12px/1.7 var(--sans); color: var(--ink);
     background: var(--glass); border-radius: 8px; padding: 8px 12px; max-width: calc(100vw - 32px); }
   body.locked #help { opacity: .55; }
