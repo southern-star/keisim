@@ -222,7 +222,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
   const car = { x: 0, y: 0, yaw: 0, v: 0, steer: 0 };
   const speedCtl = createSpeedController(), safety = createSafety();
   let plan = null, action = [0, 0, 1], tick = 0, acc = 0, stillT = 0, gen = 0, standM = STAND_CAP;
-  let busy = false, sinceModel = CONTROL_DT, paused = false, inferMs = 0, msg = '', msgT = 0, deviation = 0, resets = 0;
+  let busy = false, sinceModel = CONTROL_DT, paused = false, inferMs = 0, nInfer = 0, captureMs = 0, msg = '', msgT = 0, deviation = 0, resets = 0;
 
   // lane graph towns with ramps: start before one (keisim route.ramp_route), unless ?ramp=-1
   const rampStart = nav.ramps && Number(params.get('ramp') ?? 0) >= 0 ? Number(params.get('ramp') ?? 0) : null;
@@ -328,12 +328,31 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
   const rgba = new Uint8Array(CAM.W * CAM.H * 4);
   const img = new Float32Array(3 * CAM.W * CAM.H);
   const vp = new THREE.Vector4();
+  const calls = [];                                         // when the last model calls finished (the HUD's rate)
+  // The town waits for the model. KeiSim decides every 0.1 s without delay; in real time the decision for a frame
+  // lands when the car has driven on, 1 m for every 0.1 s at 36 km/h, and the model's braking for a red light comes
+  // that much late: with decisions 0.5 s late (WASM, Chrome on one CPU core) the car went through 6 of the 12 red
+  // lights it came to in town 1000. The town (car, traffic, signals) therefore runs at most PACE_LAG s past the model
+  // frame being decided on (?pace=S; ?pace=0: no waiting): slow motion where the model takes longer.
+  const PACE_LAG = params.has('pace') ? Math.max(0, Number(params.get('pace')) || 0) : 0.25;
+  const pacing = PACE_LAG > 0;
+  let flightT = null, slow = 1;                             // town time of the frame in flight; town s per real s
+  const paceAcc = { town: 0, real: 0 };
+
+  /** Real time (main.js, before the town advances by dt): how much of it the town may advance now. */
+  function pace(dt) {
+    const d = pacing && flightT !== null ? Math.min(dt, Math.max(0, flightT + PACE_LAG - worldT)) : dt;
+    paceAcc.town += d; paceAcc.real += dt;
+    if (paceAcc.real >= 1) { slow = paceAcc.town / paceAcc.real; paceAcc.town = 0; paceAcc.real = 0; }
+    return d;
+  }
 
   /** Before the main view is drawn (same scene state and camera): render and read the 320x160 model frame. */
   function capture(t, dt) {
     sinceModel += dt;
     if (paused || busy || sinceModel < CONTROL_DT) return;
     sinceModel = 0;
+    const t0 = performance.now();
     renderer.getViewport(vp);
     const pr = renderer.getPixelRatio();
     renderer.setViewport(0, 0, CAM.W / pr, CAM.H / pr);
@@ -351,6 +370,8 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
       }
     }
     in2d.putImageData(inImg, 0, 0);
+    captureMs = performance.now() - t0;                     // the main thread's share of the model frame
+    flightT = t;
     runModel({ x: car.x, y: car.y, yaw: car.yaw }, car.v, nav.inputs(), standM);
   }
 
@@ -375,6 +396,9 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
       if (useStand) feeds.stand = new ort.Tensor('float32', standFeatures(stand), [1, 3]);
       const out = await session.run(feeds);
       inferMs = performance.now() - t0;
+      nInfer++;
+      calls.push(performance.now());
+      while (calls.length && calls[0] < calls[calls.length - 1] - 2000) calls.shift();
       const sp = out.speed_probs.data;
       let raw = 0;
       for (let i = 0; i < sp.length; i++) raw += sp[i] * i;     // expectation over the 0..11 m/s bins
@@ -385,6 +409,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
       }
     } catch (e) { console.error('[pilot] inference failed', e); }
     busy = false;
+    flightT = null;
   }
 
   function drawSeg(seg) {
@@ -443,7 +468,11 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     const tl = plan ? plan.tl : null;
     const k = tl ? tl.indexOf(Math.max(...tl)) : -1;
     const inp = nav.inputs(), j = nav.nextDecision();
-    el.ep.textContent = `${backend} · ${inferMs.toFixed(0)} ms`;
+    const now = performance.now(), rate = calls.filter((c) => c > now - 2000).length / 2;
+    const ep = [backend, `判断 ${rate.toFixed(1)} 回/秒`, `推論 ${inferMs.toFixed(0)} ms`, `描画 ${captureMs.toFixed(0)} ms`];
+    if (slow < 0.95) ep.push(`スロー ×${slow.toFixed(2)}`);
+    el.ep.innerHTML = ep.map((s) => `<span>${s}</span>`).join(' · ');   // a narrow HUD wraps between the items only
+    el.ep.title = slow < 0.95 ? `モデルの判断に ${PACE_LAG} 秒より長くかかるので、町の時間をゆっくり進めています（?pace=0 で待たない）` : '';
     el.v.textContent = (car.v * 3.6).toFixed(0);
     el.t.textContent = plan ? (plan.target * 3.6).toFixed(0) : '–';
     el.tl.textContent = k < 0 ? '–' : `● ${TL_NAMES[k]}`;
@@ -471,11 +500,12 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
   placeCamera();
   status('');
   return {
-    update, capture, after, backend, reset,
+    update, pace, capture, after, backend, reset,
     adapter: backend === 'webgpu' && adapter && adapter.info ? `${adapter.info.vendor} ${adapter.info.architecture}`.trim() : '',
     idle: () => inflight || Promise.resolve(),             // the inference in flight (tests: window.__pilotRun)
     traffic, lanes, nav,                                    // for tests (tools/pilot_check.mjs --yields)
-    state: () => ({ car: { ...car }, plan, s: nav.s, inputs: nav.inputs(), inferMs, deviation, resets, t: ctx.time, standM, useStand,
+    state: () => ({ car: { ...car }, plan, s: nav.s, inputs: nav.inputs(), inferMs, nInfer, captureMs, deviation, resets, t: ctx.time, standM, useStand,
+      slow, pacing,
       traffic: trafficOn ? { n: traffic.n, contacts: traffic.contacts, npcContacts: traffic.npcContacts, twoPhase: traffic.twoPhase,
         stopSignStops: traffic.stopSignStops, laneChanges: traffic.laneChanges, rampPassages: traffic.rampPassages } : null }),
   };

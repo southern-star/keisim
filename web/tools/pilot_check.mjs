@@ -12,6 +12,10 @@
 //                              access: npm install --no-save onnxruntime-web@1.20.1)
 //                              [--ramp N]   (towns with ramps: start before ramp N; -1: the usual start)
 //                              [--frames DIR]   (a screenshot at every report: DIR/f0001.png, ...)
+//                              [--realtime SEC]   (first let the page drive in real time for SEC s and print its speed:
+//                              frames per second, model calls per second, inference and model-frame times, town time
+//                              per second)
+//                              [--pace S]   (?pace=S: how long a model call may take before the town waits; 0: never)
 //                              [--only ground,roads,signals,actors]   (build only these modules: fast without a GPU)
 // Needs models/keipilot.onnx (scripts/export_onnx.py) and network access to cdn.jsdelivr.net (onnxruntime-web).
 import fs from 'node:fs';
@@ -45,7 +49,7 @@ try {
   const q = new URLSearchParams({ pilot: '1', town, ...(args.ep ? { ep: args.ep } : {}), ...(args.tdir ? { tdir: args.tdir } : {}),
     ...(args.traffic ? { traffic: args.traffic } : {}), ...(args.cars ? { cars: args.cars } : {}),
     ...(args.model ? { model: args.model } : {}), ...(args.ort ? { ort: args.ort } : {}), ...(args.ramp ? { ramp: args.ramp } : {}),
-    ...(args.only ? { only: args.only } : {}) });
+    ...(args.only ? { only: args.only } : {}), ...(args.pace ? { pace: args.pace } : {}) });
   const t0 = Date.now();
   await page.goto(`${base}?${q}`, { waitUntil: 'load', timeout: 180000 });
   await page.waitForFunction('window.__pilotRun || /読み込めません/.test(document.getElementById("loadlabel").textContent)', { timeout: 600000, polling: 200 });
@@ -56,6 +60,21 @@ try {
     gl: (() => { try { const g = document.getElementById('scene').getContext('webgl2'); const d = g.getExtension('WEBGL_debug_renderer_info'); return d ? g.getParameter(d.UNMASKED_RENDERER_WEBGL) : '?'; } catch (e) { return 'n/a'; } })() }));
   console.log(`town ${town}: ready in ${((Date.now() - t0) / 1000).toFixed(1)} s, backend ${info.backend}${info.adapter ? ` (${info.adapter})` : ''}, WebGL ${info.gl}`);
   if (info.stopLines) console.log(`止まれ lines (other cars stop once): ${info.stopLines}`);
+  if (args.realtime) {          // the page's own frame loop, as a visitor sees it
+    const fps = [], infer = [], cap = [];
+    const now = () => page.evaluate(() => { const s = window.__pilot.state(); return { n: s.nInfer, t: s.t, w: Date.now() }; });
+    const a = await now();
+    for (let k = 0; k < Number(args.realtime) * 2; k++) {
+      await new Promise((r) => setTimeout(r, 500));
+      const r = await page.evaluate(() => { const s = window.__pilot.state(); return { fps: window.__stats.fps, infer: s.inferMs, cap: s.captureMs }; });
+      if (k >= 4) { fps.push(r.fps); infer.push(r.infer); cap.push(r.cap); }   // after 2 s of warm-up
+    }
+    const b = await now(), wall = (b.w - a.w) / 1000;
+    const med = (x) => [...x].sort((p, q) => p - q)[x.length >> 1], mean = (x) => x.reduce((p, q) => p + q, 0) / x.length;
+    console.log(`real time ${wall.toFixed(0)} s: ${mean(fps).toFixed(1)} fps (min ${Math.min(...fps).toFixed(1)}), ${((b.n - a.n) / wall).toFixed(1)} model calls/s, ` +
+      `inference ${mean(infer).toFixed(1)} ms (median ${med(infer).toFixed(1)}), model frame ${mean(cap).toFixed(1)} ms (median ${med(cap).toFixed(1)}), ` +
+      `town time x${((b.t - a.t) / wall).toFixed(2)}`);
+  }
   console.log('   t     s  km/h  target  light  next turn       dev  restarts  infer   cars/ego/npc contacts');
   const names = ['red', 'yellow', 'green', 'none'];
   for (let t = every; t <= sec + 1e-6; t += every) {
