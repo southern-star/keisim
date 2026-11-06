@@ -248,8 +248,15 @@ def make_parcels(town: Town, buildings):
                         s += w + float(rng.uniform(0.3, 1.0))
                     else:
                         s += 1.5
-    # row 3: fill the remaining interior of every block with a grid aligned to the block
+    # row 3: fill the remaining interior of every block with a grid aligned to the block (towns with parcel_reach:
+    # only that far from a road; keisim/curve_course.py, whose one road leaves a 1 km "block" around it)
     free = (1 - fs.blocked).astype(np.uint8)
+    reach = getattr(town, "parcel_reach", None)
+    if reach:
+        near = np.zeros_like(free)
+        for rd in town.roads:
+            fs.R.fill(near, town.road_polygon(rd, rd.walk_outer + reach), 1)
+        free &= near
     n_lab, labels, st, _ = cv2.connectedComponentsWithStats(free, connectivity=4)
     for k in range(1, n_lab):
         if st[k, cv2.CC_STAT_AREA] * PARCEL_RES ** 2 < 150:
@@ -330,6 +337,7 @@ def export_town(town: Town) -> dict:
         "roads": roads, "junctions": junctions, "signals": signals, **({"stop_signs": stop_signs} if stop_signs else {}),
         "buildings": buildings, "trees": trees,
         "parcels": make_parcels(town, buildings),
+        **({"far_town": False} if getattr(town, "parcel_reach", None) else {}),   # no far-town ring (curve courses)
         **({"markings_yellow": [r2(simplify(p, LINE_EPS, True)) for p in town.markings_yellow]} if mixed else {}),
         **real_town_fields(town),
         **({"lane_graph": g} if (g := lane_graph(town)) is not None else {}),

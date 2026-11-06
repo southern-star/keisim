@@ -10,7 +10,8 @@ driven back the other way every curve turns the other way. Variants differ only 
     lines_guard    white lines and guardrails
 
 Every variant has 3.0 m lanes, a 0.5 m shoulder and no sidewalk (the road surface, then grass or a building lot),
-30 km/h. The town is a Town.from_graph (buildings along the road as KeiSim places them, no signals), named
+30 km/h. KeiView fills its extra lots (houses, fields) only within PARCEL_REACH of the road and draws no far-town
+ring around the course: beyond, grass. The town is a Town.from_graph (buildings along the road as KeiSim places them, no signals), named
 curve_<variant>_<COURSE_VERSION> (KeiView caches it under that name: bump the version when the geometry changes).
 """
 from __future__ import annotations
@@ -29,6 +30,7 @@ RADII = (15.0, 25.0, 40.0, 60.0, 100.0, 150.0)     # m, centre line
 LEAD = 70.0                          # m of straight from the start before the first curve (and after the last)
 GAP = 50.0                           # m of straight between curves
 DS = 0.5
+PARCEL_REACH = 60.0                  # m: KeiView fills lots only this far from the road (grass beyond)
 
 VARIANTS = {
     "lines": {"center": "dashed", "edge": "lane"},
@@ -85,6 +87,7 @@ def curve_town(variant="nolines", radii=RADII, seed=0, cfg=None):
     town = Town.from_graph(seed, cfg, [tuple(pts[0]), tuple(pts[-1])], [(0, 1, pts, spec)],
                            name=f"curve_{variant}_{COURSE_VERSION}")
     town.course = {"variant": variant, "centre": pts, "curves": curves}
+    town.parcel_reach = PARCEL_REACH           # KeiView's extra lots (scripts/export_town.py): only near the road
     return town
 
 
