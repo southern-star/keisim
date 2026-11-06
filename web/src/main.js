@@ -235,9 +235,10 @@ let started = false, last = performance.now(), fpsAcc = 0, fpsN = 0, fps = 0;
 let pilot = null, manual = false;
 function frame(now) {
   requestAnimationFrame(frame);
-  let dt = Math.min(0.1, (now - last) / 1000); last = now;
+  const real = Math.min(0.1, (now - last) / 1000); last = now;
   if (manual) return;
-  if (SHOT) dt = 0;
+  let dt = SHOT ? 0 : real;
+  if (pilot) dt = pilot.pace(dt);                 // the town waits for a slow model (src/pilot.js)
   simT += dt;
   if (pilot) pilot.update(dt, simT);
   else if (!SHOT) player.update(dt);
@@ -249,7 +250,7 @@ function frame(now) {
   pipeline.render(scene, camera, sunDir, simT);
   if (pilot) pilot.after(dt);
   if (!SHOT) hudTick(simT);
-  fpsAcc += dt; fpsN++;
+  fpsAcc += SHOT ? 0 : real; fpsN++;
   if (fpsAcc > 0.5) { fps = fpsN / fpsAcc; fpsAcc = 0; fpsN = 0; const s = $('stats'); if (s && !s.hidden) s.textContent = `${fps.toFixed(0)} fps · ${renderer.info.render.calls} calls · ${(renderer.info.render.triangles / 1e6).toFixed(2)}M tris`; }
   stats.fps = fps; stats.calls = renderer.info.render.calls; stats.triangles = renderer.info.render.triangles;
 }

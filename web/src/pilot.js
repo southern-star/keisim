@@ -429,6 +429,23 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
   const hz = Number(params.get('hz'));
   const MODEL_DT = hz > 0 ? Math.max(CONTROL_DT, 1 / hz) : CONTROL_DT;
   const calls = [];                                         // when the last model calls finished (the HUD's rate)
+  // The town waits for the model. KeiSim decides every 0.1 s without delay; in real time the decision for a frame
+  // lands when the car has driven on: with WASM (0.45 s for the multi-camera model) 4.5 m on at 36 km/h, so the
+  // model's braking for a red light came a stop line's distance late and it went through. The town (car, traffic,
+  // signals) therefore runs at most PACE_LAG s past the model frame being decided on (?pace=S; ?pace=0: no waiting):
+  // slow motion where the model takes longer.
+  const PACE_LAG = params.has('pace') ? Math.max(0, Number(params.get('pace')) || 0) : 0.25;
+  const pacing = PACE_LAG > 0;
+  let flightT = null, slow = 1;                             // town time of the frame in flight; town s per real s
+  const paceAcc = { town: 0, real: 0 };
+
+  /** Real time (main.js, before the town advances by dt): how much of it the town may advance now. */
+  function pace(dt) {
+    const d = pacing && flightT !== null ? Math.min(dt, Math.max(0, flightT + PACE_LAG - worldT)) : dt;
+    paceAcc.town += d; paceAcc.real += dt;
+    if (paceAcc.real >= 1) { slow = paceAcc.town / paceAcc.real; paceAcc.town = 0; paceAcc.real = 0; }
+    return d;
+  }
 
   /** n read-backs of w x h RGBA from the canvas' lower left corner: at once (sync), or into pixel buffers that
    *  fetch() copies out once the GPU has drawn them (WebGL2 PIXEL_PACK_BUFFER; the caller polls a fence), so the
@@ -532,7 +549,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
       gl.deleteSync(pending.fence);                         // a test takes over (window.__pilotRun): draw its frame now
       pending = null;
     }
-    if (paused || busy || sinceModel < (sync ? CONTROL_DT : MODEL_DT)) return;
+    if (paused || busy || sinceModel < (sync ? CONTROL_DT : MODEL_DT) - 1e-6) return;
     sinceModel = 0;
     const t0 = performance.now();
     renderer.getViewport(vp);
@@ -552,6 +569,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     renderer.setViewport(vp);
     const at = { pose: { x: car.x, y: car.y, yaw: car.yaw }, v: car.v, inp: nav.inputs(), stand: standM, t, g: gen, t1: performance.now() };
     drawMs = at.t1 - t0;
+    flightT = t;
     if (sync) { readMs = 0; finish(at); return; }
     at.fence = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
     gl.flush();
@@ -567,6 +585,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     (rig ? views.map((v) => v.reader) : [single]).forEach((r) => r.fetch());
     readMs = performance.now() - at.t1;
     if (at.g === gen) finish(at);                           // not after a reset
+    else flightT = null;
   }
 
   function finish(at) {
@@ -621,6 +640,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
       }
     } catch (e) { console.error('[pilot] inference failed', e); }
     busy = false;
+    flightT = null;
   }
 
   /** The model's segmentation of each camera (seg: K x 40 x 80 class ids). */
@@ -683,7 +703,9 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     const k = tl ? tl.indexOf(Math.max(...tl)) : -1;
     const inp = nav.inputs(), j = nav.nextDecision();
     const now = performance.now(), rate = calls.filter((c) => c > now - 2000).length / 2;
-    el.ep.textContent = `${backend} · 判断 ${rate.toFixed(1)} 回/秒 · 推論 ${inferMs.toFixed(0)} ms · 描画 ${captureMs.toFixed(0)} ms`;
+    el.ep.textContent = `${backend} · 判断 ${rate.toFixed(1)} 回/秒 · 推論 ${inferMs.toFixed(0)} ms · 描画 ${captureMs.toFixed(0)} ms` +
+      (slow < 0.95 ? ` · スロー ×${slow.toFixed(2)}` : '');
+    el.ep.title = slow < 0.95 ? `モデルの判断に ${PACE_LAG} 秒より長くかかるので、町の時間をゆっくり進めています（?pace=0 で止めない）` : '';
     el.v.textContent = (car.v * 3.6).toFixed(0);
     el.t.textContent = plan ? (plan.target * 3.6).toFixed(0) : '–';
     el.hold.textContent = yieldHold && yieldHold.holding() ? '（譲り待ち）' : '';
@@ -712,14 +734,14 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
   placeCamera();
   status('');
   return {
-    update, capture, after, backend, reset,
+    update, pace, capture, after, backend, reset,
     adapter: session.adapter, inferIn: session.where,      // 'worker' or 'main' (?infer=main)
     idle: () => inflight || Promise.resolve(),             // the inference in flight (tests: window.__pilotRun)
     traffic, lanes, nav,                                    // for tests (tools/pilot_check.mjs --yields)
     rig: rig ? rig.map((r) => r.cam.name) : null,
     images: () => ins.map((i) => i.img),                   // the model's last input images (tests: tools/pilot_check.mjs)
     state: () => ({ car: { ...car }, plan, s: nav.s, inputs: nav.inputs(), inferMs, nInfer, captureMs, readMs, captured, deviation, resets, t: ctx.time, standM, useStand,
-      cams: K, yieldHold: !!yieldHold, holding: !!yieldHold && yieldHold.holding(),
+      cams: K, yieldHold: !!yieldHold, holding: !!yieldHold && yieldHold.holding(), slow, pacing,
       traffic: trafficOn ? { n: traffic.n, contacts: traffic.contacts, npcContacts: traffic.npcContacts, twoPhase: traffic.twoPhase,
         stopSignStops: traffic.stopSignStops, laneChanges: traffic.laneChanges, rampPassages: traffic.rampPassages } : null }),
   };
