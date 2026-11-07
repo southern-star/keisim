@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Table of the weak-point course (keisim/curve_course.py weak_town) by weak case, from scripts/curve_test.py
 results: every case as the driver sees it (turn, lane radius, where the guardrail is), each run (file x direction) a
-column. A cell is the offset from the lane centre with the largest size over the piece (m; + = towards the curve's
+column (named by what differs between the files: model, renderer, weather; the episode, or 陰影なし for
+--guardrail_light flat; 正 / 逆 for the direction). A cell is the offset from the lane centre with the largest size over the piece (m; + = towards the curve's
 inside, on a straight towards the left) and a mark: o under 0.4 m, ^ 0.4-0.75 m, x 0.75 m or more (the car's body
 leaves its lane) or a collision there. A case met twice in a run (the S-curves) shows the worse.
 
@@ -48,13 +49,24 @@ def main():
     ap.add_argument("--variant", default="weak")
     args = ap.parse_args()
     cols, cases = [], {}
+    runs = []
     for f in args.files:
-        d = json.load(open(f))
-        name = os.path.basename(f).replace(".json", "")
-        for r in d["results"]:
+        with open(f) as fh:
+            d = json.load(fh)
+        runs.append((d["args"], d["results"]))
+
+    def who(a):
+        return os.path.splitext(os.path.basename(a["ckpt"]))[0] if a["agent"] == "model" else "expert"
+    differ = {k: len({fn(a) for a, _ in runs}) > 1 for k, fn in
+              (("who", who), ("renderer", lambda a: a["renderer"]), ("weather", lambda a: a["weather"]))}
+    for a, results in runs:
+        light = "陰影なし" if a.get("guardrail_light") == "flat" else f"ep{a['episode']}"
+        name = " ".join([who(a)] * differ["who"] + [a["renderer"]] * differ["renderer"] + [a["weather"]] * differ["weather"]
+                        + [light])
+        for r in results:
             if r["variant"] != args.variant or "pieces" not in r:
                 continue
-            col = f"{name} {'rev' if r['reverse'] else 'fwd'}"
+            col = f"{name} {'逆' if r['reverse'] else '正'}"
             cols.append(col)
             for c in r["pieces"]:
                 key, label = case_of(c)
