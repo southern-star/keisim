@@ -364,7 +364,8 @@ def export_town(town: Town) -> dict:
                       "speed_limit": round(rs.speed_limit, 4), "center_line": rs.center, "edge_line": rs.edge,
                       **({"oneway": True} if rs.oneway else {}),     # one lane on the centre line, a -> b
                       **({"lanes": rs.lanes} if rs.lanes > 1 else {}),     # lanes per direction (片側2車線)
-                      **({"guardrail": rs.guardrail} if rs.guardrail else {})})   # ガードレール (curve courses)
+                      **({"guardrail": rs.guardrail} if rs.guardrail else {}),   # ガードレール (curve courses)
+                      **({"guardrail_beam": list(rs.guardrail_beam)} if rs.guardrail_beam else {})})
     junctions = [{"id": J.id, "pos": r2(J.pos), "radius": round(J.radius, 2), "arms": len(J.arms),
                   "signalized": bool(J.signalized), "phases": J.phases, "green": round(J.green, 9),
                   "yellow": J.yellow, "allred": J.allred, "offset": round(J.offset, 9)}
@@ -405,7 +406,8 @@ def export_town(town: Town) -> dict:
         **real_town_fields(town),
         **({"lane_graph": g} if (g := lane_graph(town)) is not None else {}),
         # ガードレール (Town.guardrails): side +1 = left of the road's a -> b
-        **({"guardrails": [{"road": gr["road"], "side": int(gr["side"]), "pts": r2(simplify(gr["pts"], LINE_EPS, False))}
+        **({"guardrails": [{"road": gr["road"], "side": int(gr["side"]), "pts": r2(simplify(gr["pts"], LINE_EPS, False)),
+                            **({"beam": [round(float(v), 3) for v in gr["beam"]]} if "beam" in gr else {})}
                            for gr in town.guardrails]} if town.guardrails else {}),
     }
 

@@ -247,6 +247,8 @@ class StaticScene:
         rail, post = np.array([228, 230, 232.0]), np.array([205, 205, 210.0])
         for gr in getattr(town, "guardrails", ()):
             p = gr["pts"]
+            beam_lo, beam_hi = gr.get("beam", GUARDRAIL_BEAM)
+            post_h = GUARDRAIL_POST if "beam" not in gr else beam_hi - 0.05
             for k0 in range(0, len(p) - 1, 5):
                 f0 = len(fb)
                 for k in range(k0, min(k0 + 5, len(p) - 1)):
@@ -256,12 +258,12 @@ class StaticScene:
                     yaw = math.atan2(d[1], d[0])
                     # the road is on the left of a -> b for side -1 (right edge), on the right for side +1
                     inward = -gr["side"]
-                    beam = box_faces(0.0, L, 0.06 * inward - 0.03, 0.06 * inward + 0.03, *GUARDRAIL_BEAM, skip=("bottom",))
+                    beam = box_faces(0.0, L, 0.06 * inward - 0.03, 0.06 * inward + 0.03, beam_lo, beam_hi, skip=("bottom",))
                     for kk, f in beam.items():
                         fb.add(transform(f, a[0], a[1], yaw), rail * (0.85 if kk == "top" else 1.0), SEM["pole"], 0.5,
                                guard=True)
                     if k % 2 == 0:
-                        pf = box_faces(-0.05, 0.05, -0.05, 0.05, 0.0, GUARDRAIL_POST, skip=("bottom",))
+                        pf = box_faces(-0.05, 0.05, -0.05, 0.05, 0.0, post_h, skip=("bottom",))
                         for f in pf.values():
                             fb.add(transform(f, a[0], a[1], yaw), post, SEM["pole"], 0.0, guard=True)
                 seg = p[k0:k0 + 6]

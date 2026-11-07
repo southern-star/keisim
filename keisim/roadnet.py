@@ -84,10 +84,11 @@ class RoadSpec:
     the centre line, driven from the road's junction a to b (Town.from_graph towns), no centre line paint.
     lanes: lanes per direction (two-way roads; 2 = 片側2車線), side by side from the centre line outwards, with
     dashed white lane lines between them. guardrail: ガードレール along the road's edges (Town.from_graph roads:
-    "both", "left" / "right" of the direction a -> b, or None), GUARDRAIL_OFFSET outside the road surface."""
+    "both", "left" / "right" of the direction a -> b, or None), GUARDRAIL_OFFSET outside the road surface;
+    guardrail_beam: its beam's (bottom, top) above the ground in m (None: keisim/render/meshes.py GUARDRAIL_BEAM)."""
 
     def __init__(self, kind, lane_width, shoulder, sidewalk, speed_limit, center="dashed", edge="classic",
-                 oneway=False, lanes=1, guardrail=None):
+                 oneway=False, lanes=1, guardrail=None, guardrail_beam=None):
         self.kind = kind
         self.lane_width, self.shoulder, self.sidewalk = lane_width, shoulder, sidewalk
         self.speed_limit = speed_limit
@@ -99,6 +100,9 @@ class RoadSpec:
         if guardrail not in (None, "both", "left", "right"):
             raise ValueError(f"guardrail: {guardrail!r}")
         self.guardrail = guardrail
+        if guardrail_beam is not None and not 0.0 <= guardrail_beam[0] < guardrail_beam[1] <= 2.0:
+            raise ValueError(f"guardrail_beam: {guardrail_beam!r}")
+        self.guardrail_beam = None if guardrail_beam is None else (float(guardrail_beam[0]), float(guardrail_beam[1]))
         # the lanes' outer edge, from the centre line
         self.lane_outer = lane_width / 2.0 if oneway else lane_width * self.lanes
         self.half_width = self.lane_outer + shoulder  # road surface, centre line to edge
@@ -1453,7 +1457,8 @@ class Town:
                 continue
             for sgn in ((1.0, -1.0) if g == "both" else (1.0,) if g == "left" else (-1.0,)):
                 pts = resample(offset_polyline(road.center, sgn * (road.half_width + GUARDRAIL_OFFSET)), GUARDRAIL_DS)
-                self.guardrails.append({"road": road.id, "side": sgn, "pts": pts})
+                self.guardrails.append({"road": road.id, "side": sgn, "pts": pts,
+                                        **({"beam": road.spec.guardrail_beam} if road.spec.guardrail_beam else {})})
 
     def _finalize_static(self):
         """Arrays of static collision boxes: (x, y, yaw, l, w) (guardrails: one per GUARDRAIL_DS panel)."""

@@ -428,6 +428,24 @@ OpenStreetMap の道路と建物から、KeiSim の街を作ります (`keisim/r
   - 急カーブでは、モデルはガードレールに引き寄せられます。車の左のガードレールなら、左カーブで内側へ切り込み、右カーブで外側へふくらみます。左カーブの外側 (車の右) のガードレールにも引かれます。
   - 車の左のガードレールで左カーブの内側へ切り込むのは、陰影なしでも起きます。別のシミュレーターの「白線がなくガードレールのある道でインカットする」癖と同じ形です。
   - 引き寄せは、地面から膝くらいの高さ (0〜0.8 m) で強く、塀のように高い (0.9〜1.25 m) と弱くなります。白線があると起きません。
+* **学習用の事例: ガードレールの急カーブ** (`collect.py --curve_scenes`、`keisim/curve_course.py` の `scene_town`)
+  - 上の引き寄せを学び直すための場面です。交差点のない曲がりくねった 1 本道を、町ごとにランダムに作ります。試験コースとは別の道なので、試験コースはそのまま評価に使えます。
+  - **カーブ:** 1 本の道に 5〜8 個あります。
+    - 半径は、6 割が 10〜30 m、3 割が 30〜80 m、1 割が 80〜200 m です。
+    - 曲がる角度は 40〜180 度で、向きもランダムです。
+    - 道は最初の向きから 110 度より曲がらず、離れた部分どうしは 30 m 以上離れます。
+  - **ガードレール:** 左だけ・右だけ・両側が 3 割ずつ、なしが 1 割です。高さは町ごとに変えます。ビームの下端は 0.35〜0.55 m、上端はその 0.3〜0.4 m 上です (`RoadSpec.guardrail_beam`)。
+  - **白線と道路:**
+    - 白線は、なしが 6 割、外側線だけが 2 割、中央線と外側線が 2 割です。
+    - 車線は 2.75〜3.25 m、路側帯は 0.25〜0.75 m です。
+    - 建物は半分の町にあります。
+  - **走らせ方:**
+    - 天候と太陽の向きは、エピソードごとにランダムです。陰影による寄りも一緒に学ばせるためです。
+    - 走るのは、どちらかの向きの 300〜600 m の区間で、周りの車はいません。
+    - 目標点は 50 m 先です (`Route.tp_ahead`。評価の `--tp ahead` と同じ)。
+  - **ラベル:** エキスパートのラベルは車線の中心を保ちます。収集のノイズと仮想カメラ (左右 ±1.2 m、±9 度) で、車がガードレールに寄った場面と、そこから戻るラベルが入ります。DAgger では、モデル自身が寄っていく場面が入ります。
+  - **扱い:** どのフレームも注目するフレームとして残ります (`--focus_yield` で間引かれません)。KeiSim の描画なら、1 ワーカーあたり約 60 フレーム/秒で集まります。
+  - **エキスパート:** 12 町で試すと、どれも走りきりました。車線の中心からのずれは最大 0.36 m です (半径 10 m のカーブ)。
 * **KeiSim の小さなずれ**: 白線ありの道でも、直線で正方向は右へ約 6 cm、逆向きは左へ約 6 cm ずれます (どの天候でも)。地図上ではいつも南東で、
   KeiSim の地面のテクスチャが半画素 (5 cm) 南東にずれて描かれているのが原因とみられます (`Raster.fill` は `cv2.fillPoly` に画素の端の座標を渡すが、fillPoly は画素の中心として扱う。未修正)。
 * **KeiView の描画、同じモデル、晴れ・正方向** (GPU なしで 1 フレーム約 3.4 秒のため、急カーブの 0〜360 m と半径 98 m の左カーブの 860〜1100 m だけ):
@@ -802,6 +820,17 @@ python scripts/curve_test.py --agent model --ckpt runs/keipilot.pt --brake_hold 
 python scripts/curve_test.py --agent model --ckpt runs/keipilot.pt --brake_hold --red_hold --tp ahead \
     --weather noon --episode 1 --variants nolines_guard nolines_guard_nobld --guardrail_light flat  # ガードレールの陰影なし
 python scripts/curve_diag.py runs/r16.json nolines_guard_nobld rev 1700 1880 --guard right       # 1 ステップごとの記録 (車の左のガードレールだけ)
+# ガードレールの急カーブの事例を集めて、v0.10 (keipilot_v24) から追加学習する (GPU のある手元で。まだ回していない案)
+#   $D7 $FL $NP $T $W9 osm_sets osm_w は、下の「再現」の v0.10 の節のもの。--dir_weight ($W9) の後ろに重みを足す
+uv run scripts/collect.py --out data/guard_expert --frames 40000 --workers 10 --curve_scenes 1 --seed 3101
+uv run scripts/collect.py --out data/guard_kv_expert --frames 10000 --workers 3 --curve_scenes 1 --renderer keiview --episodes_per_town 3 --seed 3102
+uv run scripts/collect.py --mode dagger --ckpt runs/keipilot_v24/last.pt --out data/guard_dagger --frames 30000 --workers 8 --curve_scenes 1 --seed 3103
+uv run scripts/train.py --data $D7 $FL $(osm_sets v23) $(osm_sets v22) $NP data/guard_expert data/guard_kv_expert data/guard_dagger \
+    --init runs/keipilot_v24/last.pt --out runs/keipilot_v25 --epochs 2 $T --aux_weight 0.5 --mem_input $W9 \
+    $(osm_w v23 1.5) $(osm_w v22 1) data/osm_dagger_v11_np=1.5 data/osm_kv_dagger_v11_np=1.5 data/guard_expert=2 data/guard_kv_expert=2 data/guard_dagger=2
+uv run scripts/export_weights.py runs/keipilot_v25/last.pt runs/keipilot_v25.pt
+python scripts/curve_test.py --agent model --ckpt runs/keipilot_v25.pt --brake_hold --red_hold --tp ahead --weather noon --episode 1 \
+    --variants nolines_guard nolines_guard_nobld lines_guard                                       # 評価 (KeiSim はクラウドでも回せる)
 ```
 
 ```bash

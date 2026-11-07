@@ -1124,6 +1124,71 @@ def test_lots_off_the_road():
     assert LOT_CLEAR_TOL < 0.2 and len(d["parcels"]) > 20
 
 
+def test_curve_scenes():
+    """keisim/curve_course.py training scenes (scripts/collect.py --curve_scenes): random winding roads that never
+    come back near themselves, of tight curves mostly, with the guardrail's side, height and the paint drawn per scene;
+    the rail's height reaches KeiSim's mesh and the export; the route's target point stays 50 m ahead; the expert
+    drives them in its lane; and a collection on them writes only scene frames, all in focus."""
+    import json
+    import math
+    import multiprocessing as mp
+    import tempfile
+
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
+    from collect import parse_args, worker
+    from export_town import export_town
+
+    from keipilot.data import load_shards
+    from keisim.curve_course import SCENE_TP_AHEAD, scene_route, scene_town
+    from keisim.render.meshes import StaticScene
+
+    seen = set()
+    for seed in range(12):
+        T = scene_town(seed)
+        sp, curves = T.course["spec"], T.course["curves"]
+        seen.add(sp["guardrail"])
+        assert len(curves) >= 4 and min(c["radius"] for c in curves) >= 10.0
+        P = T.course["centre"][::10]
+        d = np.hypot(*(P[:, None] - P[None, :]).transpose(2, 0, 1))
+        far = np.abs(np.arange(len(P))[:, None] - np.arange(len(P))[None, :]) * 5.0 > 80.0
+        assert d[far].min() > 29.0
+        assert scene_town(seed).course["spec"] == sp                       # a seed is one scene
+        if sp["guardrail"]:
+            assert all(g["beam"] == sp["beam"] for g in T.guardrails) and 0.35 <= sp["beam"][0] < sp["beam"][1] <= 0.95
+    assert {"left", "right", "both"} <= seen
+    T = scene_town(5)                                                       # left rail, no paint, tight curves
+    assert T.course["spec"]["guardrail"] == "left" and not T.markings
+    z = StaticScene(T).faces["verts"][..., 2]
+    assert abs(z.max() - T.course["spec"]["beam"][1]) < 1e-4
+    assert export_town(T)["guardrails"][0]["beam"] == [round(v, 3) for v in T.course["spec"]["beam"]]
+    cfg = EnvConfig()
+    cfg.traffic.max_vehicles = 0
+    cfg.traffic.max_peds = 0
+    cfg.render_rgb = cfg.render_seg = False
+    env = KeiEnv(cfg)
+    route = scene_route(T, np.random.default_rng(1), 300)
+    env.reset(town_seed=T, episode_seed=1, route=route)
+    worst, done = 0.0, False
+    while not done and env.s_ego < route.s_end - 3.0:
+        e, s = env.world.ego, env.s_ego
+        p, h = route.poly.interp1(s), route.poly.heading1(s)
+        worst = max(worst, abs(-(e.x - p[0]) * math.sin(h) + (e.y - p[1]) * math.cos(h)))
+        if s < route.s_end - SCENE_TP_AHEAD - 5:
+            tp = route.target_point_world(s)
+            assert abs(route.poly.project(tp)[0] - (s + SCENE_TP_AHEAD)) < 1.0
+        _, _, done, _ = env.step(env.expert_action())
+    assert not done and worst < 0.45, (env.status, worst)
+    with tempfile.TemporaryDirectory() as out:
+        args = parse_args(["--out", out, "--frames", "40", "--workers", "1", "--curve_scenes", "1", "--shard", "20",
+                           "--route_min", "120", "--route_max", "150"])
+        assert worker(0, args, 40, out, mp.Value("i", 0)) >= 40
+        with open(os.path.join(out, "stats_w00.json")) as f:
+            st = json.load(f)
+        assert st["frames"] >= 40 and st["scene"] == st["frames"] == st["focus"]
+        data, _ = load_shards([out], with_prev=False)
+        assert len(data["v"]) >= 40 and np.median(data["tp"][:, 0]) > 30.0
+
+
 def test_curve_course():
     """keisim/curve_course.py: one open two-way road (dead ends at both ends) of 90 deg left and right curves; the
     variants differ only in paint and guardrails (<variant>_nobld: also no buildings, no KeiView lots). A guardrail
