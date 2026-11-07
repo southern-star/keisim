@@ -6,6 +6,10 @@ mode=expert : the privileged expert drives, with DART-style steering/throttle
               virtual camera-rig perturbations (render from a displaced rig,
               re-express labels in that frame).
 mode=dagger : a trained KeiPilot drives (on-policy states), the expert labels.
+
+--curve_scenes P: a town is, with probability P, a random winding road with guardrails and (mostly) no paint
+(keisim/curve_course.py scene_town: where KeiPilot is pulled towards a guardrail in tight curves). Its episodes drive
+a random stretch either way with no other traffic, the target point 50 m ahead; every frame there is in focus.
 """
 from __future__ import annotations
 
@@ -135,7 +139,7 @@ def osm_spec(spec):
 # per-worker counts (stats_wNN.json, saved with every shard so a resumed run keeps them): every recording step
 # (steps_*) and the kept frames
 STAT_KEYS = ("steps", "steps_focus", "steps_lead_edge", "frames", "focus", "lead_edge", "lead_edge_vehicle",
-             "lead_edge_tl_none", "lead_edge_tl_none_red")
+             "lead_edge_tl_none", "lead_edge_tl_none_red", "scene")
 
 
 def record(env, writer, rng, v_prob, weather_id, virtual_prob, offset=False, rgb=None, seg=None, prev=None,
@@ -215,6 +219,7 @@ def worker(wid, args, quota, out_dir, counter):
     if args.mode == "dagger":
         cfg.blocked_timeout = 40.0
     env = KeiEnv(cfg)
+    base_town_cfg, base_vehicles = cfg.town, cfg.traffic.max_vehicles
     agent = None
     if args.mode == "dagger":
         from keipilot.agent import KeiPilotAgent
@@ -233,18 +238,29 @@ def worker(wid, args, quota, out_dir, counter):
 
     shards_saved = writer.k
     t0 = time.time()
-    town, left = None, 0
+    town, left, in_scene = None, 0, False
     while n < quota:
         if left <= 0:
-            if args.osm_towns:
+            in_scene = args.curve_scenes > 0 and rng.random() < args.curve_scenes
+            if in_scene:
+                from keisim.curve_course import scene_town
+                town = scene_town(int(rng.integers(1 << 30)))
+                env.cfg.town = town.cfg
+            elif args.osm_towns:
                 town = osm_town_of(int(rng.integers(len(args.osm_towns))))
                 env.cfg.town = town.cfg
             else:
                 town = int(rng.integers(args.town_lo, args.town_hi))
+                env.cfg.town = base_town_cfg
             left = args.episodes_per_town
         left -= 1
         ep_seed = int(rng.integers(1 << 40))
-        env.reset(town_seed=town, episode_seed=ep_seed, render=False)
+        route = None
+        env.cfg.traffic.max_vehicles = 0 if in_scene else base_vehicles     # one road between dead ends: no traffic
+        if in_scene:
+            from keisim.curve_course import scene_route
+            route = scene_route(town, rng, rng.uniform(args.route_min, args.route_max))
+        env.reset(town_seed=town, episode_seed=ep_seed, render=False, route=route)
         env._step = 0
         weather_id = WEATHERS.get(env.weather.name, 0)
         pert = Perturbation(rng) if args.mode == "expert" else None
@@ -284,8 +300,8 @@ def worker(wid, args, quota, out_dir, counter):
                 stopped = env.world.ego.v < 0.2 and plan["target_speed"] == 0.0
                 keep = not stopped or rng.random() < args.stopped_keep
                 edge = args.focus_lead_edge > 0 and lead_at_edge(env, plan, args.focus_lead_edge)
-                focus = False
-                if args.focus_yield < 1.0:          # mostly frames around junction decisions, and model mistakes
+                focus = in_scene                    # the guardrail scenes are all in focus
+                if args.focus_yield < 1.0 and not focus:   # mostly frames around junction decisions, model mistakes
                     focus = np.isfinite(plan.get("yield_tta", np.nan)) or plan["reason"] in args.focus_reasons or \
                         (v_model is not None and abs(v_model - plan["target_speed"]) > args.focus_disagree) or edge
                     keep = keep and (focus or rng.random() < args.focus_yield)
@@ -295,6 +311,7 @@ def worker(wid, args, quota, out_dir, counter):
                 if keep:
                     stats["frames"] += 1
                     stats["focus"] += int(focus)
+                    stats["scene"] += int(in_scene)
                     if edge:
                         stats["lead_edge"] += 1
                         stats["lead_edge_vehicle"] += int(plan["reason"] == "vehicle")
@@ -346,10 +363,12 @@ def report(out_dir):
     print(f"{tot['frames']} frames kept: focus {tot['focus'] / fr:.1%}, lead at the edge / on a curve {tot['lead_edge'] / fr:.1%}"
           f" (reason vehicle {tot['lead_edge_vehicle'] / le:.0%}, true light none {tot['lead_edge_tl_none'] / le:.0%},"
           f" model red with no light {tot['lead_edge_tl_none_red'] / le:.1%} of them)")
+    if tot.get("scene"):
+        print(f"{tot['scene']} frames ({tot['scene'] / fr:.1%}) on the guardrail scenes (--curve_scenes)")
     return tot
 
 
-def main():
+def parse_args(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="data/expert")
     ap.add_argument("--mode", default="expert", choices=["expert", "dagger"])
@@ -396,15 +415,26 @@ def main():
     ap.add_argument("--allow_eval_town", action="store_true", help="let --osm_towns include osm_sapporo (tests only)")
     ap.add_argument("--history", type=float, default=0.0, help="also store the frame this many s earlier (multi-frame)")
     ap.add_argument("--segment", type=float, default=3.0, help="with --history: seconds a virtual camera is kept")
-    args = ap.parse_args()
+    ap.add_argument("--curve_scenes", type=float, default=0.0,
+                    help="probability that a town is a random winding road with guardrails and (mostly) no paint "
+                         "(keisim/curve_course.py scene_town; 1: only those)")
+    args = ap.parse_args(argv)
     if any(osm_spec(t)[0] == "osm_sapporo" for t in args.osm_towns) and not args.allow_eval_town:
         ap.error("osm_sapporo is the evaluation town (evaluate.py --osm_town): collect in other boxes")
+    if not 0.0 <= args.curve_scenes <= 1.0:
+        ap.error("--curve_scenes is a probability")
+    return args
+
+
+def main():
+    args = parse_args()
     quota = [args.frames // args.workers + (1 if i < args.frames % args.workers else 0) for i in range(args.workers)]
     write_meta(args.out, label_version=LABEL_VERSION, mode=args.mode, ckpt=args.ckpt, frames=args.frames, history=args.history,
                renderer=args.renderer, town_style=args.town_style, jam_fixes=args.jam_fixes, late_yield=True,
                **({"osm_towns": args.osm_towns, "osm_seed0": args.osm_seed0} if args.osm_towns else {}),
                **({"keiview_roads": args.keiview_roads} if args.keiview_roads != "plain" else {}),
-               **({"yield_visible": 1} if args.yield_visible else {}))
+               **({"yield_visible": 1} if args.yield_visible else {}),
+               **({"curve_scenes": args.curve_scenes} if args.curve_scenes else {}))
     ctx = mp.get_context("spawn" if args.mode == "dagger" else "fork")
     counter = ctx.Value("i", 0)
     t0 = time.time()

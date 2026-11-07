@@ -77,6 +77,10 @@ def change_window(lane_a, s_lo=0.0, lane_b=None):
 
 
 class Route:
+    # with no junction decision ahead, the target point is the route's end; tp_ahead (m) puts it that far ahead along
+    # the route instead (the curve courses' training scenes, keisim/curve_course.py: no junction for a kilometre)
+    tp_ahead = None
+
     def __init__(self, town, lanes, s_start, s_end=None, change_at=None):
         """change_at: {index k of the lane changed to: A-local start of the change} (default: the window start)."""
         self.town = town
@@ -229,7 +233,7 @@ class Route:
     def target_point_world(self, s):
         j = self.next_decision(s)
         if j is None:
-            return self.poly.interp(self.s_end)
+            return self.poly.interp(self.s_end if self.tp_ahead is None else min(s + self.tp_ahead, self.s_end))
         return self.poly.interp(min(j["s_out"] + 4.0, self.s_end))
 
     def curvature_at(self, s):
