@@ -15,7 +15,9 @@
 //                              [--pilot mc]   (the multi-camera demo, models/keipilot_mc.onnx: ?pilot=mc)
 //                              [--images DIR]   (the model's input images at every report: DIR/i0001_c0.png, ...)
 //                              [--realtime SEC]   (first let the page drive in real time for SEC s and print its speed:
-//                              frames per second, model calls per second, inference and model-frame times)
+//                              frames per second, model calls per second, inference and model-frame times, town time
+//                              per second)
+//                              [--pace S]   (?pace=S: how long a model call may take before the town waits; 0: never)
 //                              [--only ground,roads,signals,actors]   (build only these modules: fast without a GPU)
 //                              [--infer main]   (the model on the page's main thread, as before src/infer_worker.js)
 //                              [--readback sync]   (read the model frame back at once, waiting for the GPU, as before)
@@ -53,7 +55,8 @@ try {
     ...(args.traffic ? { traffic: args.traffic } : {}), ...(args.cars ? { cars: args.cars } : {}),
     ...(args.model ? { model: args.model } : {}), ...(args.ort ? { ort: args.ort } : {}), ...(args.ramp ? { ramp: args.ramp } : {}),
     ...(args.only ? { only: args.only } : {}), ...(args.infer ? { infer: args.infer } : {}),
-    ...(args.readback ? { readback: args.readback } : {}), ...(args.hz ? { hz: args.hz } : {}) });
+    ...(args.readback ? { readback: args.readback } : {}), ...(args.hz ? { hz: args.hz } : {}),
+    ...(args.pace ? { pace: args.pace } : {}) });
   const t0 = Date.now();
   await page.goto(`${base}?${q}`, { waitUntil: 'load', timeout: 180000 });
   await page.waitForFunction('window.__pilotRun || /読み込めません/.test(document.getElementById("loadlabel").textContent)', { timeout: 600000, polling: 200 });
@@ -67,17 +70,18 @@ try {
   if (info.stopLines) console.log(`止まれ lines (other cars stop once): ${info.stopLines}`);
   if (args.realtime) {          // the page's own frame loop, as a visitor sees it
     const fps = [], infer = [], cap = [], read = [];
-    const n0 = await page.evaluate(() => window.__pilot.state().nInfer), w0 = Date.now();
+    const now = () => page.evaluate(() => { const s = window.__pilot.state(); return { n: s.nInfer, t: s.t, w: Date.now() }; });
+    const a = await now();
     for (let k = 0; k < Number(args.realtime) * 2; k++) {
       await new Promise((r) => setTimeout(r, 500));
       const r = await page.evaluate(() => { const s = window.__pilot.state(); return { fps: window.__stats.fps, infer: s.inferMs, cap: s.captureMs, read: s.readMs }; });
       if (k >= 4) { fps.push(r.fps); infer.push(r.infer); cap.push(r.cap); read.push(r.read || 0); }   // after 2 s of warm-up
     }
-    const calls = (await page.evaluate(() => window.__pilot.state().nInfer)) - n0, wall = (Date.now() - w0) / 1000;
-    const med = (a) => [...a].sort((x, y) => x - y)[a.length >> 1], mean = (a) => a.reduce((x, y) => x + y, 0) / a.length;
-    console.log(`real time ${wall.toFixed(0)} s: ${mean(fps).toFixed(1)} fps (min ${Math.min(...fps).toFixed(1)}), ${(calls / wall).toFixed(1)} model calls/s, ` +
+    const b = await now(), wall = (b.w - a.w) / 1000;
+    const med = (x) => [...x].sort((p, q) => p - q)[x.length >> 1], mean = (x) => x.reduce((p, q) => p + q, 0) / x.length;
+    console.log(`real time ${wall.toFixed(0)} s: ${mean(fps).toFixed(1)} fps (min ${Math.min(...fps).toFixed(1)}), ${((b.n - a.n) / wall).toFixed(1)} model calls/s, ` +
       `inference ${mean(infer).toFixed(1)} ms (median ${med(infer).toFixed(1)}), model frame ${mean(cap).toFixed(1)} ms (median ${med(cap).toFixed(1)})` +
-      (mean(read) > 0 ? `, read back after ${mean(read).toFixed(1)} ms` : ''));
+      (mean(read) > 0 ? `, read back after ${mean(read).toFixed(1)} ms` : '') + `, town time x${((b.t - a.t) / wall).toFixed(2)}`);
   }
   console.log('   t     s  km/h  target  light  next turn       dev  restarts  infer  frame   cars/ego/npc contacts');
   const names = ['red', 'yellow', 'green', 'none'];

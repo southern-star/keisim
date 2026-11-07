@@ -118,7 +118,8 @@ export function prepareTown(data) {
   T.play = { x0: bounds.x0 - m, x1: bounds.x1 + m, z0: bounds.z0 - m, z1: bounds.z1 + m };
   const g0 = 14, g1 = 200;   // far-town ring (low-detail houses) between these distances from the bbox
   const B = bounds;
-  T.farTown = [
+  // (none for towns exported with far_town false: keisim/curve_course.py, an open road with grass far from it)
+  T.farTown = data.far_town === false ? [] : [
     { x0: B.x0 - g1, x1: B.x1 + g1, z0: B.z0 - g1, z1: B.z0 - g0 },   // north
     { x0: B.x0 - g1, x1: B.x1 + g1, z0: B.z1 + g0, z1: B.z1 + g1 },   // south
     { x0: B.x0 - g1, x1: B.x0 - g0, z0: B.z0 - g0, z1: B.z1 + g0 },   // west
@@ -209,7 +210,9 @@ function makeViews(T) {
     return null;
   };
   const push = (v) => { if (v) views.push(v); };
-  if (arms[0]) push(onRoad(arms[0], J, 34, 'street'));
+  // a dead end (the curve test courses, keisim/curve_course.py): stand at the start, facing along the road
+  const away = (v) => (v && J.arms === 1 ? { ...v, yaw: v.yaw + 180, label: 'course' } : v);
+  if (arms[0]) push(away(onRoad(arms[0], J, J.arms === 1 ? 12 : 34, 'street')));
   if (arms[1]) push(onRoad(arms[1], J, 16, 'junction'));
   const c = [(T.bounds.x0 + T.bounds.x1) / 2, (T.bounds.z0 + T.bounds.z1) / 2];
   const span = Math.max(T.bounds.x1 - T.bounds.x0, T.bounds.z1 - T.bounds.z0);

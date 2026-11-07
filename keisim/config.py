@@ -164,6 +164,10 @@ class CameraConfig:
     # as much per row at the horizon (rows are tan(elevation)); pitch_deg is then the elevation below the horizon of
     # the middle row, so the horizon stays a straight line
     projection: str = "pinhole"
+    # guardrails (curve test course): "sun" shades them like every face (Lambert, the sun's direction); "flat" lights
+    # every guardrail face as if the sun stood 45 deg in front of it at its elevation, whatever its azimuth (both
+    # rails of a road look the same; scripts/curve_test.py --guardrail_light)
+    guardrail_light: str = "sun"
 
 
 # Camera rigs: EnvConfig.camera, then EnvConfig.extra_cameras. "front" is the one camera of KeiPilot up to v0.10.

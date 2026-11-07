@@ -15,6 +15,8 @@ import numpy as np
 from ..config import SEM
 
 KMAX = 8
+GUARDRAIL_BEAM = (0.45, 0.80)    # m above the ground: the beam panel of a guardrail (KeiView web/src/world/guardrails.js)
+GUARDRAIL_POST = 0.75            # m: its posts
 
 
 class FaceBuffer:
@@ -22,9 +24,9 @@ class FaceBuffer:
 
     def __init__(self):
         self.verts, self.nv, self.color, self.sem, self.order = [], [], [], [], []
-        self.emissive, self.lamp, self.lod = [], [], []
+        self.emissive, self.lamp, self.lod, self.guard = [], [], [], []
 
-    def add(self, pts, color, sem, order, emissive=False, lamp=-1, lod=False):
+    def add(self, pts, color, sem, order, emissive=False, lamp=-1, lod=False, guard=False):
         pts = np.asarray(pts, np.float64)
         n = len(pts)
         pad = np.concatenate([pts, np.repeat(pts[-1:], KMAX - n, 0)], 0) if n < KMAX else pts[:KMAX]
@@ -36,22 +38,23 @@ class FaceBuffer:
         self.emissive.append(emissive)
         self.lamp.append(lamp)
         self.lod.append(lod)
+        self.guard.append(guard)          # a guardrail face (CameraConfig.guardrail_light)
 
     def __len__(self):
         return len(self.verts)
 
     def pack(self):
-        if not self.verts:
-            return None
+        # no faces (a town with nothing standing: the curve course's lines_nobld / nolines_nobld): empty arrays
         return {
-            "verts": np.array(self.verts, np.float32),
+            "verts": np.array(self.verts, np.float32).reshape(-1, KMAX, 3),
             "nv": np.array(self.nv, np.int32),
-            "color": np.array(self.color, np.float32),
+            "color": np.array(self.color, np.float32).reshape(-1, 3),
             "sem": np.array(self.sem, np.uint8),
             "order": np.array(self.order, np.float32),
             "emissive": np.array(self.emissive, bool),
             "lamp": np.array(self.lamp, np.int32),
             "lod": np.array(self.lod, bool),
+            "guard": np.array(self.guard, bool),
         }
 
 
@@ -238,6 +241,34 @@ class StaticScene:
                 tri = _orient(tri, np.array([out, 0.0, 0.0]))
                 fb.add(transform(tri, px, py, sp["yaw"]), col, SEM["pole"], 1.0 + (x - 0.035) * 10)
             objs.append((px, py, 1.0, f0, len(fb)))
+
+        # ガードレール (Town.guardrails): a white beam panel (0.45-0.80 m) on every GUARDRAIL_DS piece of the line, on
+        # the road's side of a post (every second piece, 0-0.75 m); objects of ~10 m for the culling
+        rail, post = np.array([228, 230, 232.0]), np.array([205, 205, 210.0])
+        for gr in getattr(town, "guardrails", ()):
+            p = gr["pts"]
+            beam_lo, beam_hi = gr.get("beam", GUARDRAIL_BEAM)
+            post_h = GUARDRAIL_POST if "beam" not in gr else beam_hi - 0.05
+            for k0 in range(0, len(p) - 1, 5):
+                f0 = len(fb)
+                for k in range(k0, min(k0 + 5, len(p) - 1)):
+                    a, b = p[k], p[k + 1]
+                    d = b - a
+                    L = float(math.hypot(*d))
+                    yaw = math.atan2(d[1], d[0])
+                    # the road is on the left of a -> b for side -1 (right edge), on the right for side +1
+                    inward = -gr["side"]
+                    beam = box_faces(0.0, L, 0.06 * inward - 0.03, 0.06 * inward + 0.03, beam_lo, beam_hi, skip=("bottom",))
+                    for kk, f in beam.items():
+                        fb.add(transform(f, a[0], a[1], yaw), rail * (0.85 if kk == "top" else 1.0), SEM["pole"], 0.5,
+                               guard=True)
+                    if k % 2 == 0:
+                        pf = box_faces(-0.05, 0.05, -0.05, 0.05, 0.0, post_h, skip=("bottom",))
+                        for f in pf.values():
+                            fb.add(transform(f, a[0], a[1], yaw), post, SEM["pole"], 0.0, guard=True)
+                seg = p[k0:k0 + 6]
+                c = seg.mean(0)
+                objs.append((c[0], c[1], float(np.hypot(*(seg - c).T).max()) + 1.0, f0, len(fb)))
 
         self.faces = fb.pack()
         self.objs = np.array(objs, np.float64).reshape(-1, 5)

@@ -8,8 +8,10 @@ import { flatShapes, wallGeometry, bandGeometry } from '../lib/rings.js';
 export function build(ctx) {
   const T = ctx.town;
   const R = ctx.rng('kv-roads');
-  const merge = (geos) => { const g = ctx.geo.mergeGeometries(geos, false); geos.forEach(x => x.dispose()); return g; };
+  // (a town may have no sidewalk or no paint at all: keisim/curve_course.py; nothing is added for those)
+  const merge = (geos) => { if (!geos.length) return null; const g = ctx.geo.mergeGeometries(geos, false); geos.forEach(x => x.dispose()); return g; };
   const add = (geo, mat, name, { shadow = false, receive = true } = {}) => {
+    if (!geo) return null;
     const m = new THREE.Mesh(geo, mat); m.name = name; m.castShadow = shadow; m.receiveShadow = receive;
     ctx.addStatic(m); return m;
   };
@@ -67,10 +69,11 @@ export function build(ctx) {
   // ------------------------------------------------------------------ paint: lane lines, stop lines, zebras
   const polys = [...T.data.markings, ...T.data.crosswalks].map(p => ({ outer: p.map(T.P), holes: [] }));
   const paint = add(merge(flatShapes(polys, 0.008, 1)), mPaint, 'paint', { receive: true });
-  ctx.noOutline(paint);
+  if (paint) ctx.noOutline(paint);
   if (T.data.markings_yellow && T.data.markings_yellow.length) {
     const ys = T.data.markings_yellow.map(p => ({ outer: p.map(T.P), holes: [] }));
-    ctx.noOutline(add(merge(flatShapes(ys, 0.008, 1)), mYellow, 'paint-yellow', { receive: true }));
+    const yellow = add(merge(flatShapes(ys, 0.008, 1)), mYellow, 'paint-yellow', { receive: true });
+    if (yellow) ctx.noOutline(yellow);
   }
 
   ctx.services.roads = { roadShapes, walkShapes };

@@ -703,9 +703,10 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     const k = tl ? tl.indexOf(Math.max(...tl)) : -1;
     const inp = nav.inputs(), j = nav.nextDecision();
     const now = performance.now(), rate = calls.filter((c) => c > now - 2000).length / 2;
-    el.ep.textContent = `${backend} · 判断 ${rate.toFixed(1)} 回/秒 · 推論 ${inferMs.toFixed(0)} ms · 描画 ${captureMs.toFixed(0)} ms` +
-      (slow < 0.95 ? ` · スロー ×${slow.toFixed(2)}` : '');
-    el.ep.title = slow < 0.95 ? `モデルの判断に ${PACE_LAG} 秒より長くかかるので、町の時間をゆっくり進めています（?pace=0 で止めない）` : '';
+    const ep = [backend, `判断 ${rate.toFixed(1)} 回/秒`, `推論 ${inferMs.toFixed(0)} ms`, `描画 ${captureMs.toFixed(0)} ms`];
+    if (slow < 0.95) ep.push(`スロー ×${slow.toFixed(2)}`);
+    el.ep.innerHTML = ep.map((s) => `<span>${s}</span>`).join(' · ');   // a narrow HUD wraps between the items only
+    el.ep.title = slow < 0.95 ? `モデルの判断に ${PACE_LAG} 秒より長くかかるので、町の時間をゆっくり進めています（?pace=0 で待たない）` : '';
     el.v.textContent = (car.v * 3.6).toFixed(0);
     el.t.textContent = plan ? (plan.target * 3.6).toFixed(0) : '–';
     el.hold.textContent = yieldHold && yieldHold.holding() ? '（譲り待ち）' : '';

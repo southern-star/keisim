@@ -23,7 +23,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from keisim.config import TOWN_STYLES, town_config, town_key, town_tag  # noqa: E402
 from keisim.geometry import box_corners  # noqa: E402
-from keisim.roadnet import Raster, Town  # noqa: E402
+from keisim.roadnet import GUARDRAIL_OFFSET, Raster, Town  # noqa: E402
 
 REGION_RES = 0.1        # m per pixel for the road / sidewalk rasters
 REGION_EPS = 0.03       # m, simplification tolerance of traced outlines
@@ -143,6 +143,57 @@ def building_frontage(town: Town, b, samples):
 
 SETBACK_MAX = 8.0       # m, the deepest front lot KeiView draws (real blocks have buildings far from any road)
 
+# KeiView lots stay off the road, the sidewalks and the guardrails. A KeiSim building's lot runs `setback` m in front of
+# its box with a straight front line: on the inside of a curve (or beside a junction) its corners reached onto the
+# road, up to 1.7 m on the curve test course and 5 m in osm_sapporo. The lot is cut back instead (clear_setback), and
+# an extra parcel that would reach onto them is not placed.
+LOT_CLEAR_TOL = 0.15    # m behind a lot's front line where it may touch the road / sidewalk edge (raster pixels)
+LOT_CLEAR_MARGIN = 0.1  # m kept clear when a lot is cut back
+GUARDRAIL_CLEAR = 0.35  # m each side of a guardrail line no lot covers (posts 0.05 m, the beam 0.06 m inside)
+
+
+def occupied_mask(town: Town, R: Raster, road, walk):
+    """Road surface, sidewalks and a strip along every guardrail: where no KeiView lot may be (REGION_RES raster)."""
+    occ = road | walk
+    for gr in getattr(town, "guardrails", ()):
+        p = np.asarray(gr["pts"])
+        for a, b in zip(p[:-1], p[1:]):
+            c, d = (a + b) / 2, b - a
+            R.fill(occ, box_corners(c[0], c[1], math.atan2(d[1], d[0]), float(np.hypot(*d)) + 2 * GUARDRAIL_CLEAR,
+                                    2 * GUARDRAIL_CLEAR), 1)
+    return occ
+
+
+def lot_overlap_depth(R: Raster, occ, corners, front, n_in):
+    """How far behind its front line (through `front`, `n_in` the unit normal into the lot) the polygon covers `occ`,
+    beyond the first LOT_CLEAR_TOL m: 0.0 when it is clear."""
+    px = R.to_px(corners)
+    c0, r0 = max(int(np.floor(px[:, 0].min())) - 1, 0), max(int(np.floor(px[:, 1].min())) - 1, 0)
+    c1, r1 = min(int(np.ceil(px[:, 0].max())) + 2, R.W), min(int(np.ceil(px[:, 1].max())) + 2, R.H)
+    if c1 <= c0 or r1 <= r0:
+        return 0.0
+    m = np.zeros((r1 - r0, c1 - c0), np.uint8)
+    cv2.fillPoly(m, [np.round((px - [c0, r0]) * 8.0).astype(np.int32).reshape(-1, 1, 2)], 1, lineType=cv2.LINE_8, shift=3)
+    rr, cc = np.nonzero(m & occ[r0:r1, c0:c1])
+    if not len(rr):
+        return 0.0
+    depth = (R.x0 + (cc + c0 + 0.5) * R.res - front[0]) * n_in[0] + (R.y1 - (rr + r0 + 0.5) * R.res - front[1]) * n_in[1]
+    depth = depth[depth > LOT_CLEAR_TOL]
+    return float(depth.max()) if len(depth) else 0.0
+
+
+def clear_setback(R: Raster, occ, b):
+    """The setback of a KeiSim building's lot (its depth in front of the box), cut back so that the lot covers no road,
+    sidewalk or guardrail (KeiSim keeps the box itself 0.8 m off its road)."""
+    s = b["setback"]
+    if s < 0.05:
+        return s
+    n = np.array([-math.sin(b["yaw"]) * b["side"], math.cos(b["yaw"]) * b["side"]])     # road -> building
+    c = np.array([b["x"], b["y"]])
+    mid = c - n * (b["w"] / 2 + s / 2)
+    depth = lot_overlap_depth(R, occ, box_corners(mid[0], mid[1], b["yaw"], b["l"], s), c - n * (b["w"] / 2 + s), n)
+    return s if depth <= 0.0 else round(max(0.0, s - depth - LOT_CLEAR_MARGIN), 2)
+
 
 PARCEL_RES = 0.5        # m per pixel for the free-space raster used to place parcels
 
@@ -196,12 +247,14 @@ class FreeSpace:
         self.R.fill(self.blocked, corners, 1)
 
 
-def make_parcels(town: Town, buildings):
+def make_parcels(town: Town, buildings, occ=None):
     """Extra parcels around KeiSim's buildings so the town reads as a dense Japanese suburb.
 
     row 1: street-frontage gaps between KeiSim buildings; row 2: lots behind the frontage row;
     row 3: whatever block interior is left (fields, vacant lots, small parks). Each parcel is a
     lot {fx, fy (frontage centre), face (heading toward its road), w (width), d (depth), kind}.
+    occ: (Raster, occupied_mask): a parcel that would cover the road, a sidewalk or a guardrail is not placed; the
+    frontage row starts behind a road's guardrail.
     """
     rng = np.random.default_rng(town.seed * 7919 + 17)
     fs = FreeSpace(town)
@@ -223,6 +276,9 @@ def make_parcels(town: Town, buildings):
         # test a slightly shrunk rectangle: boundary pixels of neighbours (0.5 m raster) may touch
         if not fs.free(fs.rect(center[0], center[1], yaw, l - 1.0, d - 1.0), outside):
             return False
+        if occ is not None and lot_overlap_depth(occ[0], occ[1], fs.rect(center[0], center[1], yaw, l, d),
+                                                 center - n * (d / 2), n) > 0.0:
+            return False
         fs.mark(fs.rect(center[0], center[1], yaw, l + 0.6, d + 0.6))
         front = center - n * (d / 2)
         face = math.atan2(-n[1], -n[0])
@@ -235,6 +291,8 @@ def make_parcels(town: Town, buildings):
         for rd in town.roads:
             wo = rd.walk_outer
             for sgn in (1.0, -1.0):
+                guard = ("left" if sgn > 0 else "right") in rd.spec.guard_sides
+                behind = GUARDRAIL_OFFSET + GUARDRAIL_CLEAR + LOT_CLEAR_MARGIN if guard else 0.0
                 s = float(rng.uniform(0.5, 3.0))
                 while s < rd.length - 3.0:
                     w = float(rng.uniform(8.5, 12.5))
@@ -243,13 +301,20 @@ def make_parcels(town: Town, buildings):
                     p = rd.poly.interp(sc)
                     h = float(rd.poly.heading(sc))
                     n = np.array([-math.sin(h), math.cos(h)]) * sgn
-                    off = float(rng.uniform(off0, off1))
+                    off = float(rng.uniform(off0, off1)) + behind
                     if add(p + n * (wo + off + d / 2), h, w, d, n, row):
                         s += w + float(rng.uniform(0.3, 1.0))
                     else:
                         s += 1.5
-    # row 3: fill the remaining interior of every block with a grid aligned to the block
+    # row 3: fill the remaining interior of every block with a grid aligned to the block (towns with parcel_reach:
+    # only that far from a road; keisim/curve_course.py, whose one road leaves a 1 km "block" around it)
     free = (1 - fs.blocked).astype(np.uint8)
+    reach = getattr(town, "parcel_reach", None)
+    if reach:
+        near = np.zeros_like(free)
+        for rd in town.roads:
+            fs.R.fill(near, town.road_polygon(rd, rd.walk_outer + reach), 1)
+        free &= near
     n_lab, labels, st, _ = cv2.connectedComponentsWithStats(free, connectivity=4)
     for k in range(1, n_lab):
         if st[k, cv2.CC_STAT_AREA] * PARCEL_RES ** 2 < 150:
@@ -297,7 +362,11 @@ def export_town(town: Town) -> dict:
                       "half_width": rs.half_width, "walk_outer": rs.walk_outer,
                       "speed_limit": round(rs.speed_limit, 4), "center_line": rs.center, "edge_line": rs.edge,
                       **({"oneway": True} if rs.oneway else {}),     # one lane on the centre line, a -> b
-                      **({"lanes": rs.lanes} if rs.lanes > 1 else {})})    # lanes per direction (片側2車線)
+                      **({"lanes": rs.lanes} if rs.lanes > 1 else {}),     # lanes per direction (片側2車線)
+                      # ガードレール (curve courses): the sides with one anywhere along the road (poles stand behind)
+                      **({"guardrail": "both" if len(rs.guard_sides) == 2 else next(iter(rs.guard_sides))}
+                         if rs.guard_sides else {}),
+                      **({"guardrail_beam": list(rs.guardrail_beam)} if rs.guardrail_beam else {})})
     junctions = [{"id": J.id, "pos": r2(J.pos), "radius": round(J.radius, 2), "arms": len(J.arms),
                   "signalized": bool(J.signalized), "phases": J.phases, "green": round(J.green, 9),
                   "yellow": J.yellow, "allred": J.allred, "offset": round(J.offset, 9)}
@@ -313,6 +382,9 @@ def export_town(town: Town) -> dict:
              "l": round(b["l"], 2), "w": round(b["w"], 2), "h": round(b["h"], 2)}
         d.update(building_frontage(town, b, samples))
         buildings.append(d)
+    occ = occupied_mask(town, R, road_mask, walk_mask)
+    for d in buildings:
+        d["setback"] = clear_setback(R, occ, d)
     trees = [{"x": round(t["x"], 2), "y": round(t["y"], 2), "trunk_h": round(t["trunk_h"], 2),
               "r": round(t["r"], 2), "ch": round(t["ch"], 2)} for t in town.trees]
     return {
@@ -328,10 +400,16 @@ def export_town(town: Town) -> dict:
         "crosswalks": [r2(simplify(p, LINE_EPS, True)) for p in town.crosswalks],
         "roads": roads, "junctions": junctions, "signals": signals, **({"stop_signs": stop_signs} if stop_signs else {}),
         "buildings": buildings, "trees": trees,
-        "parcels": make_parcels(town, buildings),
+        # no KeiView lots for towns that ask for none (curve courses without buildings)
+        "parcels": make_parcels(town, buildings, (R, occ)) if getattr(town, "extra_lots", True) else [],
+        **({"far_town": False} if getattr(town, "parcel_reach", None) else {}),   # no far-town ring (curve courses)
         **({"markings_yellow": [r2(simplify(p, LINE_EPS, True)) for p in town.markings_yellow]} if mixed else {}),
         **real_town_fields(town),
         **({"lane_graph": g} if (g := lane_graph(town)) is not None else {}),
+        # ガードレール (Town.guardrails): side +1 = left of the road's a -> b
+        **({"guardrails": [{"road": gr["road"], "side": int(gr["side"]), "pts": r2(simplify(gr["pts"], LINE_EPS, False)),
+                            **({"beam": [round(float(v), 3) for v in gr["beam"]]} if "beam" in gr else {})}
+                           for gr in town.guardrails]} if town.guardrails else {}),
     }
 
 
@@ -397,12 +475,23 @@ def main():
     ap.add_argument("--town", type=int, nargs="+", default=[1000])
     ap.add_argument("--out", default="web/towns")
     ap.add_argument("--style", default="classic", choices=list(TOWN_STYLES), help="town style (keisim/config.py)")
+    ap.add_argument("--curve", nargs="*", default=None, metavar="VARIANT",
+                    help="export curve test courses instead (keisim/curve_course.py: VARIANT_NAMES; no names: all of "
+                         "them) as town_curve_<variant>_<version>.json")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
-    for seed in args.town:
-        cfg = town_config(args.style)
-        data = export(seed, cfg)
-        path = os.path.join(args.out, f"town_{town_key(seed, cfg)}.json")
+    if args.curve is not None:
+        from keisim.curve_course import VARIANT_NAMES, curve_town
+        jobs = []
+        for v in args.curve or VARIANT_NAMES:
+            town = curve_town(v)
+            jobs.append((town.name, lambda town=town: export_town(town)))
+    else:
+        jobs = [(town_key(seed, town_config(args.style)), lambda seed=seed: export(seed, town_config(args.style)))
+                for seed in args.town]
+    for key, make in jobs:
+        data = make()
+        path = os.path.join(args.out, f"town_{key}.json")
         with open(path, "w") as f:
             json.dump(data, f, separators=(",", ":"))
         print(f"{path}  {os.path.getsize(path) / 1024:.0f} KB  {data['summary']}")

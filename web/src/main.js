@@ -11,7 +11,7 @@ import { batchStatic } from '../vendor/sakuragaoka/core/batch2.js';
 import { loadTown } from './town.js';
 import { installEgo, tagSemantics } from './ego.js';
 
-export const MODULES = ['ground', 'roads', 'houses', 'trees', 'signals', 'poles'];
+export const MODULES = ['ground', 'roads', 'houses', 'trees', 'signals', 'poles', 'guardrails'];
 
 const params = new URLSearchParams(location.search);
 const SHOT = params.has('shot');
@@ -42,7 +42,8 @@ if (PILOT) {                                      // the intro board describes t
     <li>町は右上のメニューで選べます。town 1015 と 1018 は日本でふつうの二段階の信号で、右折は交差点の中で対向車の切れ目を待ちます。
     「札幌」と「西大井」は OpenStreetMap から作った実在の町です。札幌（東区の 1 km 角）はほとんどの交差点に信号がなく、細い道の車が優先道路に譲ります。
     西大井（品川区）は一方通行と止まれの多い東京の住宅地で、モデルは東京のデータなしで走ります（ゼロショット）。
-    town 2000 と 2002 は片側2車線の幹線道路と、交差点の手前で分かれる左折のランプがある郊外の町です。</li></ul>`);
+    town 2000 と 2002 は片側2車線の幹線道路と、交差点の手前で分かれる左折のランプがある郊外の町です。
+    「カーブ」と「弱点のカーブ」は、交差点のない 1 本道の試験コースです（白線とガードレールの有無を変えたもの。KeiSim の <code>keisim/curve_course.py</code>）。</li></ul>`);
   set('#loadlabel', '読み込み中…');
 }
 const TDIR = (params.get('tdir') || 'towns').replace(/[^\w.-]/g, '');
@@ -117,7 +118,7 @@ function setProgress(frac, label) {
   const lab = $('loadlabel'); if (lab && label) lab.textContent = label;
 }
 const LABELS = { ground: '地面', roads: '道路と歩道', houses: '家並み', trees: '桜並木', signals: '信号機', poles: '電柱と電線',
-  roaddeco: '路面標示と道路の付属物' };
+  roaddeco: '路面標示と道路の付属物', guardrails: 'ガードレール' };
 
 let town = null;
 async function build() {
@@ -125,7 +126,13 @@ async function build() {
   town = await loadTown(`./${TDIR}/town_${SEED}.json`);
   ctx.town = town; window.__town = town;
   L.configureWorld({ play: town.play, heightAt: town.heightAt, farTown: town.farTown, farSkip: town.farSkip });
-  const name = $('townname'); if (name) name.textContent = TOWN_LABELS[SEED] || SEED.split('-')[0];   // '1015-98782ab7': settings hash
+  // the curve test courses (keisim/curve_course.py): a short title, the menu's label (after ' · ') as what it is
+  const curve = SEED.startsWith('curve_');
+  const menu = document.querySelector(`#townsel option[value="${SEED}"]`);
+  const variant = menu ? menu.textContent.split(' · ').pop() : SEED;
+  const courseKm = curve && town.roads[0] ? (town.roads[0].len / 1000).toFixed(1) : '';
+  const name = $('townname');
+  if (name) name.textContent = TOWN_LABELS[SEED] || (curve ? (SEED.startsWith('curve_weak') ? '弱点のカーブ' : 'カーブ') : SEED.split('-')[0]);   // '1015-98782ab7': settings hash
   const real = !!(town.data && town.data.attribution);                      // a real town (keisim/realworld.py)
   if (PILOT && real) {
     const kana = document.querySelector('#intro .kana'); if (kana) kana.textContent = 'KeiPilot · 実在の町';
@@ -144,13 +151,23 @@ async function build() {
       'ランプのある交差点の左折は、手前で分かれるランプ（分流と合流）を通ります。ランプの手前から走り始めます。' +
       '周りの車も、移る先の車線の前後に余裕があるのを確かめてから車線を変え、ランプを使います。' +
       'モデルは車線変更とランプを学習していません（ゼロショット）。信号は二段階です。</p>');
+  } else if (PILOT && curve) {
+    const kana = document.querySelector('#intro .kana'); if (kana) kana.textContent = 'KeiPilot · カーブの試験コース';
+    const sum = $('townsum');
+    const what = SEED.startsWith('curve_weak')
+      ? '弱点の試験コースです。KeiPilot v0.10 が KeiSim で間違えたカーブ（ガードレールが内側・外側・両側、低いガードレール、180 度）を 1 本の道に並べています。'
+      : '交差点のない 1 本道の試験コースです。半径 15〜150 m の左右のカーブが続きます。';
+    if (sum) sum.insertAdjacentHTML('afterbegin', `<p class="tp">${what}この道は「${variant}」（${courseKm} km）です。` +
+      '白線のない道の急カーブで、モデルがガードレールに引き寄せられないかを見ます。交差点がないので、ナビはいつも直進です。</p>');
   } else if (PILOT && town.data && town.data.cfg && town.data.cfg.signal_mode === 'two_phase') {
     const kana = document.querySelector('#intro .kana'); if (kana) kana.textContent = 'KeiPilot · 二段階の信号の町';
     const sum = $('townsum');
     if (sum) sum.insertAdjacentHTML('afterbegin', '<p class="tp">この町の信号は二段階です（向かい合う方向が同時に青）。' +
       '右折は交差点の中の待ち位置まで進み、対向車が途切れてから曲がります。周りの車も同じ規則で走ります。</p>');
   }
-  const sum = $('townsum'); if (sum && !PILOT) sum.textContent = `${town.junctions.length} junctions · ${town.buildings.length} lots · ${town.trees.length} trees`;
+  const sum = $('townsum');
+  if (sum && !PILOT) sum.textContent = curve ? `${variant} · 交差点のない 1 本道 ${courseKm} km`
+    : `${town.junctions.length} junctions · ${town.buildings.length} lots · ${town.trees.length} trees`;
   if (real) {                                                                // ODbL: the map's source stays visible
     const credit = '<a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap contributors</a> (ODbL)';
     if (sum) sum.insertAdjacentHTML('beforeend', `<p>地図データ: ${credit}</p>`);

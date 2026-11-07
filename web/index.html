@@ -24,7 +24,7 @@
   #pilot-overlay { position: fixed; pointer-events: none; z-index: 3; }
   #pilot-hud { position: fixed; left: 12px; top: 12px; z-index: 4; padding: 10px 14px; border-radius: 8px; background: rgba(20, 22, 34, .72);
     color: #fff; font: 500 15px/1.6 var(--sans); }
-  #pilot-hud b { font-weight: 700; } #pilot-hud .ep { color: #aab; font-size: 12px; }
+  #pilot-hud b { font-weight: 700; } #pilot-hud .ep { color: #aab; font-size: 12px; } #pilot-hud .ep span { white-space: nowrap; }
   #pilot-hud .cams { color: #9fe0ff; font-size: 12px; } #pilot-hud .hold { color: #ffc93c; font-size: 12px; }
   #pilot-hud .switch { font-size: 12px; } #pilot-hud .switch:empty { display: none; } #pilot-hud .switch a { color: #ffb3ec; }
   #pilot-hud .keys { margin-top: 4px; color: #aab; font-size: 12px; line-height: 1.5; }
@@ -48,9 +48,14 @@
     box-shadow: 0 0 0 2px rgba(255, 255, 255, .6); }
   #pilot-side figcaption { margin-top: 4px; color: #c9cbe0; font: 500 11px/1.4 var(--sans); text-align: center; }
   #pilot-side.rig { display: grid; grid-template-columns: repeat(2, auto); gap: 6px 10px; }   /* ?pilot=mc: each camera and its segmentation */
-  @media (max-width: 760px) {
-    #pilot-hud { font-size: 13px; padding: 8px 10px; }
+  @media (max-width: 1040px) {   /* too narrow for the HUD (483 px) and the menus (509 px) side by side */
     body.pilot #pilot-hud { top: calc(60px + env(safe-area-inset-top, 0px)); }             /* below the clock and the town / quality menus */
+    /* which stay on one row for that: the town menu takes the width the clock and the quality menu leave, its label cut short */
+    body.pilot #corner { flex-wrap: nowrap; }
+    body.pilot #townsel { min-width: 0; }
+  }
+  @media (max-width: 760px), (max-height: 500px) {   /* phones, upright or on their side: the HUD clears the model views */
+    #pilot-hud { font-size: 13px; padding: 8px 10px; }
     #pilot-hud .keys { display: none; }
     #pilot-side canvas { width: 128px; height: 64px; }
   }
@@ -87,6 +92,7 @@
     align-items: center; max-width: calc(100vw - 32px); pointer-events: auto; }
   #clock { font: 700 15px/1 var(--round); color: var(--navy); background: var(--glass); border-radius: 999px; padding: 8px 12px; font-variant-numeric: tabular-nums; }
   .chip, select { font: 500 12px/1 var(--sans); color: var(--ink); background: var(--glass); border: 0; border-radius: 999px; padding: 8px 11px; cursor: pointer; }
+  select { text-overflow: ellipsis; }   /* a menu cut short (pilot on phones) ends in "…"; set from the start: Chrome does not pass a later change on to the label */
   #help { bottom: calc(16px + env(safe-area-inset-bottom, 0px)); left: 16px; font: 500 12px/1.7 var(--sans); color: var(--ink);
     background: var(--glass); border-radius: 8px; padding: 8px 12px; max-width: calc(100vw - 32px); }
   body.locked #help { opacity: .55; }
@@ -130,7 +136,7 @@
 
 <div class="hud" id="corner">
   <span id="clock">16:02</span>
-  <select id="townsel" aria-label="KeiSim town"><option value="1000">town 1000</option><option value="1001">town 1001</option><option value="1002">town 1002</option><option value="1003">town 1003</option><option value="1015-98782ab7">town 1015 · 二段階信号</option><option value="1018-98782ab7">town 1018 · 二段階信号</option><option value="1000-dae67d73" data-nopilot>town 1000 · 道路の種類</option><option value="2000-8c5d282b">town 2000 · 片側2車線とランプ</option><option value="2002-8c5d282b">town 2002 · 片側2車線とランプ</option><option value="osm_sapporo">札幌 · 実在の町 (OpenStreetMap)</option><option value="osm_nishioi">西大井 · 実在の町、一方通行 (OpenStreetMap)</option></select>
+  <select id="townsel" aria-label="KeiSim town"><option value="1000">town 1000</option><option value="1001">town 1001</option><option value="1002">town 1002</option><option value="1003">town 1003</option><option value="1015-98782ab7">town 1015 · 二段階信号</option><option value="1018-98782ab7">town 1018 · 二段階信号</option><option value="1000-dae67d73" data-nopilot>town 1000 · 道路の種類</option><option value="2000-8c5d282b">town 2000 · 片側2車線とランプ</option><option value="2002-8c5d282b">town 2002 · 片側2車線とランプ</option><option value="osm_sapporo">札幌 · 実在の町 (OpenStreetMap)</option><option value="osm_nishioi">西大井 · 実在の町、一方通行 (OpenStreetMap)</option><optgroup label="カーブの試験コース"><option value="curve_lines_v3">カーブ · 白線あり</option><option value="curve_edge_v3">カーブ · 外側線だけ</option><option value="curve_nolines_v3">カーブ · 白線なし</option><option value="curve_nolines_guard_v3">カーブ · 白線なし・ガードレール</option><option value="curve_lines_guard_v3">カーブ · 白線・ガードレール</option><option value="curve_lines_nobld_v3">カーブ · 白線あり・建物なし</option><option value="curve_edge_nobld_v3">カーブ · 外側線だけ・建物なし</option><option value="curve_nolines_nobld_v3">カーブ · 白線なし・建物なし</option><option value="curve_nolines_guard_nobld_v3">カーブ · 白線なし・ガードレール・建物なし</option><option value="curve_lines_guard_nobld_v3">カーブ · 白線・ガードレール・建物なし</option></optgroup><optgroup label="弱点の試験コース"><option value="curve_weak_w1">弱点のカーブ · 白線なし</option><option value="curve_weak_lines_w1">弱点のカーブ · 白線あり</option></optgroup></select>
   <select id="roadsel" aria-label="Road detail"><option value="plain">路面: 標準</option><option value="detail">路面: 作り込み</option></select>
   <select id="quality" aria-label="Graphics quality"><option value="high">Quality: High</option><option value="medium">Quality: Medium</option><option value="low">Quality: Low</option></select>
 </div>

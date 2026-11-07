@@ -31,8 +31,16 @@ uv run scripts/export_town.py --town 1000 1001 1002 1003     # web/towns/ に出
 uv run scripts/export_town.py --town 1015 1018 --style twophase   # 二段階の信号の町 → town_1015-98782ab7.json など（同梱）
 uv run scripts/export_town.py --town 2000 2002 --style ramps      # 片側2車線とランプの町 → town_2000-8c5d282b.json など（同梱）
 uv run scripts/import_osm.py --name osm_sapporo --out web/towns     # 実在の町（札幌、OpenStreetMap）→ town_osm_sapporo.json（同梱、data/osm/ の抜き出しから）
+uv run scripts/export_town.py --curve                         # カーブの試験コース 10 種類と弱点の試験コース 2 種類 → town_curve_*.json（同梱）
 cd web && node tools/serve.mjs                               # → http://localhost:5174/?town=1000
 ```
+
+カーブの試験コース（`keisim/curve_course.py`、[../README.md](../README.md) 2 章の「カーブの試験コース」）も、町のメニューの「カーブの試験コース」「弱点の試験コース」から開けます。
+交差点のない 1 本道で、歩くモードは道の端から、道に沿う向きで始まります。
+
+* `?town=curve_<種類>_v3`: `lines`（白線あり）、`edge`（外側線だけ）、`nolines`（白線なし）、`nolines_guard`（白線なし・ガードレール）、`lines_guard`（白線・ガードレール）。建物なしは `<種類>_nobld`（例 `?town=curve_nolines_guard_nobld_v3`）。
+* `?town=curve_weak_w1`（白線なし）、`?town=curve_weak_lines_w1`（白線あり）: 弱点の試験コース。
+* `?pilot=1` を付けると、KeiPilot がブラウザの中でコースを走ります。
 
 任意の静的サーバで動きます（ES modules なので `file://` 不可）。three.js とフォントは jsDelivr / Google Fonts から読み込みます。
 `npm install` しておくと、`serve.mjs` と `shot.mjs` は `node_modules` の three.js を使います（オフラインや CDN が塞がれた環境向け）。
@@ -189,6 +197,19 @@ cd web && node tools/serve.mjs                    # → http://localhost:5174/?p
 - 推論 1 回の時間:
   - WebGPU（RTX 3060）は約 20〜40 ms です。
   - WASM（1 スレッド）は約 0.2〜0.35 秒です。WASM でも閉ループは回りますが、計画の更新が遅れるぶん反応が遅くなります。
+- HUD の「KeiPilot」の右に、モデルの速さが出ます。左から、推論エンジン、1 秒あたりの判断（モデルの計算）の回数、推論 1 回の時間、モデルへの入力画像の描画時間です。
+  - RTX 3060 の PC で town 1000 を実時間で走らせると、WebGPU では「webgpu · 判断 9.6 回/秒 · 推論 56 ms · 描画 8 ms」でした。
+  - WASM では「wasm · 判断 4.5 回/秒 · 推論 210 ms · 描画 7 ms」でした。
+- モデルの判断に時間がかかるときは、町が判断を待ちます（`?pace`）。
+  - KeiSim は 0.1 秒ごとに、遅れなしで判断します。ブラウザでは、画像を撮ってから判断が届くまでに車が進みます（36 km/h なら 0.1 秒で 1 m）。
+  - 判断が遅れると、赤信号のブレーキが停止線に間に合いません。
+    CPU コア 1 個に固定した Chrome（WASM、判断 1 回 約 0.5 秒）で town 1000 を実時間 5 分走らせました。待たない場合（`?pace=0`）は、赤信号に近づいた 12 回のうち 6 回、停止線を越えました。
+    モデルは、どの回も信号を「赤 100%」と読んでいました。
+  - そこで、判断に 0.25 秒より長くかかるときは、町（自車・周りの車・信号）の時間をゆっくり進めて、判断を待ちます。
+    同じ条件で 7 分走らせると、赤信号は 10 回とも越えませんでした。7 回は停止線で止まり、3 回は減速しているうちに青になりました。町は平均で実時間の 0.63 倍の速さで進みました。
+  - HUD には、町が実時間の何倍で進んでいるかが「スロー ×0.74」のように出ます。
+  - WebGPU や速い CPU では判断が 0.25 秒に収まるので、町はふつうの速さで進みます（RTX 3060 の PC では、WASM でも 0.21 秒で ×1.00）。
+  - `?pace=0` を付けると、町は判断を待ちません（前の動き）。
 - モデルの重みは float16 で保存し、グラフの中で float32 に戻します（30 MB、計算は float32）。値は Release の重みと同じです。
 
 URL パラメータ: `?town=1001`（二段階の信号の町は `?town=1015-98782ab7`、札幌は `?town=osm_sapporo`）、`?q=low`（表示の画質。モデルの入力は常に medium）、`?ep=wasm` / `?ep=webgpu`（推論エンジンを固定）、`?pace=0.25`（モデルの判断に何秒までかかってよいか。それより長くかかるときは町の時間をゆっくり進めて待つ、既定 0.25。HUD に「スロー ×0.5」などと出る。`?pace=0` で待たない）、`?model=<URL>`、`?traffic=0`（周りの車なし）、`?cars=20`（周りの車の台数）、`?cardetail=0`（周りの車を簡易な形で表示）、`?tdir=.towns`（`scripts/import_osm.py` が `web/.towns` に書き出した町、例 `?tdir=.towns&town=osm_nishioi`: 一方通行の道路は中心線の上の車線 1 本で、周りの車もその向きにだけ走ります）、`?ramp=N`（ランプのある町: N 本目のランプの手前から。`-1` でふつうの出発点）、`?ort=node_modules/onnxruntime-web/dist/`（onnxruntime-web を CDN ではなくこのサイトから読む。同じサイトの相対パスだけ。CDN に出られない環境のテスト用: `npm install --no-save onnxruntime-web@1.20.1`）
@@ -198,10 +219,11 @@ node tools/pilot_check.mjs --town 1000 --sec 60   # headless Chrome で 60 秒�
 node tools/pilot_check.mjs --url https://southern-star.github.io/keisim/ --sec 10   # 公開版を確かめる
 node tools/pilot_check.mjs --town osm_sapporo --sec 120 --model models/keipilot_v24.onnx   # 札幌で、別の ONNX（web/ の下）を走らせる
 node tools/pilot_check.mjs --town 2000-8c5d282b --sec 60 --ort node_modules/onnxruntime-web/dist/   # ランプの町（CDN なし）
+node tools/pilot_check.mjs --town 1000 --ep wasm --realtime 60 --sec 0   # ページのループのまま実時間で 60 秒: fps、判断の回数、推論と描画の時間、町の速さ
 node tools/traffic_check.mjs --town 2002-8c5d282b --sec 600 --why   # 周りの車とナビだけを node で（接触の詳細つき）
 ```
 
-`pilot_check.mjs` は、モデルの計算を毎ステップ待つので、KeiSim と同じく推論の遅れがない状態で走ります。
+`pilot_check.mjs` は、モデルの計算を毎ステップ待つので、KeiSim と同じく推論の遅れがない状態で走ります（`--realtime` の間だけは、見る人のブラウザと同じく実時間で走ります）。
 GPU のない環境（SwiftShader）では町全体（1000 万ポリゴン）の描画に 1 フレーム数秒かかるので、`--only ground,roads,signals,actors`（家・木・電柱なし）で動作を確かめます。
 家のない町はモデルにとって見慣れない絵ですが、town 1015 ではルートからのずれは 0.02 m のままでした。
 Linux では Vulkan を使い、GPU の WebGPU で推論します。フラグなしの headless Chrome の WebGPU は SwiftShader（CPU）で、1 回 6 秒かかります。
