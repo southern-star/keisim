@@ -11,7 +11,7 @@ import { batchStatic } from '../vendor/sakuragaoka/core/batch2.js';
 import { loadTown } from './town.js';
 import { installEgo, tagSemantics } from './ego.js';
 
-export const MODULES = ['ground', 'roads', 'houses', 'trees', 'signals', 'poles'];
+export const MODULES = ['ground', 'roads', 'houses', 'trees', 'signals', 'poles', 'guardrails'];
 
 const params = new URLSearchParams(location.search);
 const SHOT = params.has('shot');
@@ -111,7 +111,7 @@ function setProgress(frac, label) {
   const lab = $('loadlabel'); if (lab && label) lab.textContent = label;
 }
 const LABELS = { ground: '地面', roads: '道路と歩道', houses: '家並み', trees: '桜並木', signals: '信号機', poles: '電柱と電線',
-  roaddeco: '路面標示と道路の付属物' };
+  roaddeco: '路面標示と道路の付属物', guardrails: 'ガードレール' };
 
 let town = null;
 async function build() {

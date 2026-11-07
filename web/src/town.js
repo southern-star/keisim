@@ -118,7 +118,8 @@ export function prepareTown(data) {
   T.play = { x0: bounds.x0 - m, x1: bounds.x1 + m, z0: bounds.z0 - m, z1: bounds.z1 + m };
   const g0 = 14, g1 = 200;   // far-town ring (low-detail houses) between these distances from the bbox
   const B = bounds;
-  T.farTown = [
+  // (none for towns exported with far_town false: keisim/curve_course.py, an open road with grass far from it)
+  T.farTown = data.far_town === false ? [] : [
     { x0: B.x0 - g1, x1: B.x1 + g1, z0: B.z0 - g1, z1: B.z0 - g0 },   // north
     { x0: B.x0 - g1, x1: B.x1 + g1, z0: B.z1 + g0, z1: B.z1 + g1 },   // south
     { x0: B.x0 - g1, x1: B.x0 - g0, z0: B.z0 - g0, z1: B.z1 + g0 },   // west
