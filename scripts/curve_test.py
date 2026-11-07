@@ -40,6 +40,7 @@ def run_one(job):
     cfg.traffic.max_peds = 0
     cfg.render_seg = False
     cfg.renderer = a["renderer"]
+    cfg.camera.guardrail_light = a.get("guardrail_light") or "sun"
     cfg.render_rgb = a["agent"] == "model" or bool(a["video"])
     cfg.terminate_on_collision = True
     env = KeiEnv(cfg)
@@ -158,13 +159,16 @@ def main():
     ap.add_argument("--from_s", type=float, default=None, help="start at this route s (m) instead of the course's end")
     ap.add_argument("--max_s", type=float, default=None, help="stop after this many metres of the route (KeiView without a "
                     "GPU: about 2 s per frame)")
+    ap.add_argument("--guardrail_light", default="sun", choices=["sun", "flat"],
+                    help="KeiSim renderer: guardrails shaded by the sun (default) or the same whatever its azimuth")
     ap.add_argument("--tag", default=None)
     args = ap.parse_args()
     a = vars(args)
     tag = args.tag or (f"{args.agent}" + (f"_{os.path.splitext(os.path.basename(args.ckpt))[0]}" if args.agent == "model" else "")
                        + f"_{args.renderer}_{args.weather}" + (f"_tp{args.tp}" if args.tp != "route" else "")
                        + (f"_from{args.from_s:.0f}" if args.from_s else "") + (f"_{args.max_s:.0f}m" if args.max_s else "")
-                       + f"_{COURSE_VERSION}")
+                       + (f"_ep{args.episode}" if args.episode else "")
+                       + ("_grflat" if args.guardrail_light == "flat" else "") + f"_{COURSE_VERSION}")
     # every run is saved when it ends (runs/eval/curve/<tag>/), and a run already saved there is not run again
     part_dir = f"runs/eval/curve/{tag}"
     os.makedirs(part_dir, exist_ok=True)

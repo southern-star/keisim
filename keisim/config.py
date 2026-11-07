@@ -148,6 +148,10 @@ class CameraConfig:
     pitch_deg: float = 8.0            # downward pitch
     max_dist: float = 110.0           # far clipping distance for objects
     supersample: int = 2              # render at N x resolution then downsample
+    # guardrails (curve test course): "sun" shades them like every face (Lambert, the sun's direction); "flat" lights
+    # every guardrail face as if the sun stood 45 deg in front of it at its elevation, whatever its azimuth (both
+    # rails of a road look the same; scripts/curve_test.py --guardrail_light)
+    guardrail_light: str = "sun"
 
 
 # Town styles (TownConfig overrides). "classic" is every suite up to KeiPilot v0.5; "varied" mixes block lengths

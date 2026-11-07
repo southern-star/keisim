@@ -22,9 +22,9 @@ class FaceBuffer:
 
     def __init__(self):
         self.verts, self.nv, self.color, self.sem, self.order = [], [], [], [], []
-        self.emissive, self.lamp, self.lod = [], [], []
+        self.emissive, self.lamp, self.lod, self.guard = [], [], [], []
 
-    def add(self, pts, color, sem, order, emissive=False, lamp=-1, lod=False):
+    def add(self, pts, color, sem, order, emissive=False, lamp=-1, lod=False, guard=False):
         pts = np.asarray(pts, np.float64)
         n = len(pts)
         pad = np.concatenate([pts, np.repeat(pts[-1:], KMAX - n, 0)], 0) if n < KMAX else pts[:KMAX]
@@ -36,6 +36,7 @@ class FaceBuffer:
         self.emissive.append(emissive)
         self.lamp.append(lamp)
         self.lod.append(lod)
+        self.guard.append(guard)          # a guardrail face (CameraConfig.guardrail_light)
 
     def __len__(self):
         return len(self.verts)
@@ -52,6 +53,7 @@ class FaceBuffer:
             "emissive": np.array(self.emissive, bool),
             "lamp": np.array(self.lamp, np.int32),
             "lod": np.array(self.lod, bool),
+            "guard": np.array(self.guard, bool),
         }
 
 
@@ -255,11 +257,12 @@ class StaticScene:
                     inward = -gr["side"]
                     beam = box_faces(0.0, L, 0.06 * inward - 0.03, 0.06 * inward + 0.03, 0.45, 0.80, skip=("bottom",))
                     for kk, f in beam.items():
-                        fb.add(transform(f, a[0], a[1], yaw), rail * (0.85 if kk == "top" else 1.0), SEM["pole"], 0.5)
+                        fb.add(transform(f, a[0], a[1], yaw), rail * (0.85 if kk == "top" else 1.0), SEM["pole"], 0.5,
+                               guard=True)
                     if k % 2 == 0:
                         pf = box_faces(-0.05, 0.05, -0.05, 0.05, 0.0, 0.75, skip=("bottom",))
                         for f in pf.values():
-                            fb.add(transform(f, a[0], a[1], yaw), post, SEM["pole"], 0.0)
+                            fb.add(transform(f, a[0], a[1], yaw), post, SEM["pole"], 0.0, guard=True)
                 seg = p[k0:k0 + 6]
                 c = seg.mean(0)
                 objs.append((c[0], c[1], float(np.hypot(*(seg - c).T).max()) + 1.0, f0, len(fb)))

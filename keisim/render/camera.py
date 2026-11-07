@@ -366,6 +366,7 @@ class CameraRenderer:
         sem = [sf["sem"][idx].copy()]
         order = [sf["order"][idx]]
         emis = [sf["emissive"][idx]]
+        guard = [sf["guard"][idx]]
         odist = [odist_s]
         lamp = sf["lamp"][idx]
         lm = lamp >= 0
@@ -396,6 +397,7 @@ class CameraRenderer:
             sem.append(dyn["sem"])
             order.append(dyn["order"])
             emis.append(dyn["emissive"])
+            guard.append(np.zeros(len(dyn["nv"]), bool))
             odist.append(dyn["odist"])
         verts = np.concatenate(verts)
         nv = np.concatenate(nv)
@@ -403,24 +405,34 @@ class CameraRenderer:
         sem = np.concatenate(sem)
         order = np.concatenate(order)
         emis = np.concatenate(emis)
+        guard = np.concatenate(guard)
         odist = np.concatenate(odist)
 
         # ---- back-face culling (world space)
         v0 = verts[:, 0]
         n = np.cross(verts[:, 1] - v0, verts[:, 2] - v0)
         facing = np.einsum("ij,ij->i", n, C[None] - v0) > 1e-9
-        verts, nv, color, sem, order, emis, odist, n = (a[facing] for a in (verts, nv, color, sem, order, emis, odist, n))
+        verts, nv, color, sem, order, emis, guard, odist, n = (
+            a[facing] for a in (verts, nv, color, sem, order, emis, guard, odist, n))
         # ---- to camera
         pc = (verts - C) @ R.T
         z = pc[..., 2]
         behind = (z < self.NEAR).all(1)
         keep = ~behind
-        verts, nv, color, sem, order, emis, odist, n, pc, z = (
-            a[keep] for a in (verts, nv, color, sem, order, emis, odist, n, pc, z))
+        verts, nv, color, sem, order, emis, guard, odist, n, pc, z = (
+            a[keep] for a in (verts, nv, color, sem, order, emis, guard, odist, n, pc, z))
         clip = (z < self.NEAR).any(1)
         # ---- shading + fog
         nn = n / (np.linalg.norm(n, axis=1, keepdims=True) + 1e-9)
         lam = np.clip(nn @ weather.sun_dir, 0, None)
+        if cfg.guardrail_light not in ("sun", "flat"):
+            raise ValueError(f"guardrail_light {cfg.guardrail_light!r}: 'sun' or 'flat'")
+        if cfg.guardrail_light == "flat" and guard.any():
+            # the sun 45 deg in front of every guardrail face: no azimuth, so both rails look the same
+            sd = weather.sun_dir
+            g = nn[guard]
+            lam[guard] = np.clip(g[:, 2], 0, None) * max(float(sd[2]), 0.0) + \
+                np.hypot(g[:, 0], g[:, 1]) * float(np.hypot(sd[0], sd[1])) * math.cos(math.pi / 4)
         gain = (weather.ambient + weather.diffuse * lam)[:, None] * weather.light[None] * weather.exposure
         shaded = np.where(emis[:, None], color * weather.exposure, color * gain)
         fc = verts.mean(1)
