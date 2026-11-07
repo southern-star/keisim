@@ -1062,6 +1062,68 @@ def test_ramps_expert_and_npcs():
     assert npc_ramps >= 1
 
 
+def test_guardrail_light():
+    """CameraConfig.guardrail_light: "sun" shades the guardrails by the sun's azimuth (the rail facing the sun is
+    lit, the other one dark); "flat" lights them the same for any azimuth, so on a course with nothing else standing
+    (nolines_guard_nobld) the camera image does not change when the sun moves to the other side."""
+    import math
+
+    from keisim.curve_course import course_route, curve_town
+
+    T = curve_town("nolines_guard_nobld", radii=(15.0,))
+    route, _ = course_route(T)
+    imgs = {}
+    for light in ("sun", "flat"):
+        cfg = EnvConfig()
+        cfg.traffic.max_vehicles = 0
+        cfg.traffic.max_peds = 0
+        cfg.render_seg = False
+        cfg.camera.guardrail_light = light
+        env = KeiEnv(cfg)
+        env.reset(town_seed=T, episode_seed=0, weather="noon", route=route)
+        for az in (90.0, -90.0):                        # the sun on the car's left, then on its right
+            e = math.radians(55.0)
+            env.weather.sun_dir = np.array([math.cos(e) * math.cos(math.radians(az)),
+                                            math.cos(e) * math.sin(math.radians(az)), math.sin(e)])
+            imgs[light, az] = env._obs()["rgb"].astype(int)
+    assert np.abs(imgs["sun", 90.0] - imgs["sun", -90.0]).max() > 40
+    assert np.abs(imgs["flat", 90.0] - imgs["flat", -90.0]).max() == 0
+
+
+def test_lots_off_the_road():
+    """scripts/export_town.py: KeiView's lots cover no road, sidewalk or guardrail. A KeiSim building's lot (its box
+    and the strip in front of it, `setback` deep with a straight front line) is cut back where that strip would reach
+    onto them (the inside of a curve), and an extra parcel that would is not placed."""
+    import math
+
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
+    from export_town import (LOT_CLEAR_TOL, building_frontage, export_town, lot_overlap_depth, occupied_mask,
+                             road_samples, surface_masks)
+    from keisim.curve_course import curve_town
+    from keisim.geometry import box_corners
+
+    T = curve_town("lines_guard", radii=(15.0, 25.0))
+    d = export_town(T)
+    R, road, walk = surface_masks(T)
+    occ = occupied_mask(T, R, road, walk)
+    samples = road_samples(T)
+    cut = 0
+    for b, kb in zip(d["buildings"], T.buildings):
+        n = np.array([-math.sin(b["yaw"]) * b["side"], math.cos(b["yaw"]) * b["side"]])
+        c = np.array([b["x"], b["y"]])
+        mid = c - n * (b["setback"] / 2)
+        lot = box_corners(mid[0], mid[1], b["yaw"], b["l"], b["w"] + b["setback"])
+        assert lot_overlap_depth(R, occ, lot, c - n * (b["w"] / 2 + b["setback"]), n) == 0.0, b
+        cut += b["setback"] < building_frontage(T, kb, samples)["setback"] - 0.05
+    assert cut >= 3
+    for p in d["parcels"]:
+        f = np.array([math.cos(p["face"]), math.sin(p["face"])])
+        c = np.array([p["fx"], p["fy"]]) - f * p["d"] / 2
+        lot = box_corners(c[0], c[1], p["face"] + math.pi / 2, p["w"], p["d"])
+        assert lot_overlap_depth(R, occ, lot, np.array([p["fx"], p["fy"]]), -f) == 0.0, p
+    assert LOT_CLEAR_TOL < 0.2 and len(d["parcels"]) > 20
+
+
 def test_curve_course():
     """keisim/curve_course.py: one open two-way road (dead ends at both ends) of 90 deg left and right curves; the
     variants differ only in paint and guardrails (<variant>_nobld: also no buildings, no KeiView lots). A guardrail

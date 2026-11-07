@@ -28,7 +28,7 @@ from .geometry import Polyline
 from .roadnet import RoadSpec, Town
 from .route import Route
 
-COURSE_VERSION = "v2"
+COURSE_VERSION = "v3"     # v3: KeiView lots kept off the road and behind the guardrails (KeiSim as v2)
 RADII = (15.0, 25.0, 40.0, 60.0, 100.0, 150.0)     # m, centre line
 LEAD = 70.0                          # m of straight from the start before the first curve (and after the last)
 GAP = 50.0                           # m of straight between curves
