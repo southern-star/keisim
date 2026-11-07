@@ -378,7 +378,8 @@ OpenStreetMap の道路と建物から、KeiSim の街を作ります (`keisim/r
   - それぞれの建物なしの版 `<種類>_nobld` (例 `nolines_guard_nobld`): KeiSim の建物も KeiView の区画 (家・畑・駐車場) もなく、道路とガードレール (と KeiView の電柱) だけが草地にあります。ガードレールの位置は同じです。
 * ガードレール (`RoadSpec.guardrail`、`Town.guardrails`) は KeiSim の描画 (セマンティックは pole) と KeiView (`web/src/world/guardrails.js`) の両方に出て、当たると衝突です。
 * モデルの目標点は、ルートに沿って 50 m 先に置きます (`--tp ahead`)。このコースには交差点がないので、KeiSim の決まり (次の交差点の出口、なければルートの終わり) ではゴールの方向 (どちらの端からも左へ 40 度) を指してしまい、それだけで車が左へ寄るためです。
-* 結果は「車線の中心からの横ずれ」で、カーブの内側を ＋ とします (`runs/eval/curve/*_v2.json`)。
+* 結果は「車線の中心からの横ずれ」で、カーブの内側を ＋ とします (`runs/eval/curve/*_v2.json`、`*_v3.json`)。
+  v3 は KeiView の区画の修正 (下) だけで、KeiSim のコースは v2 と同じです。
 * **KeiSim の描画、KeiPilot v0.10 (安全層つき)、4 つの天候 × 両方向**:
   - 白線のある 3 種類は、どのカーブでも平均 ±0.2 m 以内、最大 0.37 m です (エキスパートは 0.2 m 以内)。
   - 白線なしの左カーブでは、内側ではなく外側へ平均 0.2〜0.45 m ずれました (内側へは最大 0.06 m)。右カーブは内側へ最大 0.33 m です。
@@ -395,8 +396,21 @@ OpenStreetMap の道路と建物から、KeiSim の街を作ります (`keisim/r
 
   ![KeiSim: 太陽の向きとガードレール](docs/curve_sun_guardrail.jpg)
 
-  - 白線ありの道でも、直線で正方向は右へ約 6 cm、逆向きは左へ約 6 cm ずれます (どの天候でも)。地図上ではいつも南東で、
-    KeiSim の地面のテクスチャが半画素 (5 cm) 南東にずれて描かれているのが原因とみられます (`Raster.fill` は `cv2.fillPoly` に画素の端の座標を渡すが、fillPoly は画素の中心として扱う。未修正)。
+* **ガードレールを陰影なしで描くと** (`--guardrail_light flat`、`CameraConfig.guardrail_light`): ガードレールのどの面も、太陽が正面 45 度にあるように照らします。左右のガードレールは、太陽の方位によらず同じ明るさになります。
+  同じ 16 回 (エピソード 0〜3 × 両方向 × 建物あり・なし) を走らせました。
+
+  | | 太陽あり (今まで) | 陰影なし |
+  |---|---|---|
+  | 完走 | 4 回 | 10 回 |
+  | スタート直後の直線で左へ寄ってぶつかる | 4 回 (20〜24 m) | 0 回 |
+  | 左カーブで内側へ寄った最大 | 1.08 m | 0.05 m |
+  | 直線の平均 (＋＝左) | −0.19〜+0.40 m | −0.19〜−0.02 m |
+
+  - 左への寄りは、ガードレールの陰影 (太陽の向き) で起きていたと確かめられました。
+  - 残った 6 回は、すべて逆向きの最後の右カーブ (半径 16 m、行き止まりの約 70 m 手前) で外側 (左) のガードレールに当たりました。
+    太陽ありで完走した逆向きの 2 回 (エピソード 1、太陽がずっと右) では通れたカーブで、別の弱点です。
+* **KeiSim の小さなずれ**: 白線ありの道でも、直線で正方向は右へ約 6 cm、逆向きは左へ約 6 cm ずれます (どの天候でも)。地図上ではいつも南東で、
+  KeiSim の地面のテクスチャが半画素 (5 cm) 南東にずれて描かれているのが原因とみられます (`Raster.fill` は `cv2.fillPoly` に画素の端の座標を渡すが、fillPoly は画素の中心として扱う。未修正)。
 * **KeiView の描画、同じモデル、晴れ・正方向** (GPU なしで 1 フレーム約 3.4 秒のため、急カーブの 0〜360 m と半径 98 m の左カーブの 860〜1100 m だけ):
   - こちらでも内側への切り込みは出ませんでした。白線なしの左カーブは外側へ平均 0.14〜0.33 m で、KeiSim と同じ向きです。
   - 白線なし + ガードレールは KeiSim より落ち着いていて、左カーブは外側へ平均 0.06〜0.30 m、右カーブは内側へ最大 0.14 m でした。
@@ -410,6 +424,13 @@ OpenStreetMap の道路と建物から、KeiSim の街を作ります (`keisim/r
   - KeiSim で左へ寄った「太陽が左前」の向き (エピソード 1・2・7、0〜360 m) でも寄らず、直線は右へ 0.08〜0.10 m でした。KeiView では癖は再現しませんでした。
 
   ![KeiView: 建物ありと建物なし](docs/curve_nobld.png)
+
+* **KeiView の区画のはみ出し (v3 で修正)**: KeiSim の建物の区画は、箱の前に `setback` m の帯を持ち、前の線がまっすぐです。
+  そのためカーブの内側や交差点の脇では、区画の前の角 (塀や門柱) が道路や歩道に出ていました。このコースで最大 1.7 m、札幌で 5 m、ふつうの町でも交差点の脇で数十 cm です。
+  - 書き出し (`scripts/export_town.py`) で、帯を道路・歩道・ガードレールにかからないところまで切り詰めます (`clear_setback`)。追加の区画 (家・畑など) は、はみ出すものを置きません。ガードレールのある側の区画は、ガードレールの後ろから始めます。
+  - 同梱の町 (`web/towns/`) も書き出し直しました。違いは区画だけです。`web/.towns/` に書き出し済みの町は古いままなので、消すと新しく書き出されます。
+
+  ![KeiView の区画の修正 (半径 14 m の左カーブの手前)](docs/curve_lotfix.jpg)
 
 ### 見つけた弱点と対処（開発ログ）
 
@@ -757,8 +778,9 @@ python scripts/curve_test.py --agent model --ckpt runs/keipilot.pt --brake_hold 
 python scripts/curve_test.py --agent model --ckpt runs/keipilot.pt --brake_hold --red_hold --tp ahead \
     --renderer keiview --variants nolines --directions fwd --max_s 360 --video runs/videos/curve       # KeiView (GPU なしは 1 フレーム約 3.4 秒)
 python scripts/curve_test.py --agent model --ckpt runs/keipilot.pt --brake_hold --red_hold --tp ahead \
-    --weather noon --episode 1 --variants nolines_guard nolines_guard_nobld \
-    --tag model_keipilot_v10_keisim_noon_tpahead_ep1_v2                                               # 建物なし、太陽の向き (エピソード) 違い
+    --weather noon --episode 1 --variants nolines_guard nolines_guard_nobld                         # 建物なし、太陽の向き (エピソード) 違い
+python scripts/curve_test.py --agent model --ckpt runs/keipilot.pt --brake_hold --red_hold --tp ahead \
+    --weather noon --episode 1 --variants nolines_guard nolines_guard_nobld --guardrail_light flat  # ガードレールの陰影なし
 ```
 
 ```bash
