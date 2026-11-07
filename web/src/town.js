@@ -210,7 +210,9 @@ function makeViews(T) {
     return null;
   };
   const push = (v) => { if (v) views.push(v); };
-  if (arms[0]) push(onRoad(arms[0], J, 34, 'street'));
+  // a dead end (the curve test courses, keisim/curve_course.py): stand at the start, facing along the road
+  const away = (v) => (v && J.arms === 1 ? { ...v, yaw: v.yaw + 180, label: 'course' } : v);
+  if (arms[0]) push(away(onRoad(arms[0], J, J.arms === 1 ? 12 : 34, 'street')));
   if (arms[1]) push(onRoad(arms[1], J, 16, 'junction'));
   const c = [(T.bounds.x0 + T.bounds.x1) / 2, (T.bounds.z0 + T.bounds.z1) / 2];
   const span = Math.max(T.bounds.x1 - T.bounds.x0, T.bounds.z1 - T.bounds.z0);

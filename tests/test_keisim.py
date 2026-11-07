@@ -1193,7 +1193,8 @@ def test_weak_course():
     """keisim/curve_course.py weak_town: one road of the curves KeiPilot got wrong, never near itself; the guardrails
     (RoadSpec.guardrail_spans) stand only along their pieces, on their side, at their height, KeiSim's collision
     boxes with them; either way, a piece's rails are named from the driver's seat (the road's left is the car's
-    right in reverse); the expert drives it both ways in its lane, and curve_test.py reports every piece."""
+    right in reverse); the expert drives it both ways in its lane, and curve_test.py reports every piece. The bundled
+    browser copies (web/towns/town_curve_*.json, scripts/export_town.py --curve) are the current exports."""
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
     from curve_test import run_one
 
@@ -1229,6 +1230,15 @@ def test_weak_course():
     assert (rev["L15_right"]["turn"], rev["L15_right"]["rails"]) == ("right", "car_left")
     assert fwd["L15_left_low"]["rails"] == "car_left_low" and rev["S_LR_both"]["rails"] == "both"
     assert abs(fwd["L15_left"]["radius"] - 13.5) < 1e-6 and abs(fwd["R15_right"]["radius"] - 16.5) < 1e-6
+    import json
+
+    from export_town import export_town
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for v in ("weak", "nolines_guard_nobld"):            # the browser's copies (web/towns) are the current exports
+        from keisim.curve_course import curve_town
+        town = curve_town(v)
+        with open(os.path.join(root, "web", "towns", f"town_{town.name}.json")) as f:
+            assert json.loads(json.dumps(export_town(town))) == json.load(f), town.name
     a = {"renderer": "keisim", "agent": "expert", "video": None, "episode": 0, "weather": "noon", "tp": "ahead"}
     for reverse in (False, True):
         res = run_one(("weak", reverse, a))
