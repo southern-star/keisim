@@ -79,6 +79,8 @@ def main():
     for key in sorted(cases, key=lambda k: (k[0], str(k[1:]))):
         label, cells = cases[key]
         print(f"| {label} | " + " | ".join(cells[c][1] if c in cells else "" for c in cols) + " |")
+    count = {c: [sum(cells[c][1].startswith(m) for _, cells in cases.values() if c in cells) for m in "o^x"] for c in cols}
+    print("| **o / ^ / x** | " + " | ".join("{} / {} / {}".format(*count[c]) for c in cols) + " |")
     print(f"\no: {OK} m 未満、^: {OK}〜{WARN} m、x: {WARN} m 以上 (車体が車線を出る) かその場面で接触。"
           "値は車線の中心からのずれのいちばん大きいもの (m、＋＝カーブの内側、直線は左)")
 

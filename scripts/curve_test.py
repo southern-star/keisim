@@ -186,7 +186,8 @@ def main():
     ap.add_argument("--brake_hold", action="store_true")
     ap.add_argument("--red_hold", action="store_true")
     ap.add_argument("--variants", nargs="+", default=list(VARIANTS), choices=VARIANT_NAMES,
-                    help="default: the five with buildings; <variant>_nobld: without (keisim/curve_course.py)")
+                    help="default: the five with buildings; <variant>_nobld: without; weak / weak_lines: the weak-point "
+                         "course (keisim/curve_course.py weak_town; scripts/weak_report.py)")
     ap.add_argument("--directions", nargs="+", default=["fwd", "rev"], choices=["fwd", "rev"])
     ap.add_argument("--renderer", default="keisim", choices=["keisim", "keiview"])
     ap.add_argument("--weather", default="noon")
