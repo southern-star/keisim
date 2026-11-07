@@ -85,10 +85,12 @@ class RoadSpec:
     lanes: lanes per direction (two-way roads; 2 = 片側2車線), side by side from the centre line outwards, with
     dashed white lane lines between them. guardrail: ガードレール along the road's edges (Town.from_graph roads:
     "both", "left" / "right" of the direction a -> b, or None), GUARDRAIL_OFFSET outside the road surface;
-    guardrail_beam: its beam's (bottom, top) above the ground in m (None: keisim/render/meshes.py GUARDRAIL_BEAM)."""
+    guardrail_beam: its beam's (bottom, top) above the ground in m (None: keisim/render/meshes.py GUARDRAIL_BEAM).
+    guardrail_spans (Town.from_graph roads): guardrails over stretches of the road only, instead of `guardrail`:
+    [{side: "left" / "right", s0, s1 (m along the polyline given to from_graph, from junction a), beam (or None)}]."""
 
     def __init__(self, kind, lane_width, shoulder, sidewalk, speed_limit, center="dashed", edge="classic",
-                 oneway=False, lanes=1, guardrail=None, guardrail_beam=None):
+                 oneway=False, lanes=1, guardrail=None, guardrail_beam=None, guardrail_spans=None):
         self.kind = kind
         self.lane_width, self.shoulder, self.sidewalk = lane_width, shoulder, sidewalk
         self.speed_limit = speed_limit
@@ -103,10 +105,23 @@ class RoadSpec:
         if guardrail_beam is not None and not 0.0 <= guardrail_beam[0] < guardrail_beam[1] <= 2.0:
             raise ValueError(f"guardrail_beam: {guardrail_beam!r}")
         self.guardrail_beam = None if guardrail_beam is None else (float(guardrail_beam[0]), float(guardrail_beam[1]))
+        if guardrail_spans and guardrail is not None:
+            raise ValueError("guardrail and guardrail_spans together")
+        for sp in guardrail_spans or ():
+            if sp["side"] not in ("left", "right") or not sp["s0"] < sp["s1"]:
+                raise ValueError(f"guardrail span: {sp!r}")
+        self.guardrail_spans = [dict(sp) for sp in guardrail_spans or ()]
         # the lanes' outer edge, from the centre line
         self.lane_outer = lane_width / 2.0 if oneway else lane_width * self.lanes
         self.half_width = self.lane_outer + shoulder  # road surface, centre line to edge
         self.walk_outer = self.half_width + sidewalk  # outer edge of the sidewalk (= half_width without one)
+
+    @property
+    def guard_sides(self):
+        """The sides ("left" / "right" of a -> b) with a guardrail anywhere along the road."""
+        if self.guardrail == "both":
+            return {"left", "right"}
+        return {self.guardrail} if self.guardrail else {sp["side"] for sp in self.guardrail_spans}
 
     def lane_offsets(self):
         """Lateral offsets (+ = the driving side: left with left-hand traffic) of one direction's lane centres from
@@ -357,6 +372,7 @@ class Town:
             s = np.concatenate([[s0], pl.s[(pl.s > s0) & (pl.s < s1)], [s1]])
             center = pl.interp(s)
             self.roads.append(Road(rid, a, b, center, spec))
+            self.roads[-1].s_trim = float(s0)       # where the road starts along `pts` (RoadSpec.guardrail_spans)
             for J, p in ((Ja, center[0]), (Jb, center[-1])):     # arms point at the trimmed ends (radial)
                 arm = next(x for x in J.arms if x["spec"] == rid and x["end"] == ("a" if J is Ja else "b"))
                 arm["angle"] = float(math.atan2(p[1] - J.pos[1], p[0] - J.pos[0]))
@@ -1453,6 +1469,16 @@ class Town:
         that side, over the road's length between its junctions (cut back by the junction radius)."""
         for road in self.roads:
             g = road.spec.guardrail
+            for sp in road.spec.guardrail_spans:            # stretches only (Town.from_graph roads)
+                trim = getattr(road, "s_trim", 0.0)
+                a, b = max(sp["s0"] - trim, 0.0), min(sp["s1"] - trim, road.length)
+                if b - a < GUARDRAIL_DS:
+                    continue
+                sgn = 1.0 if sp["side"] == "left" else -1.0
+                sub = road.poly.interp(np.linspace(a, b, max(2, int(math.ceil((b - a) / 0.5)) + 1)))
+                pts = resample(offset_polyline(sub, sgn * (road.half_width + GUARDRAIL_OFFSET)), GUARDRAIL_DS)
+                beam = sp.get("beam") or road.spec.guardrail_beam
+                self.guardrails.append({"road": road.id, "side": sgn, "pts": pts, **({"beam": tuple(beam)} if beam else {})})
             if g is None:
                 continue
             for sgn in ((1.0, -1.0) if g == "both" else (1.0,) if g == "left" else (-1.0,)):

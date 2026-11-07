@@ -1189,6 +1189,53 @@ def test_curve_scenes():
         assert len(data["v"]) >= 40 and np.median(data["tp"][:, 0]) > 30.0
 
 
+def test_weak_course():
+    """keisim/curve_course.py weak_town: one road of the curves KeiPilot got wrong, never near itself; the guardrails
+    (RoadSpec.guardrail_spans) stand only along their pieces, on their side, at their height, KeiSim's collision
+    boxes with them; either way, a piece's rails are named from the driver's seat (the road's left is the car's
+    right in reverse); the expert drives it both ways in its lane, and curve_test.py reports every piece."""
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
+    from curve_test import run_one
+
+    from keisim.curve_course import (RAIL_PAD, WEAK_LOW_BEAM, WEAK_PIECES, course_pieces, course_route, weak_line,
+                                     weak_town)
+    from keisim.geometry import Polyline
+    from keisim.roadnet import GUARDRAIL_OFFSET
+
+    pts, pieces = weak_line()
+    P = pts[::10]
+    far = np.abs(np.arange(len(P))[:, None] - np.arange(len(P))[None, :]) * 5.0 > 80.0
+    assert np.hypot(*(P[:, None] - P[None, :]).transpose(2, 0, 1))[far].min() > 45.0
+    T = weak_town("weak")
+    assert T.name == "curve_weak_w1" and not T.markings and not T.buildings and len(weak_town("weak_lines").markings) > 50
+    road, centre = T.roads[0], Polyline(T.course["centre"])
+    assert len(T.guardrails) == sum(len(p["rails"]) for p in pieces)
+    for g in T.guardrails:                       # each rail: beside its piece (and RAIL_PAD on), on its side
+        s_on = [centre.project(q)[0] for q in g["pts"][[0, len(g["pts"]) // 2, -1]]]
+        p = next(p for p in pieces if p["s0"] - RAIL_PAD - 3 <= s_on[1] <= p["s1"] + RAIL_PAD + 3)
+        assert abs(s_on[0] - (p["s0"] - RAIL_PAD)) < 3 and abs(s_on[-1] - (p["s1"] + RAIL_PAD)) < 3, (p["id"], s_on)
+        side = "left" if g["side"] > 0 else "right"
+        beam = dict(p["rails"])[side]
+        assert (beam is None) == ("beam" not in g) and (beam is None or tuple(g["beam"]) == WEAK_LOW_BEAM)
+        d = np.hypot(*(g["pts"][::5, None, :] - road.center[None, ::2]).transpose(2, 0, 1)).min(axis=1)
+        assert np.all(np.abs(d - (road.half_width + GUARDRAIL_OFFSET)) < 0.05)
+    assert len(T.static_boxes) >= sum(len(g["pts"]) - 1 for g in T.guardrails)
+    fwd = {c["id"]: c for c in course_pieces(T, course_route(T)[0])}
+    rev = {c["id"]: c for c in course_pieces(T, course_route(T, reverse=True)[0], reverse=True)}
+    assert len(fwd) == len(rev) == len(WEAK_PIECES)
+    assert (fwd["L15_left"]["turn"], fwd["L15_left"]["rails"]) == ("left", "car_left")      # inner rail, car's left
+    assert (rev["R15_right"]["turn"], rev["R15_right"]["rails"]) == ("left", "car_left")    # its mirror, reversed
+    assert (fwd["R15_left"]["turn"], fwd["R15_left"]["rails"]) == ("right", "car_left")     # outer rail, car's left
+    assert (rev["L15_right"]["turn"], rev["L15_right"]["rails"]) == ("right", "car_left")
+    assert fwd["L15_left_low"]["rails"] == "car_left_low" and rev["S_LR_both"]["rails"] == "both"
+    assert abs(fwd["L15_left"]["radius"] - 13.5) < 1e-6 and abs(fwd["R15_right"]["radius"] - 16.5) < 1e-6
+    a = {"renderer": "keisim", "agent": "expert", "video": None, "episode": 0, "weather": "noon", "tp": "ahead"}
+    for reverse in (False, True):
+        res = run_one(("weak", reverse, a))
+        assert res["status"] == "finished" and len(res["pieces"]) == len(WEAK_PIECES), res["status"]
+        assert all(c["reached"] and max(abs(c["max_in"]), abs(c["min_in"])) < 0.3 for c in res["pieces"])
+
+
 def test_curve_course():
     """keisim/curve_course.py: one open two-way road (dead ends at both ends) of 90 deg left and right curves; the
     variants differ only in paint and guardrails (<variant>_nobld: also no buildings, no KeiView lots). A guardrail

@@ -43,7 +43,7 @@ VARIANTS = {
     "lines_guard": {"center": "dashed", "edge": "lane", "guardrail": "both"},
 }
 NOBLD = "_nobld"                     # variant suffix: no buildings (the guardrails stay)
-VARIANT_NAMES = list(VARIANTS) + [v + NOBLD for v in VARIANTS]
+VARIANT_NAMES = list(VARIANTS) + [v + NOBLD for v in VARIANTS] + ["weak", "weak_lines"]     # + weak_town()
 
 
 def split_variant(variant):
@@ -93,7 +93,10 @@ def course_line(radii=RADII, lead=LEAD, gap=GAP):
 
 
 def curve_town(variant="nolines", radii=RADII, seed=0, cfg=None):
-    """The course of `variant` (VARIANT_NAMES) as a Town; town.course = {variant, curves (centre-line spans)}."""
+    """The course of `variant` (VARIANT_NAMES) as a Town; town.course = {variant, curves (centre-line spans)}.
+    The weak-point course's variants (WEAK_VARIANTS) are weak_town()."""
+    if variant in WEAK_VARIANTS:
+        return weak_town(variant, cfg=cfg)
     base, with_buildings = split_variant(variant)
     spec = RoadSpec("residential", 3.0, 0.5, 0.0, 30 / 3.6, **VARIANTS[base])
     pts, curves = course_line(radii)
@@ -237,3 +240,117 @@ def scene_route(town, rng, length, margin=8.0):
     r = Route(town, [lid], s0, s_end=s0 + length)
     r.tp_ahead = SCENE_TP_AHEAD
     return r
+
+
+# ------------------------------------------------------------------------------- the weak-point course (弱点の試験コース)
+# One road of the curves where KeiPilot v0.10 went wrong on the curve course (README, curve course): no paint, a
+# guardrail only along the piece it belongs to, the pieces 40 m of plain road apart. Every piece has its mirror image
+# (left and right swapped) right after it, so either way the course is driven every weak case comes up once, with its
+# mirror as the control: driven in reverse, the road's left is the car's right.
+WEAK_VERSION = "w1"
+WEAK_VARIANTS = {"weak": {"center": "none", "edge": "none"},         # the weak points
+                 "weak_lines": {"center": "dashed", "edge": "lane"}}  # the same with white lines (they should pass)
+WEAK_LOW_BEAM = (0.10, 0.30)          # m: a low rail (the strongest pull, scripts/curve_diag.py --beam)
+WEAK_GAP = 40.0                       # m of plain road between the pieces
+WEAK_LEAD = 60.0
+RAIL_PAD = 10.0                       # m of guardrail before and after its piece
+# (id, piece): piece ("curve", radius, angle deg, turn, rails) or ("straight", length, rails); rails: ((road side,
+# beam or None), ...) driven forward (a -> b); `next` > 0: the next piece follows after only that many m
+WEAK_PIECES = (
+    ("ctrl_L15", ("curve", 15.0, 90.0, "left", ())),
+    ("ctrl_R15", ("curve", 15.0, 90.0, "right", ())),
+    ("straight_left", ("straight", 80.0, (("left", None),))),
+    ("straight_right", ("straight", 80.0, (("right", None),))),
+    ("L15_left", ("curve", 15.0, 90.0, "left", (("left", None),))),            # inner rail on the car's left
+    ("R15_right", ("curve", 15.0, 90.0, "right", (("right", None),))),
+    ("L15_left_low", ("curve", 15.0, 90.0, "left", (("left", WEAK_LOW_BEAM),))),
+    ("R15_right_low", ("curve", 15.0, 90.0, "right", (("right", WEAK_LOW_BEAM),))),
+    ("R15_left", ("curve", 15.0, 90.0, "right", (("left", None),))),           # outer rail on the car's left
+    ("L15_right", ("curve", 15.0, 90.0, "left", (("right", None),))),          # outer rail on the car's right
+    ("L40_left", ("curve", 40.0, 90.0, "left", (("left", None),))),
+    ("R40_right", ("curve", 40.0, 90.0, "right", (("right", None),))),
+    ("S_LR_both", ("curve", 15.0, 90.0, "left", (("left", None), ("right", None))), 15.0),
+    ("S_LR_both_2", ("curve", 15.0, 90.0, "right", (("left", None), ("right", None)))),
+    ("S_RL_both", ("curve", 15.0, 90.0, "right", (("left", None), ("right", None))), 15.0),
+    ("S_RL_both_2", ("curve", 15.0, 90.0, "left", (("left", None), ("right", None))), 120.0),
+    # a long one (more and more inwards?): last, 120 m on, so that its hairpins turn away from the rest of the road
+    ("L25_left_180", ("curve", 25.0, 180.0, "left", (("left", None),))),
+    ("R25_right_180", ("curve", 25.0, 180.0, "right", (("right", None),))),
+)
+
+
+def weak_line():
+    """Centre line of the weak-point course and its pieces: (pts (N, 2), [{id, kind, s0, s1, radius, turn, rails}]),
+    s along the centre line from the west end, rails ((road side, beam), ...)."""
+    pts, h, s, pieces = [np.zeros(2)], 0.0, 0.0, []
+
+    def straight(length):
+        nonlocal s
+        n = max(1, int(round(length / DS)))
+        d = np.array([math.cos(h), math.sin(h)])
+        for _ in range(n):
+            pts.append(pts[-1] + d * (length / n))
+        s += length
+
+    def arc(r, ang, turn):
+        nonlocal h, s
+        sign = 1.0 if turn == "left" else -1.0
+        c = pts[-1] + r * np.array([-math.sin(h), math.cos(h)]) * sign
+        n = max(4, int(round(r * ang / DS)))
+        a0 = h - sign * math.pi / 2
+        for k in range(1, n + 1):
+            a = a0 + sign * ang * k / n
+            pts.append(c + r * np.array([math.cos(a), math.sin(a)]))
+        h += sign * ang
+        s += r * ang
+
+    straight(WEAK_LEAD)
+    for k, (pid, piece, *nxt) in enumerate(WEAK_PIECES):
+        s0 = s
+        if piece[0] == "curve":
+            _, r, ang, turn, rails = piece
+            arc(r, math.radians(ang), turn)
+            pieces.append({"id": pid, "kind": "curve", "s0": s0, "s1": s, "radius": r, "angle": ang, "turn": turn,
+                           "rails": rails})
+        else:
+            _, length, rails = piece
+            straight(length)
+            pieces.append({"id": pid, "kind": "straight", "s0": s0, "s1": s, "rails": rails})
+        straight(nxt[0] if nxt else (WEAK_GAP if k + 1 < len(WEAK_PIECES) else WEAK_LEAD))
+    return np.array(pts), pieces
+
+
+def weak_town(variant="weak", cfg=None):
+    """The weak-point course (WEAK_VARIANTS) as a Town named curve_<variant>_<WEAK_VERSION>; town.course = {variant,
+    centre, curves (its curve pieces), pieces}."""
+    pts, pieces = weak_line()
+    spans = [{"side": side, "s0": p["s0"] - RAIL_PAD, "s1": p["s1"] + RAIL_PAD, "beam": beam}
+             for p in pieces for side, beam in p["rails"]]
+    spec = RoadSpec("residential", 3.0, 0.5, 0.0, 30 / 3.6, **WEAK_VARIANTS[variant], guardrail_spans=spans)
+    town = Town.from_graph(0, cfg or town_config("roadtypes"), [tuple(pts[0]), tuple(pts[-1])], [(0, 1, pts, spec)],
+                           buildings=[], name=f"curve_{variant}_{WEAK_VERSION}")
+    town.course = {"variant": variant, "centre": pts, "pieces": pieces,
+                   "curves": [{k: p[k] for k in ("s0", "s1", "radius", "turn", "id")} for p in pieces if p["kind"] == "curve"]}
+    town.parcel_reach = PARCEL_REACH
+    town.extra_lots = False
+    return town
+
+
+def course_pieces(town, route, reverse=False):
+    """The weak-point course's pieces along `route` (course_route): [{id, kind, s0, s1 (route s), turn, radius (of the
+    lane driven), rails: "none" / "car_left" / "car_right" / "both" (+ "_low"), mirror}] in route order."""
+    centre = Polyline(town.course["centre"])
+    side = 1.0 if town.cfg.left_hand_traffic else -1.0
+    out = []
+    for p in town.course.get("pieces", ()):
+        a, b = (route.poly.project(centre.interp1(x))[0] for x in (p["s0"], p["s1"]))
+        rec = {"id": p["id"], "kind": p["kind"], "s0": float(min(a, b)), "s1": float(max(a, b))}
+        if p["kind"] == "curve":
+            turn = p["turn"] if not reverse else ("right" if p["turn"] == "left" else "left")
+            rec["turn"] = turn
+            rec["radius"] = float(p["radius"] - side * (1 if turn == "left" else -1) * 1.5)
+        sides = {("car_left" if (sd == "left") != reverse else "car_right") for sd, _ in p["rails"]}
+        rails = "none" if not sides else "both" if len(sides) == 2 else sides.pop()
+        rec["rails"] = rails + ("_low" if any(bm for _, bm in p["rails"]) else "")
+        out.append(rec)
+    return sorted(out, key=lambda c: c["s0"])

@@ -26,7 +26,16 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from keisim.config import EnvConfig  # noqa: E402
-from keisim.curve_course import COURSE_VERSION, VARIANT_NAMES, VARIANTS, course_route, curve_town  # noqa: E402
+from keisim.curve_course import (  # noqa: E402
+    COURSE_VERSION,
+    VARIANT_NAMES,
+    VARIANTS,
+    WEAK_VARIANTS,
+    WEAK_VERSION,
+    course_pieces,
+    course_route,
+    curve_town,
+)
 from keisim.env import KeiEnv  # noqa: E402
 from keisim.geometry import world_to_local  # noqa: E402
 
@@ -45,6 +54,8 @@ def run_one(job):
     cfg.terminate_on_collision = True
     env = KeiEnv(cfg)
     town = curve_town(variant)
+    # the weak-point course: a collision is counted on its piece and the drive goes on, so every piece is tried
+    env.cfg.terminate_on_collision = not town.course.get("pieces")
     route, curves = course_route(town, reverse=reverse, start=a.get("from_s"))
     obs = env.reset(town_seed=town, episode_seed=a["episode"], weather=a["weather"], route=route)
     agent = None
@@ -115,6 +126,25 @@ def run_one(job):
                     "speed": round(float(L[m, 2].mean()), 2),
                     "off_road_s": round(float((~L[m, 3].astype(bool)).sum() * dt), 2)})
         res["curves"].append(rec)
+    # the weak-point course: every piece (curves and the straights with a rail), with its rails as the driver sees them
+    hits = [i["s"] + route.s_start for i in env.infractions if i["type"] == "static"]       # route s of each collision
+    if town.course.get("pieces"):
+        res["collisions"] = len(hits)
+    for c in course_pieces(town, route, reverse=reverse):
+        m = (L[:, 0] >= c["s0"]) & (L[:, 0] <= c["s1"])
+        rec = {k: round(v, 2) if isinstance(v, float) else v for k, v in c.items()}
+        if m.sum() < 3:
+            rec["reached"] = False
+        else:
+            sign = 0.0 if c["kind"] == "straight" else 1.0 if c["turn"] == "left" else -1.0
+            x = L[m, 1] * (sign or 1.0)               # curves: + = towards the inside; straights: + = left
+            rec.update({"reached": True, "mean_in": round(float(x.mean()), 3), "max_in": round(float(x.max()), 3),
+                        "min_in": round(float(x.min()), 3), "speed": round(float(L[m, 2].mean()), 2),
+                        "off_road_s": round(float((~L[m, 3].astype(bool)).sum() * dt), 2)})
+        n_hit = sum(c["s0"] - 5 <= h <= c["s1"] + 5 for h in hits)
+        if n_hit:
+            rec["collision"] = n_hit
+        res.setdefault("pieces", []).append(rec)
     st = ~in_curve & (L[:, 2] > 1.0)
     res["straight"] = {"mean_left": round(float(L[st, 1].mean()), 3) if st.any() else None,
                        "p90_abs": round(float(np.percentile(np.abs(L[st, 1]), 90)), 3) if st.any() else None}
@@ -126,7 +156,16 @@ def run_one(job):
 def table(results):
     rows = []
     for r in results:
-        for c in r["curves"]:
+        for c in r.get("pieces", ()):                 # the weak-point course: by piece instead of by curve
+            d = "rev" if r["reverse"] else "fwd"
+            what = (f"{c['turn']:5s} R{c['radius']:5.1f}" if c["kind"] == "curve" else "straight   ")
+            head = f"{r['variant']:20s} {d} {c['id']:15s} {what} rails {c['rails']:13s}"
+            if not c.get("reached"):
+                rows.append(f"{head} (not reached: {r['status']})")
+                continue
+            rows.append(f"{head} mean {c['mean_in']:+5.2f}  max {c['max_in']:+5.2f}  min {c['min_in']:+5.2f}  "
+                        f"{c['speed'] * 3.6:4.1f} km/h" + ("  COLLISION" if c.get("collision") else ""))
+        for c in r["curves"] if not r.get("pieces") else ():
             if not c.get("reached"):
                 rows.append(f"{r['variant']:20s} {'rev' if r['reverse'] else 'fwd'} {c['turn']:5s} R{c['radius']:5.1f}  "
                             f"(not reached: {r['status']})")
@@ -135,7 +174,8 @@ def table(results):
                         f"mean {c['mean_in']:+5.2f}  max {c['max_in']:+5.2f}  grows {c['grows']:+5.2f}  "
                         f"{c['speed'] * 3.6:4.1f} km/h  off road {c['off_road_s']:.1f} s")
         rows.append(f"{r['variant']:20s} {'rev' if r['reverse'] else 'fwd'} end: {r['status']} at {r['s_end']:.0f} / "
-                    f"{r['route_end']:.0f} m, straights mean {r['straight']['mean_left']:+.2f} m (+ left)")
+                    f"{r['route_end']:.0f} m, straights mean {r['straight']['mean_left']:+.2f} m (+ left)"
+                    + (f", {r['collisions']} guardrail panels hit (the drive goes on)" if "collisions" in r else ""))
     return "\n".join(rows)
 
 
@@ -168,7 +208,8 @@ def main():
                        + f"_{args.renderer}_{args.weather}" + (f"_tp{args.tp}" if args.tp != "route" else "")
                        + (f"_from{args.from_s:.0f}" if args.from_s else "") + (f"_{args.max_s:.0f}m" if args.max_s else "")
                        + (f"_ep{args.episode}" if args.episode else "")
-                       + ("_grflat" if args.guardrail_light == "flat" else "") + f"_{COURSE_VERSION}")
+                       + ("_grflat" if args.guardrail_light == "flat" else "")
+                       + (f"_{WEAK_VERSION}" if all(v in WEAK_VARIANTS for v in args.variants) else f"_{COURSE_VERSION}"))
     # every run is saved when it ends (runs/eval/curve/<tag>/), and a run already saved there is not run again
     part_dir = f"runs/eval/curve/{tag}"
     os.makedirs(part_dir, exist_ok=True)
