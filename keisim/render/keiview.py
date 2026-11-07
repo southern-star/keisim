@@ -138,6 +138,7 @@ class KeiViewRenderer:
                                                               os.path.join(ROOT, "scripts", "export_town.py"))
                 mod = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(mod)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
                 tmp = f"{path}.{os.getpid()}.tmp"
                 with open(tmp, "w") as f:
                     json.dump(mod.export_town(seed), f, separators=(",", ":"))
