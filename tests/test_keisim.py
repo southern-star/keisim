@@ -1154,6 +1154,13 @@ def test_curve_course():
     assert len(T.static_boxes) > sum(len(g["pts"]) - 1 for g in T.guardrails) - 1
     sc = StaticScene(T)
     assert (sc.faces["sem"] == SEM["pole"]).sum() > 1000
+    E = curve_town("nolines_nobld", radii=(15.0,))     # nothing standing at all (no building, rail, tree, signal)
+    assert len(StaticScene(E).faces["verts"]) == 0
+    cfg = EnvConfig()
+    cfg.traffic.max_vehicles = 0
+    cfg.traffic.max_peds = 0
+    obs = KeiEnv(cfg).reset(town_seed=E, episode_seed=0, route=course_route(E)[0])
+    assert obs["rgb"].shape == (cfg.camera.height, cfg.camera.width, 3) and obs["seg"].max() > 0
     for rev in (False, True):                # every curve's span on the route has its turn and radius
         r, curves = course_route(T, reverse=rev)
         assert len(curves) == 2 * len(RADII) and {c["turn"] for c in curves} == {"left", "right"}

@@ -15,6 +15,8 @@ import numpy as np
 from ..config import SEM
 
 KMAX = 8
+GUARDRAIL_BEAM = (0.45, 0.80)    # m above the ground: the beam panel of a guardrail (KeiView web/src/world/guardrails.js)
+GUARDRAIL_POST = 0.75            # m: its posts
 
 
 class FaceBuffer:
@@ -42,12 +44,11 @@ class FaceBuffer:
         return len(self.verts)
 
     def pack(self):
-        if not self.verts:
-            return None
+        # no faces (a town with nothing standing: the curve course's lines_nobld / nolines_nobld): empty arrays
         return {
-            "verts": np.array(self.verts, np.float32),
+            "verts": np.array(self.verts, np.float32).reshape(-1, KMAX, 3),
             "nv": np.array(self.nv, np.int32),
-            "color": np.array(self.color, np.float32),
+            "color": np.array(self.color, np.float32).reshape(-1, 3),
             "sem": np.array(self.sem, np.uint8),
             "order": np.array(self.order, np.float32),
             "emissive": np.array(self.emissive, bool),
@@ -255,12 +256,12 @@ class StaticScene:
                     yaw = math.atan2(d[1], d[0])
                     # the road is on the left of a -> b for side -1 (right edge), on the right for side +1
                     inward = -gr["side"]
-                    beam = box_faces(0.0, L, 0.06 * inward - 0.03, 0.06 * inward + 0.03, 0.45, 0.80, skip=("bottom",))
+                    beam = box_faces(0.0, L, 0.06 * inward - 0.03, 0.06 * inward + 0.03, *GUARDRAIL_BEAM, skip=("bottom",))
                     for kk, f in beam.items():
                         fb.add(transform(f, a[0], a[1], yaw), rail * (0.85 if kk == "top" else 1.0), SEM["pole"], 0.5,
                                guard=True)
                     if k % 2 == 0:
-                        pf = box_faces(-0.05, 0.05, -0.05, 0.05, 0.0, 0.75, skip=("bottom",))
+                        pf = box_faces(-0.05, 0.05, -0.05, 0.05, 0.0, GUARDRAIL_POST, skip=("bottom",))
                         for f in pf.values():
                             fb.add(transform(f, a[0], a[1], yaw), post, SEM["pole"], 0.0, guard=True)
                 seg = p[k0:k0 + 6]
