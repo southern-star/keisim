@@ -31,8 +31,16 @@ uv run scripts/export_town.py --town 1000 1001 1002 1003     # web/towns/ に出
 uv run scripts/export_town.py --town 1015 1018 --style twophase   # 二段階の信号の町 → town_1015-98782ab7.json など（同梱）
 uv run scripts/export_town.py --town 2000 2002 --style ramps      # 片側2車線とランプの町 → town_2000-8c5d282b.json など（同梱）
 uv run scripts/import_osm.py --name osm_sapporo --out web/towns     # 実在の町（札幌、OpenStreetMap）→ town_osm_sapporo.json（同梱、data/osm/ の抜き出しから）
+uv run scripts/export_town.py --curve                         # カーブの試験コース 10 種類と弱点の試験コース 2 種類 → town_curve_*.json（同梱）
 cd web && node tools/serve.mjs                               # → http://localhost:5174/?town=1000
 ```
+
+カーブの試験コース（`keisim/curve_course.py`、[../README.md](../README.md) 2 章の「カーブの試験コース」）も、町のメニューの「カーブの試験コース」「弱点の試験コース」から開けます。
+交差点のない 1 本道で、歩くモードは道の端から、道に沿う向きで始まります。
+
+* `?town=curve_<種類>_v3`: `lines`（白線あり）、`edge`（外側線だけ）、`nolines`（白線なし）、`nolines_guard`（白線なし・ガードレール）、`lines_guard`（白線・ガードレール）。建物なしは `<種類>_nobld`（例 `?town=curve_nolines_guard_nobld_v3`）。
+* `?town=curve_weak_w1`（白線なし）、`?town=curve_weak_lines_w1`（白線あり）: 弱点の試験コース。
+* `?pilot=1` を付けると、KeiPilot がブラウザの中でコースを走ります。
 
 任意の静的サーバで動きます（ES modules なので `file://` 不可）。three.js とフォントは jsDelivr / Google Fonts から読み込みます。
 `npm install` しておくと、`serve.mjs` と `shot.mjs` は `node_modules` の three.js を使います（オフラインや CDN が塞がれた環境向け）。

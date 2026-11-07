@@ -475,12 +475,23 @@ def main():
     ap.add_argument("--town", type=int, nargs="+", default=[1000])
     ap.add_argument("--out", default="web/towns")
     ap.add_argument("--style", default="classic", choices=list(TOWN_STYLES), help="town style (keisim/config.py)")
+    ap.add_argument("--curve", nargs="*", default=None, metavar="VARIANT",
+                    help="export curve test courses instead (keisim/curve_course.py: VARIANT_NAMES; no names: all of "
+                         "them) as town_curve_<variant>_<version>.json")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
-    for seed in args.town:
-        cfg = town_config(args.style)
-        data = export(seed, cfg)
-        path = os.path.join(args.out, f"town_{town_key(seed, cfg)}.json")
+    if args.curve is not None:
+        from keisim.curve_course import VARIANT_NAMES, curve_town
+        jobs = []
+        for v in args.curve or VARIANT_NAMES:
+            town = curve_town(v)
+            jobs.append((town.name, lambda town=town: export_town(town)))
+    else:
+        jobs = [(town_key(seed, town_config(args.style)), lambda seed=seed: export(seed, town_config(args.style)))
+                for seed in args.town]
+    for key, make in jobs:
+        data = make()
+        path = os.path.join(args.out, f"town_{key}.json")
         with open(path, "w") as f:
             json.dump(data, f, separators=(",", ":"))
         print(f"{path}  {os.path.getsize(path) / 1024:.0f} KB  {data['summary']}")
