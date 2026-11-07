@@ -485,6 +485,7 @@ OpenStreetMap の道路と建物から、KeiSim の街を作ります (`keisim/r
   - **ラベル:** エキスパートのラベルは車線の中心を保ちます。収集のノイズと仮想カメラ (左右 ±1.2 m、±9 度) で、車がガードレールに寄った場面と、そこから戻るラベルが入ります。DAgger では、モデル自身が寄っていく場面が入ります。
   - **扱い:** どのフレームも注目するフレームとして残ります (`--focus_yield` で間引かれません)。KeiSim の描画なら、1 ワーカーあたり約 60 フレーム/秒で集まります。
   - **エキスパート:** 12 町で試すと、どれも走りきりました。車線の中心からのずれは最大 0.36 m です (半径 10 m のカーブ)。
+  - **学習の指示書:** 手元の GPU で事例を集め、学習して評価するまでの手順と合格の条件は、[docs/brief_guardrail_curves.md](docs/brief_guardrail_curves.md) にあります。
 * **KeiSim の小さなずれ**: 白線ありの道でも、直線で正方向は右へ約 6 cm、逆向きは左へ約 6 cm ずれます (どの天候でも)。地図上ではいつも南東で、
   KeiSim の地面のテクスチャが半画素 (5 cm) 南東にずれて描かれているのが原因とみられます (`Raster.fill` は `cv2.fillPoly` に画素の端の座標を渡すが、fillPoly は画素の中心として扱う。未修正)。
 * **KeiView の描画、同じモデル、晴れ・正方向** (GPU なしで 1 フレーム約 3.4 秒のため、急カーブの 0〜360 m と半径 98 m の左カーブの 860〜1100 m だけ):
@@ -865,16 +866,16 @@ for ep in 0 1 2 3; do python scripts/curve_test.py --agent model --ckpt runs/kei
 python scripts/curve_test.py --agent model --ckpt runs/keipilot.pt --brake_hold --red_hold --tp ahead --weather noon \
     --variants weak weak_lines --guardrail_light flat                                              # 陰影なし
 python scripts/weak_report.py runs/eval/curve/model_keipilot_keisim_noon_tpahead{,_ep1,_ep2,_ep3,_grflat}_w1.json   # 場面ごとの表
-# ガードレールの急カーブの事例を集めて、v0.10 (keipilot_v24) から追加学習する (GPU のある手元で。まだ回していない案)
+# ガードレールの急カーブの事例を集めて、v0.10 (keipilot_v24) から追加学習する (GPU のある手元で。まだ回していない案。手順と合格の条件は docs/brief_guardrail_curves.md)
 #   $D7 $FL $NP $T $W9 osm_sets osm_w は、下の「再現」の v0.10 の節のもの。--dir_weight ($W9) の後ろに重みを足す
 uv run scripts/collect.py --out data/guard_expert --frames 40000 --workers 10 --curve_scenes 1 --seed 3101
 uv run scripts/collect.py --out data/guard_kv_expert --frames 10000 --workers 3 --curve_scenes 1 --renderer keiview --episodes_per_town 3 --seed 3102
 uv run scripts/collect.py --mode dagger --ckpt runs/keipilot_v24/last.pt --out data/guard_dagger --frames 30000 --workers 8 --curve_scenes 1 --seed 3103
 uv run scripts/train.py --data $D7 $FL $(osm_sets v23) $(osm_sets v22) $NP data/guard_expert data/guard_kv_expert data/guard_dagger \
-    --init runs/keipilot_v24/last.pt --out runs/keipilot_v25 --epochs 2 $T --aux_weight 0.5 --mem_input $W9 \
+    --init runs/keipilot_v24/last.pt --out runs/keipilot_v26 --epochs 2 $T --aux_weight 0.5 --mem_input $W9 \
     $(osm_w v23 1.5) $(osm_w v22 1) data/osm_dagger_v11_np=1.5 data/osm_kv_dagger_v11_np=1.5 data/guard_expert=2 data/guard_kv_expert=2 data/guard_dagger=2
-uv run scripts/export_weights.py runs/keipilot_v25/last.pt runs/keipilot_v25.pt
-python scripts/curve_test.py --agent model --ckpt runs/keipilot_v25.pt --brake_hold --red_hold --tp ahead --weather noon --episode 1 \
+uv run scripts/export_weights.py runs/keipilot_v26/last.pt runs/keipilot_v26.pt
+python scripts/curve_test.py --agent model --ckpt runs/keipilot_v26.pt --brake_hold --red_hold --tp ahead --weather noon --episode 1 \
     --variants nolines_guard nolines_guard_nobld lines_guard                                       # 評価 (KeiSim はクラウドでも回せる)
 ```
 
