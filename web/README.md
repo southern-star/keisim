@@ -40,7 +40,7 @@ cd web && node tools/serve.mjs                               # → http://localh
 
 * `?town=curve_<種類>_v3`: `lines`（白線あり）、`edge`（外側線だけ）、`nolines`（白線なし）、`nolines_guard`（白線なし・ガードレール）、`lines_guard`（白線・ガードレール）。建物なしは `<種類>_nobld`（例 `?town=curve_nolines_guard_nobld_v3`）。
 * `?town=curve_weak_w1`（白線なし）、`?town=curve_weak_lines_w1`（白線あり）: 弱点の試験コース。
-* `?pilot=1` を付けると、KeiPilot がブラウザの中でコースを走ります。
+* `?pilot=mc`（KeiPilot Mc）か `?pilot=1`（v0.10）を付けると、KeiPilot がブラウザの中でコースを走ります。Mc は、ガードレールの急カーブをこのコースとは別の道で学習しています。
 
 任意の静的サーバで動きます（ES modules なので `file://` 不可）。three.js とフォントは jsDelivr / Google Fonts から読み込みます。
 `npm install` しておくと、`serve.mjs` と `shot.mjs` は `node_modules` の three.js を使います（オフラインや CDN が塞がれた環境向け）。
