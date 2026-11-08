@@ -1,7 +1,8 @@
-# KeiView and the in-browser KeiPilot demo on GitHub Pages: https://<owner>.github.io/<repo>/?pilot=1
-# The site is web/ as it is (no build step); the driving model (keipilot.onnx, 30 MB) is taken from the latest
-# release rather than from git. One-time setup: Settings -> Pages -> Source: GitHub Actions. After publishing a
-# release with a new keipilot.onnx, run this workflow by hand (gh workflow run pages.yml --ref main).
+# KeiView and the in-browser KeiPilot demo on GitHub Pages: https://<owner>.github.io/<repo>/?pilot=1 (one camera)
+# and ?pilot=mc (KeiPilot Mc, two cameras). The site is web/ as it is (no build step); the driving models
+# (keipilot.onnx and keipilot_mc.onnx, 30 MB each) are taken from the releases rather than from git, each from the
+# newest release that has it. One-time setup: Settings -> Pages -> Source: GitHub Actions. After publishing a release
+# with a new model, run this workflow by hand (gh workflow run pages.yml --ref main).
 name: pages
 
 on:
@@ -27,16 +28,26 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      - name: Driving model from the latest release
+      - name: Driving models from the releases
         id: model
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release download --repo "$GITHUB_REPOSITORY" --pattern keipilot.onnx --dir web/models; then
+          fetch() {   # fetch FILE: from the newest release (not a pre-release) that has it
+            for tag in $(gh release list --repo "$GITHUB_REPOSITORY" --exclude-pre-releases --limit 50 \
+                --json tagName --jq '.[].tagName'); do
+              if gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern "$1" --dir web/models 2>/dev/null; then
+                echo "$1 from $tag"; return 0
+              fi
+            done
+            return 1
+          }
+          if fetch keipilot.onnx; then
             echo "ok=1" >> "$GITHUB_OUTPUT"
           else
-            echo "::warning::the latest release has no keipilot.onnx yet; not deploying"
+            echo "::warning::no release has keipilot.onnx yet; not deploying"
           fi
+          fetch keipilot_mc.onnx || echo "::warning::no release has keipilot_mc.onnx yet; the site has no ?pilot=mc"
       - name: Site
         if: steps.model.outputs.ok == '1'
         run: |

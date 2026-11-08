@@ -229,6 +229,26 @@ GPU のない環境（SwiftShader）では町全体（1000 万ポリゴン）の
 Linux では Vulkan を使い、GPU の WebGPU で推論します。フラグなしの headless Chrome の WebGPU は SwiftShader（CPU）で、1 回 6 秒かかります。
 ページ側も、SwiftShader の WebGPU しかないブラウザでは WASM を使います。
 
+### KeiPilot Mc（`?pilot=mc`）
+
+`?pilot=mc` を付けると、前向きの 2 台のカメラで運転する KeiPilot Mc（v0.11.0、[../docs/multicam.md](../docs/multicam.md)）が走ります。
+公開版: <https://southern-star.github.io/keisim/?pilot=mc>
+
+```bash
+uv run --with onnx --with onnxruntime scripts/export_onnx.py runs/keipilot_mc12/last.pt web/models/keipilot_mc.onnx
+#   （または Release v0.11.0 の keipilot_mc.onnx を web/models/ に置く）
+cd web && node tools/serve.mjs                    # → http://localhost:5174/?pilot=mc&town=1000
+node tools/pilot_check.mjs --pilot mc --town curve_weak_w1 --sec 90   # headless Chrome で（--images DIR でモデルへの入力画像も）
+```
+
+- モデルが見る 2 枚の画像は、学習に使った KeiView の画像と同じ作り方で描きます（`src/rig.js`）。
+  - 広角（円筒 180°）は、60° の面 3 枚を描いて、KeiSim と同じ貼り合わせの表で 1 枚にします。望遠（50°）はそのまま描きます。
+  - 画面は単眼版と同じ 100° の車載カメラです。右下に 2 台の画像と、それぞれの領域分割が出ます。
+- 推論は単眼版の約 2 倍、モデル用の描画は約 3 倍の重さです。判断が間に合わないときは、町の時間をゆっくり進めて待ちます（上の `?pace`）。
+- 安全層は、BrakeHold / RedHold に譲りのための YieldHold を加えたものです（`keipilot/agent.py`）。保持しているあいだ、HUD の目標速度の横に「（譲り待ち）」と出ます。
+- HUD のリンクで、同じ町の単眼版（`?pilot=1`）と行き来できます。
+- ONNX の画像の入力は `imgs`（1 × カメラの数 × 3 × 160 × 320）です。単眼のモデルは `img` で、どちらも同じ `src/pilot.js` で動きます。
+
 ## 構成
 
 ```

@@ -150,7 +150,8 @@ async function build() {
     if (sum) sum.insertAdjacentHTML('afterbegin', '<p class="tp">幹線道路は片側2車線です。ナビのルートは次の交差点での動きに合わせて車線を変え、' +
       'ランプのある交差点の左折は、手前で分かれるランプ（分流と合流）を通ります。ランプの手前から走り始めます。' +
       '周りの車も、移る先の車線の前後に余裕があるのを確かめてから車線を変え、ランプを使います。' +
-      'モデルは車線変更とランプを学習していません（ゼロショット）。信号は二段階です。</p>');
+      (PILOT_MC ? 'Mc 版は片側2車線の町で、車線変更とランプも学習しています。'
+        : 'このモデルは車線変更とランプを学習していません（ゼロショット）。') + '信号は二段階です。</p>');
   } else if (PILOT && curve) {
     const kana = document.querySelector('#intro .kana'); if (kana) kana.textContent = 'KeiPilot · カーブの試験コース';
     const sum = $('townsum');
