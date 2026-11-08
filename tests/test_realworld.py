@@ -378,3 +378,32 @@ def test_stand_memory_tells_the_stop_apart():
                     seen[made] += 1
             _, _, done, _ = env.step(env.expert_action())
     assert seen[True] > 0 and seen[False] > 0, seen
+
+
+def test_stop_sign_creep():
+    """Label version 6: from a 止まれ line's stop zone (STOP_SIGN_MARGIN + STOP_SIGN_ZONE before it) up to its
+    connector's wait point the expert's target never exceeds CROSSING_V (徐行), and the car keeps to about that."""
+    from keisim.env import KeiEnv
+    from keisim.expert import CROSSING_V, STOP_SIGN_MARGIN, STOP_SIGN_ZONE
+    town = osm_town(BBOX, osm=mini_osm(), name="mini")
+    env = KeiEnv(EnvConfig(town=town.cfg, render_rgb=False, render_seg=False))
+    creep, vmax = 0, 0.0
+    for ep in range(3):
+        env.reset(town, episode_seed=ep, route_length=300, render=False)
+        hl = env.world.ego.LENGTH / 2
+        stretches = []                    # (from, wait point) in route s of the front bumper
+        for s_line, _ in env.route.stop_signs:
+            jn = next((j for j in env.route.junctions if j["s_in"] >= s_line), None)    # None: the route ends first
+            conn = town.lanes[jn["lane"]] if jn else None
+            if conn and conn.yields:
+                stretches.append((s_line - STOP_SIGN_MARGIN - STOP_SIGN_ZONE, jn["s_in"] + conn.wait_s - 0.5))
+        done = False
+        while not done:
+            front = env.s_ego + hl
+            if any(a <= front <= b for a, b in stretches):
+                assert env.plan["target_speed"] <= CROSSING_V + 1e-6 and env.plan["ss_creep"], (ep, front, env.plan)
+                creep += 1
+                vmax = max(vmax, env.world.ego.v)
+            _, _, done, info = env.step(env.expert_action())
+        assert info["status"] == "success", info
+    assert creep > 0 and vmax < CROSSING_V + 0.5, (creep, vmax)

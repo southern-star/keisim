@@ -34,6 +34,7 @@ class World:
         self.peds = Pedestrians(town, tc, rng, n_ped)
         self.route = route
         self.ego_s = None                  # the ego's arc length along its route (set by KeiEnv after each step)
+        self.ego_stood = 0.0               # s the ego has stood still (TrafficConfig.ego_patience_s)
         self.n_heads = len(town.signal_heads)
         self._head_j = np.array([h["junction"] for h in town.signal_heads], int)
         self._head_p = np.array([h["phase"] for h in town.signal_heads], int)
@@ -67,6 +68,7 @@ class World:
     def step(self, control, dt):
         e = self.ego
         e.step(control[0], control[1], control[2], dt)
+        self.ego_stood = self.ego_stood + dt if e.v < 0.1 else 0.0
         exy, er, _ = self.ego_circles()
         pd = self.peds
         ext_xy = np.concatenate([exy, pd.xy])
@@ -78,8 +80,9 @@ class World:
         if self.traffic.has_yields and self.route is not None and self.ego_s is not None:
             k = self.route.lane_index_at(self.ego_s)
             lanes = self.route.lanes
+            patience = self.cfg.traffic.ego_patience_s
             ego_info = (lanes[k], self.route.local_s(self.ego_s, k), lanes[k + 1] if k + 1 < len(lanes) else None,
-                        e.v, e.LENGTH, lanes[k + 2] if k + 2 < len(lanes) else None)
+                        e.v, e.LENGTH, lanes[k + 2] if k + 2 < len(lanes) else None, 0.0 < patience <= self.ego_stood)
         ped_margin = pass_xy = None
         if self.town.in_road_walkways and pd.n:     # people walking in a 路側帯 are passed closely, but slowly
             walk = pd.walking_in_road()

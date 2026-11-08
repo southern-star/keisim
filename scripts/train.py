@@ -20,9 +20,9 @@ from torch.utils.data import DataLoader, WeightedRandomSampler
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from keipilot.data import DrivingDataset, load_shards  # noqa: E402
-from keipilot.model import KeiPilot, compute_loss  # noqa: E402
+from keipilot.model import KeiPilot, channels_last, compute_loss  # noqa: E402
 from keisim.config import N_SEM  # noqa: E402
-from keisim.expert import LABEL_VERSION  # noqa: E402
+from keisim.expert import YELLOW_VERSION  # noqa: E402
 
 
 def sample_weights(d, dagger_weight=1.0, kv_weight=1.0):
@@ -55,7 +55,7 @@ def evaluate(model, loader, device):
     conf = torch.zeros(N_SEM, N_SEM, dtype=torch.long)
     for b in loader:
         b = {k: v.to(device, non_blocking=True) for k, v in b.items()}
-        img = b["img"].contiguous(memory_format=torch.channels_last)
+        img = channels_last(b["img"])
         with torch.autocast("cuda", dtype=torch.bfloat16):
             out = model(img, b["cmd"], b["tp"], speed=b["v"], img_prev=b["img_prev"], has_prev=b["has_prev"],
                         stand_m=b["stand_m"], stand_known=b["stand_known"])
@@ -137,13 +137,22 @@ def main():
     device = "cuda"
 
     data, files = load_shards(args.data, with_prev=bool(args.history))      # earlier frames only for history models
+    # the camera rig of the data (collect.py --rig, meta.json); a rig model takes all of its cameras
+    rigs = set()
+    for d_ in args.data:
+        meta = os.path.join(d_, "meta.json")
+        rigs.add(json.load(open(meta)).get("rig", "front") if os.path.exists(meta) else "front")
+    if len(rigs) != 1:
+        sys.exit(f"data of different camera rigs: {sorted(rigs)}")
+    rig = rigs.pop()
+    print(f"camera rig {rig}: {data['n_cams']} camera(s)", flush=True)
     N = len(data["cmd"])
     rng = np.random.default_rng(args.seed)
     eps = np.unique(data["episode"])
     rng.shuffle(eps)
     val_eps = eps[: max(1, int(len(eps) * args.val_frac))]
     is_val = np.isin(data["episode"], val_eps)
-    tr_idx, va_idx = np.nonzero(~is_val)[0], np.nonzero(is_val)[0]
+    tr_idx, va_idx = np.nonzero(~is_val)[0], np.nonzero(is_val & ~data["stale_creep"])[0]
     print(f"{N} frames from {len(files)} shards, {len(eps)} episodes; train {len(tr_idx)} / val {len(va_idx)}", flush=True)
 
     ds_tr = DrivingDataset(data, tr_idx, train=True, cf_prob=args.cf_prob if args.speed_input else 0.0,
@@ -164,9 +173,12 @@ def main():
     w[has_prev] *= args.history_weight
     print(f"frames with a previous frame: {int(has_prev.sum())}", flush=True)
     # yellow-light frames whose label follows an older yellow rule and cannot be relabelled
-    stale = (data["tl"] == 1) & ~data["cf_ok"] & (data["label_version"] < LABEL_VERSION)
+    stale = (data["tl"] == 1) & ~data["cf_ok"] & (data["label_version"] < YELLOW_VERSION)
     w[stale] = 0.0
     print(f"dropped {int(stale.sum())} yellow frames labelled with an older rule", flush=True)
+    # frames recorded before label version 6 that may lie between a 止まれ stop and the wait point (load_shards)
+    w[data["stale_creep"]] = 0.0
+    print(f"dropped {int(data['stale_creep'].sum())} frames after a stop, recorded before the 徐行 rule", flush=True)
     w = w[tr_idx]
     n_epoch = args.samples_per_epoch or len(tr_idx)
     sampler = WeightedRandomSampler(torch.from_numpy(w), num_samples=n_epoch, replacement=True)
@@ -186,6 +198,8 @@ def main():
         model_cfg.update(history=True, history_dt=args.history, history_mode=args.history_mode)
     if args.aux_weight > 0:
         model_cfg["aux_yield"] = True
+    if data["n_cams"] > 1:
+        model_cfg["n_cams"] = data["n_cams"]
     model = KeiPilot(pretrained=args.init is None, **model_cfg)
     print("backbone init:", model.init_info, "| model_cfg:", model_cfg, flush=True)
     if sd:
@@ -221,7 +235,7 @@ def main():
             set_lr(it)
             b = {k: v.to(device, non_blocking=True) for k, v in b.items()}
             with torch.autocast("cuda", dtype=torch.bfloat16):
-                out = model(b["img"].contiguous(memory_format=torch.channels_last), b["cmd"], b["tp"],
+                out = model(channels_last(b["img"]), b["cmd"], b["tp"],
                             speed=b["v"], speed_known=b["v_known"] if model.speed_input else None,
                             img_prev=b["img_prev"], has_prev=b["has_prev"], stand_m=b["stand_m"],
                             stand_known=b["stand_known"])
@@ -246,7 +260,8 @@ def main():
               f"stop_acc={val['stop_acc']:.3f} tl_acc={val['tl_acc']:.3f} mIoU={val['seg_mIoU']:.3f}"
               + (f" speedMAE(no speed)={val['speed_MAE_no_speed']:.3f}" if model.speed_input else "")
               + f" ({val['time']:.0f}s)", flush=True)
-        ck = {"model": model.state_dict(), "epoch": ep, "val": val, "model_cfg": model_cfg, "args": vars(args)}
+        ck = {"model": model.state_dict(), "epoch": ep, "val": val, "model_cfg": model_cfg, "args": vars(args),
+              "rig": rig}
         torch.save(ck, os.path.join(args.out, "last.pt"))
         if val["loss"] < best:
             best = val["loss"]

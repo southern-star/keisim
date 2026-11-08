@@ -28,6 +28,11 @@ IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
 IMAGENET_STD = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
 
 
+def channels_last(img):
+    """A batch of images in channels-last memory; camera rigs' (B,K,3,H,W) batches are converted inside forward."""
+    return img.contiguous(memory_format=torch.channels_last) if img.dim() == 4 else img
+
+
 def _resnet18_from_local_r34():
     """ResNet-18 initialised from the first two blocks of each stage of a locally
     cached ImageNet ResNet-34 (no download). Falls back to random init."""
@@ -55,8 +60,12 @@ def _resnet18_from_local_r34():
 
 class KeiPilot(nn.Module):
     def __init__(self, n_sem=13, d=256, n_layers=3, n_heads=8, pretrained=True, img_hw=(160, 320), speed_input=False,
-                 history=False, history_dt=0.4, history_mode="frame", aux_yield=False, mem_input=False):
+                 history=False, history_dt=0.4, history_mode="frame", aux_yield=False, mem_input=False, n_cams=1):
         super().__init__()
+        # camera rigs (keisim CAMERA_RIGS): every camera's image goes through the same trunk; its tokens get the
+        # camera's own position embeddings (pos3[k], pos4[k]), and the decoder reads the tokens of all of them
+        self.n_cams = n_cams
+        assert not (history and n_cams > 1), "history models have one camera"
         if pretrained:
             r, self.init_info = _resnet18_from_local_r34()
         else:
@@ -83,8 +92,8 @@ class KeiPilot(nn.Module):
         # --- tokens
         self.proj3 = nn.Conv2d(256, d, 1)
         self.proj4 = nn.Conv2d(512, d, 1)
-        self.pos3 = nn.Parameter(torch.randn(1, d, H // 16, W // 16) * 0.02)
-        self.pos4 = nn.Parameter(torch.randn(1, d, H // 32, W // 32) * 0.02)
+        self.pos3 = nn.Parameter(torch.randn(n_cams, d, H // 16, W // 16) * 0.02)
+        self.pos4 = nn.Parameter(torch.randn(n_cams, d, H // 32, W // 32) * 0.02)
         self.queries = nn.Parameter(torch.randn(N_PATH + 2, d) * 0.02)
         self.cond = nn.Sequential(nn.Linear(N_CMD + 4, d), nn.GELU(), nn.Linear(d, d))
         # optional ego speed condition. Its output layer starts at zero, so a camera-only checkpoint loaded into
@@ -145,10 +154,14 @@ class KeiPilot(nn.Module):
 
     def forward(self, img, cmd, tp, with_seg=True, speed=None, speed_known=None, img_prev=None, has_prev=None,
                 stand_m=None, stand_known=None):
-        """img: (B,3,H,W) uint8/float RGB in [0,255]. speed (B,) m/s is used by speed-input models only;
+        """img: (B,3,H,W) uint8/float RGB in [0,255]; (B,n_cams,3,H,W) for camera rigs (out["seg"] is then
+        (B*n_cams, ...)). speed (B,) m/s is used by speed-input models only;
         speed_known (B,) bool hides it per sample (False -> the learned 'unknown' embedding).
         img_prev / has_prev (history models): the frame `history_dt` s earlier; missing frames enter as zeros.
         stand_m / stand_known (memory-input models): metres since the ego last stood, hidden like the speed."""
+        B = img.shape[0]
+        if self.n_cams > 1:
+            img = img.flatten(0, 1).contiguous(memory_format=torch.channels_last)
         x = (img.float() / 255.0 - self.mean) / self.std
         if self.history:
             if img_prev is None:
@@ -172,8 +185,12 @@ class KeiPilot(nn.Module):
             p = self.lat[1](c2) + F.interpolate(p, size=c2.shape[-2:], mode="bilinear", align_corners=False)
             p = self.lat[0](c1) + F.interpolate(p, size=c1.shape[-2:], mode="bilinear", align_corners=False)
             out["seg"] = self.seg_head(p)
-        t3 = (self.proj3(c3) + self.pos3).flatten(2).transpose(1, 2)
-        t4 = (self.proj4(c4) + self.pos4).flatten(2).transpose(1, 2)
+        if self.n_cams > 1:     # (B*K, d, h, w) -> (B, K*h*w, d), each camera with its own positions
+            t3 = (self.proj3(c3).unflatten(0, (B, self.n_cams)) + self.pos3).flatten(3).transpose(2, 3).flatten(1, 2)
+            t4 = (self.proj4(c4).unflatten(0, (B, self.n_cams)) + self.pos4).flatten(3).transpose(2, 3).flatten(1, 2)
+        else:
+            t3 = (self.proj3(c3) + self.pos3).flatten(2).transpose(1, 2)
+            t4 = (self.proj4(c4) + self.pos4).flatten(2).transpose(1, 2)
         mem = torch.cat([t3, t4], 1)
         cond = self.cond(self.encode_cond(cmd, tp))
         if self.speed_input:
@@ -194,7 +211,7 @@ class KeiPilot(nn.Module):
                 if stand_known is not None:
                     s = torch.where(stand_known[:, None], s, unknown)
                 cond = cond + s
-        q = self.queries[None].expand(img.shape[0], -1, -1) + cond[:, None]
+        q = self.queries[None].expand(B, -1, -1) + cond[:, None]
         h = self.decoder(q, mem)
         out["path"] = self.path_prior[None] + self.path_head(h[:, :N_PATH]).float() * 2.0
         out["speed_logits"] = self.speed_head(h[:, N_PATH]).float()
@@ -208,6 +225,9 @@ class KeiPilot(nn.Module):
         neutral init (zero speed / memory encoder output, zero weights for the previous frame). Returns the new keys."""
         own = self.state_dict()
         sd = dict(sd)
+        for k in ("pos3", "pos4"):                  # one camera's positions -> every camera of a rig starts with them
+            if k in sd and sd[k].shape[0] == 1 and own[k].shape[0] > 1:
+                sd[k] = sd[k].expand_as(own[k]).clone()
         w = sd.get("stem.0.weight")
         if w is not None and w.shape != own["stem.0.weight"].shape:       # single-frame stem -> history stem
             pad = torch.zeros_like(own["stem.0.weight"])
@@ -256,8 +276,9 @@ def compute_loss(model, out, batch, w_seg=0.5, w_tl=0.5, w_aux=0.0):
             loss = loss + w_aux * aux_l
             logs["aux"] = aux_l.item()
     if "seg" in out and "seg" in batch:
-        seg = F.interpolate(out["seg"].float(), size=batch["seg"].shape[-2:], mode="bilinear", align_corners=False)
-        seg_l = F.cross_entropy(seg, batch["seg"].long())
+        lab = batch["seg"].flatten(0, 1) if batch["seg"].dim() == 4 else batch["seg"]     # rigs: (B, K, h, w)
+        seg = F.interpolate(out["seg"].float(), size=lab.shape[-2:], mode="bilinear", align_corners=False)
+        seg_l = F.cross_entropy(seg, lab.long())
         loss = loss + w_seg * seg_l
         logs["seg"] = seg_l.item()
     logs["loss"] = loss.item()

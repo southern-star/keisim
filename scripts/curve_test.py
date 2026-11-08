@@ -25,7 +25,7 @@ import multiprocessing as mp
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from keisim.config import EnvConfig  # noqa: E402
+from keisim.config import CAMERA_RIGS, EnvConfig, set_camera_rig  # noqa: E402
 from keisim.curve_course import (  # noqa: E402
     COURSE_VERSION,
     VARIANT_NAMES,
@@ -44,12 +44,13 @@ TP_AHEAD = 50.0      # m: --tp ahead puts the model's target point this far ahea
 
 def run_one(job):
     variant, reverse, a = job
-    cfg = EnvConfig()
+    cfg = set_camera_rig(EnvConfig(), a.get("rig") or "front")
     cfg.traffic.max_vehicles = 0
     cfg.traffic.max_peds = 0
     cfg.render_seg = False
     cfg.renderer = a["renderer"]
-    cfg.camera.guardrail_light = a.get("guardrail_light") or "sun"
+    for cam in cfg.cameras:
+        cam.guardrail_light = a.get("guardrail_light") or "sun"
     cfg.render_rgb = a["agent"] == "model" or bool(a["video"])
     cfg.terminate_on_collision = True
     env = KeiEnv(cfg)
@@ -63,7 +64,8 @@ def run_one(job):
         import torch
         torch.set_num_threads(a["threads"])       # the workers share the CPU (one thread each by default)
         from keipilot.agent import KeiPilotAgent
-        agent = KeiPilotAgent(a["ckpt"], brake_hold=a["brake_hold"], red_hold=a["red_hold"])
+        agent = KeiPilotAgent(a["ckpt"], brake_hold=a["brake_hold"], red_hold=a["red_hold"],
+                              yield_hold=a.get("yield_hold"))
         agent.reset()
     vw = None
     if a["video"]:
@@ -84,7 +86,7 @@ def run_one(job):
             tp = obs["target_point"]
             if a["tp"] == "ahead":
                 tp = world_to_local(route.poly.interp(min(s + TP_AHEAD, route.s_end))[None], e.x, e.y, e.yaw)[0]
-            action, pinfo = agent.act(obs["rgb"], obs["command"], tp, e.v, dt)
+            action, pinfo = agent.act(obs.get("rgbs", obs["rgb"]), obs["command"], tp, e.v, dt)
             plan_path, target = pinfo["path"], pinfo["target_speed"]
         p = route.poly.interp1(s)
         h = route.poly.heading1(s)
@@ -185,6 +187,10 @@ def main():
     ap.add_argument("--ckpt", default="runs/keipilot_v10.pt")
     ap.add_argument("--brake_hold", action="store_true")
     ap.add_argument("--red_hold", action="store_true")
+    ap.add_argument("--yield_hold", type=float, nargs="*", default=None, metavar="X",
+                    help="the YieldHold safety layer (keipilot/agent.py), as evaluate.py --yield_hold")
+    ap.add_argument("--rig", default=None, choices=list(CAMERA_RIGS),
+                    help="camera rig (default: the checkpoint's for a model, else front)")
     ap.add_argument("--variants", nargs="+", default=list(VARIANTS), choices=VARIANT_NAMES,
                     help="default: the five with buildings; <variant>_nobld: without; weak / weak_lines: the weak-point "
                          "course (keisim/curve_course.py weak_town; scripts/weak_report.py)")
@@ -204,6 +210,11 @@ def main():
                     help="KeiSim renderer: guardrails shaded by the sun (default) or the same whatever its azimuth")
     ap.add_argument("--tag", default=None)
     args = ap.parse_args()
+    if args.rig is None:
+        from keipilot.agent import checkpoint_rig
+        args.rig = checkpoint_rig(args.ckpt) if args.agent == "model" else "front"
+    if args.yield_hold is not None:
+        args.yield_hold = tuple(args.yield_hold) or True
     a = vars(args)
     tag = args.tag or (f"{args.agent}" + (f"_{os.path.splitext(os.path.basename(args.ckpt))[0]}" if args.agent == "model" else "")
                        + f"_{args.renderer}_{args.weather}" + (f"_tp{args.tp}" if args.tp != "route" else "")

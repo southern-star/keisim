@@ -21,15 +21,21 @@ const EGO = params.has('ego');                    // KeiSim ego-camera mode (src
 // road surface detailing (src/world/roaddeco.js): opt-in, the default "plain" is the look the KeiView-trained models know
 const ROADS = params.get('roads') === 'detail' ? 'detail' : 'plain';
 const PILOT = params.has('pilot');                // KeiPilot drives in the browser (src/pilot.js)
+const PILOT_MC = params.get('pilot') === 'mc';     // ... with the multi-camera model (two cameras, src/rig.js)
 if (PILOT) {                                      // the intro board describes the driving demo, not the walk
   document.body.classList.add('pilot-mode');
-  document.title = 'KeiPilot — ブラウザで自動運転';
+  document.title = PILOT_MC ? 'KeiPilot Mc — マルチカメラで自動運転' : 'KeiPilot — ブラウザで自動運転';
   const set = (sel, html) => { const e = document.querySelector(sel); if (e) e.innerHTML = html; };
-  set('#intro .kana', 'KeiPilot · ブラウザで自動運転');
+  set('#intro .kana', PILOT_MC ? 'KeiPilot Mc · マルチカメラで自動運転' : 'KeiPilot · ブラウザで自動運転');
   set('#intro .no', 'KeiSim<br>town');
-  set('#townsum', `<p>カメラ画像 1 枚と自車の速度だけを見て運転する E2E モデル <b>KeiPilot</b> が、ブラウザの中で KeiSim の街を走ります。
-    信号を読み、前の車について走り、ナビの指示どおりに交差点を曲がります。</p>
-    <ul><li>推論は onnxruntime-web（WebGPU、なければ WASM）。運転モデル（30 MB）を読み込みます。</li>
+  set('#townsum', `${PILOT_MC
+    ? `<p>前向きのカメラ 2 台（180° の広角と 50° の望遠）の画像と自車の速度を見て運転する E2E モデル <b>KeiPilot Mc</b> が、
+    ブラウザの中で KeiSim の街を走ります。広角は止まれの線から左右の優先道路を、望遠は遠くの信号と車を見ます。
+    画面はカメラ 1 枚の版（<code>?pilot=1</code>）と同じ 100° の車載カメラで、右下にモデルが見ている 2 台の画像が出ます。</p>`
+    : `<p>カメラ画像 1 枚と自車の速度だけを見て運転する E2E モデル <b>KeiPilot</b> が、ブラウザの中で KeiSim の街を走ります。
+    信号を読み、前の車について走り、ナビの指示どおりに交差点を曲がります。</p>`}
+    <ul><li>推論は onnxruntime-web（WebGPU、なければ WASM）。運転モデル（30 MB）を読み込みます。${PILOT_MC
+      ? 'カメラ 1 枚の版より推論は約 2 倍、モデル用の描画は約 3 倍の重さです。' : ''}</li>
     <li>← ↑ → 次の交差点で曲がる方向　Space 一時停止　R 最初から　T 周りの車（画面のボタンでも操作できます）</li>
     <li>ピンクはモデルが描いた走行経路、水色はナビのルート。右下はモデルへの入力画像と、モデルの領域分割です。</li>
     <li>周りの車は「周りの車」ボタン、T キー、<code>?traffic=0</code> で消せます（描画が重いとき。選んだ設定はこのブラウザに残ります）。</li>
@@ -144,7 +150,8 @@ async function build() {
     if (sum) sum.insertAdjacentHTML('afterbegin', '<p class="tp">幹線道路は片側2車線です。ナビのルートは次の交差点での動きに合わせて車線を変え、' +
       'ランプのある交差点の左折は、手前で分かれるランプ（分流と合流）を通ります。ランプの手前から走り始めます。' +
       '周りの車も、移る先の車線の前後に余裕があるのを確かめてから車線を変え、ランプを使います。' +
-      'モデルは車線変更とランプを学習していません（ゼロショット）。信号は二段階です。</p>');
+      (PILOT_MC ? 'Mc 版は片側2車線の町で、車線変更とランプも学習しています。'
+        : 'このモデルは車線変更とランプを学習していません（ゼロショット）。') + '信号は二段階です。</p>');
   } else if (PILOT && curve) {
     const kana = document.querySelector('#intro .kana'); if (kana) kana.textContent = 'KeiPilot · カーブの試験コース';
     const sum = $('townsum');
@@ -152,7 +159,8 @@ async function build() {
       ? '弱点の試験コースです。KeiPilot v0.10 が KeiSim で間違えたカーブ（ガードレールが内側・外側・両側、低いガードレール、180 度）を 1 本の道に並べています。'
       : '交差点のない 1 本道の試験コースです。半径 15〜150 m の左右のカーブが続きます。';
     if (sum) sum.insertAdjacentHTML('afterbegin', `<p class="tp">${what}この道は「${variant}」（${courseKm} km）です。` +
-      '白線のない道の急カーブで、モデルがガードレールに引き寄せられないかを見ます。交差点がないので、ナビはいつも直進です。</p>');
+      '白線のない道の急カーブで、モデルがガードレールに引き寄せられないかを見ます。交差点がないので、ナビはいつも直進です。' +
+      (PILOT_MC ? 'Mc 版は、ガードレールの急カーブをこの試験コースとは別の道で学習しています。' : '') + '</p>');
   } else if (PILOT && town.data && town.data.cfg && town.data.cfg.signal_mode === 'two_phase') {
     const kana = document.querySelector('#intro .kana'); if (kana) kana.textContent = 'KeiPilot · 二段階の信号の町';
     const sum = $('townsum');
@@ -282,7 +290,8 @@ async function main() {
   }
   if (EGO) {
     const W = Number(params.get('w') || 320), H = Number(params.get('h') || 160);
-    installEgo({ ctx, renderer, scene, camera, pipeline, sky, sunDir, W, H });
+    installEgo({ ctx, renderer, scene, camera, pipeline, sky, sunDir, W, H,
+      makePipeline: () => createRenderPipeline(renderer, quality) });   // the cameras of a rig (q.cams), one per image size
     try { window.__egoWarmup(); } catch (e) { console.error(e); errors.push({ module: 'ego', message: String(e && e.stack || e) }); }
     document.body.classList.add('shot');
     window.__ready = true;
@@ -297,7 +306,7 @@ async function main() {
       const modelPipeline = () => createRenderPipeline(renderer, QUALITY.medium);
       setProgress.model = true;
       const progress = (f) => setProgress(0.45 + 0.55 * Math.min(1, f));
-      pilot = await installPilot({ ctx, scene, renderer, camera, sunDir, modelPipeline, params, status, progress });
+      pilot = await installPilot({ ctx, scene, renderer, camera, sunDir, modelPipeline, mainSize: () => pipeline.size, params, status, progress });
     } catch (e) {
       console.error(e); errors.push({ module: 'pilot', message: String(e && e.stack || e) });
       status(`運転モデルを読み込めませんでした: ${e.message || e}`);
@@ -316,7 +325,7 @@ async function main() {
         ctx.physics.refreshDynamic();
         stepUpdates(dt, simT);
         sky.update(simT, camera);
-        pilot.capture(simT, dt);
+        pilot.capture(simT, dt, true);                // read the model frame back at once (KeiSim's closed loop)
         pipeline.render(scene, camera, sunDir, simT);
         pilot.after(dt);
         await pilot.idle();

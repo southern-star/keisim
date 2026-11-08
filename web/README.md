@@ -40,7 +40,7 @@ cd web && node tools/serve.mjs                               # → http://localh
 
 * `?town=curve_<種類>_v3`: `lines`（白線あり）、`edge`（外側線だけ）、`nolines`（白線なし）、`nolines_guard`（白線なし・ガードレール）、`lines_guard`（白線・ガードレール）。建物なしは `<種類>_nobld`（例 `?town=curve_nolines_guard_nobld_v3`）。
 * `?town=curve_weak_w1`（白線なし）、`?town=curve_weak_lines_w1`（白線あり）: 弱点の試験コース。
-* `?pilot=1` を付けると、KeiPilot がブラウザの中でコースを走ります。
+* `?pilot=mc`（KeiPilot Mc）か `?pilot=1`（v0.10）を付けると、KeiPilot がブラウザの中でコースを走ります。Mc は、ガードレールの急カーブをこのコースとは別の道で学習しています。
 
 任意の静的サーバで動きます（ES modules なので `file://` 不可）。three.js とフォントは jsDelivr / Google Fonts から読み込みます。
 `npm install` しておくと、`serve.mjs` と `shot.mjs` は `node_modules` の three.js を使います（オフラインや CDN が塞がれた環境向け）。
@@ -212,7 +212,7 @@ cd web && node tools/serve.mjs                    # → http://localhost:5174/?p
   - `?pace=0` を付けると、町は判断を待ちません（前の動き）。
 - モデルの重みは float16 で保存し、グラフの中で float32 に戻します（30 MB、計算は float32）。値は Release の重みと同じです。
 
-URL パラメータ: `?town=1001`（二段階の信号の町は `?town=1015-98782ab7`、札幌は `?town=osm_sapporo`）、`?q=low`（表示の画質。モデルの入力は常に medium）、`?ep=wasm` / `?ep=webgpu`（推論エンジンを固定）、`?pace=0.25`（モデルの判断に何秒までかかってよいか。それより長くかかるときは町の時間をゆっくり進めて待つ、既定 0.25。`?pace=0` で待たない）、`?model=<URL>`、`?traffic=0`（周りの車なし）、`?cars=20`（周りの車の台数）、`?cardetail=0`（周りの車を簡易な形で表示）、`?tdir=.towns`（`scripts/import_osm.py` が `web/.towns` に書き出した町、例 `?tdir=.towns&town=osm_nishioi`: 一方通行の道路は中心線の上の車線 1 本で、周りの車もその向きにだけ走ります）、`?ramp=N`（ランプのある町: N 本目のランプの手前から。`-1` でふつうの出発点）、`?ort=node_modules/onnxruntime-web/dist/`（onnxruntime-web を CDN ではなくこのサイトから読む。同じサイトの相対パスだけ。CDN に出られない環境のテスト用: `npm install --no-save onnxruntime-web@1.20.1`）
+URL パラメータ: `?town=1001`（二段階の信号の町は `?town=1015-98782ab7`、札幌は `?town=osm_sapporo`）、`?q=low`（表示の画質。モデルの入力は常に medium）、`?ep=wasm` / `?ep=webgpu`（推論エンジンを固定）、`?pace=0.25`（モデルの判断に何秒までかかってよいか。それより長くかかるときは町の時間をゆっくり進めて待つ、既定 0.25。HUD に「スロー ×0.5」などと出る。`?pace=0` で待たない）、`?model=<URL>`、`?traffic=0`（周りの車なし）、`?cars=20`（周りの車の台数）、`?cardetail=0`（周りの車を簡易な形で表示）、`?tdir=.towns`（`scripts/import_osm.py` が `web/.towns` に書き出した町、例 `?tdir=.towns&town=osm_nishioi`: 一方通行の道路は中心線の上の車線 1 本で、周りの車もその向きにだけ走ります）、`?ramp=N`（ランプのある町: N 本目のランプの手前から。`-1` でふつうの出発点）、`?ort=node_modules/onnxruntime-web/dist/`（onnxruntime-web を CDN ではなくこのサイトから読む。同じサイトの相対パスだけ。CDN に出られない環境のテスト用: `npm install --no-save onnxruntime-web@1.20.1`）
 
 ```bash
 node tools/pilot_check.mjs --town 1000 --sec 60   # headless Chrome で 60 秒（シミュレーション時間）走らせて記録を表示
@@ -228,6 +228,26 @@ GPU のない環境（SwiftShader）では町全体（1000 万ポリゴン）の
 家のない町はモデルにとって見慣れない絵ですが、town 1015 ではルートからのずれは 0.02 m のままでした。
 Linux では Vulkan を使い、GPU の WebGPU で推論します。フラグなしの headless Chrome の WebGPU は SwiftShader（CPU）で、1 回 6 秒かかります。
 ページ側も、SwiftShader の WebGPU しかないブラウザでは WASM を使います。
+
+### KeiPilot Mc（`?pilot=mc`）
+
+`?pilot=mc` を付けると、前向きの 2 台のカメラで運転する KeiPilot Mc（v0.11.0、[../docs/multicam.md](../docs/multicam.md)）が走ります。
+公開版: <https://southern-star.github.io/keisim/?pilot=mc>
+
+```bash
+uv run --with onnx --with onnxruntime scripts/export_onnx.py runs/keipilot_mc12/last.pt web/models/keipilot_mc.onnx
+#   （または Release v0.11.0 の keipilot_mc.onnx を web/models/ に置く）
+cd web && node tools/serve.mjs                    # → http://localhost:5174/?pilot=mc&town=1000
+node tools/pilot_check.mjs --pilot mc --town curve_weak_w1 --sec 90   # headless Chrome で（--images DIR でモデルへの入力画像も）
+```
+
+- モデルが見る 2 枚の画像は、学習に使った KeiView の画像と同じ作り方で描きます（`src/rig.js`）。
+  - 広角（円筒 180°）は、60° の面 3 枚を描いて、KeiSim と同じ貼り合わせの表で 1 枚にします。望遠（50°）はそのまま描きます。
+  - 画面は単眼版と同じ 100° の車載カメラです。右下に 2 台の画像と、それぞれの領域分割が出ます。
+- 推論は単眼版の約 2 倍、モデル用の描画は約 3 倍の重さです。判断が間に合わないときは、町の時間をゆっくり進めて待ちます（上の `?pace`）。
+- 安全層は、BrakeHold / RedHold に譲りのための YieldHold を加えたものです（`keipilot/agent.py`）。保持しているあいだ、HUD の目標速度の横に「（譲り待ち）」と出ます。
+- HUD のリンクで、同じ町の単眼版（`?pilot=1`）と行き来できます。
+- ONNX の画像の入力は `imgs`（1 × カメラの数 × 3 × 160 × 320）です。単眼のモデルは `img` で、どちらも同じ `src/pilot.js` で動きます。
 
 ## 構成
 

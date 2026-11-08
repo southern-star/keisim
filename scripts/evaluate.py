@@ -26,7 +26,7 @@ import time
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from keisim.config import TOWN_STYLES  # noqa: E402
+from keisim.config import CAMERA_RIGS, TOWN_STYLES  # noqa: E402
 
 SUITES = {
     # seen town layouts (towns used for data collection), new routes/traffic
@@ -91,9 +91,9 @@ def run_route(job):
     (town, ep), args, idx = job
     import cv2
     cv2.setNumThreads(1)
-    from keisim.config import EnvConfig, town_config
+    from keisim.config import EnvConfig, set_camera_rig, town_config
     from keisim.env import KeiEnv
-    cfg = EnvConfig()
+    cfg = set_camera_rig(EnvConfig(), args.get("rig", "front"))
     osm = None
     if isinstance(town, str):                        # a real town (keisim/realworld.py), built once per worker
         global _TOWN
@@ -111,6 +111,8 @@ def run_route(job):
     cfg.renderer = args.get("renderer", "keisim")
     cfg.keiview_roads = args.get("keiview_roads", "plain")
     cfg.expert_yield_visible = bool(args.get("yield_visible", False))
+    cfg.traffic.ego_patience_s = float(args.get("ego_patience", 0.0))
+    cfg.traffic.light_past_line = bool(args.get("npc_past_line", False))
     if args.get("dense"):
         cfg.traffic.vehicle_spacing = (20.0, 28.0)
         cfg.traffic.ped_spacing = (14.0, 20.0)
@@ -134,7 +136,8 @@ def run_route(job):
         global _AGENT
         if "_AGENT" not in globals():
             from keipilot.agent import KeiPilotAgent
-            _AGENT = KeiPilotAgent(args["ckpt"], brake_hold=args.get("brake_hold", False), red_hold=args.get("red_hold", False))
+            _AGENT = KeiPilotAgent(args["ckpt"], brake_hold=args.get("brake_hold", False), red_hold=args.get("red_hold", False),
+                                   yield_hold=args.get("yield_hold"))
         agent = _AGENT
         agent.reset()
     obs = env.reset(town_seed=osm if osm is not None else town, episode_seed=ep, route_length=args["route_length"],
@@ -163,7 +166,8 @@ def run_route(job):
             action = env.expert_action()
             mp_ = None
         else:
-            action, mp_ = agent.act(obs["rgb"], obs["command"], obs["target_point"], e.v, dt, with_seg=video is not None)
+            action, mp_ = agent.act(obs.get("rgbs", obs["rgb"]), obs["command"], obs["target_point"], e.v, dt,
+                                    with_seg=video is not None)
         plan = env.plan
         log.append((round(env.elapsed, 1), round(float(env.s_ego), 1), round(float(e.v), 2), plan["reason"],
                     int(plan["tl_state"]), None if mp_ is None else int(mp_["tl"]),
@@ -330,6 +334,12 @@ def main():
                          "--agent expert, and the expert's reasons in the logs; tag suffix _yv")
     ap.add_argument("--brake_hold", action="store_true", help="safety layer: no throttle burst right after firm braking")
     ap.add_argument("--red_hold", action="store_true", help="safety layer: no creeping while the model sees red/yellow")
+    ap.add_argument("--yield_hold", type=float, nargs="*", default=None, metavar="X",
+                    help="safety layer: stand until a car with priority the model's yield_tta head saw coming has passed "
+                         "(keipilot.agent.YieldHold), held only from a yield the model itself began; no values: its defaults, "
+                         "or ON MARGIN V STAND [BRAKE [NONE_P AFTER_M]] (BRAKE < 0: also without the model's own yield, "
+                         "as first evaluated; NONE_P AFTER_M: only where the light head sees no light with this "
+                         "probability, within AFTER_M m of the last stand); tag suffix _yh")
     ap.add_argument("--town_style", default=None, choices=list(TOWN_STYLES),
                     help="default: classic (long2: varied, long3: twophase)")
     ap.add_argument("--blocked_timeout", type=float, default=None, help="s without progress (default 90, long2 180)")
@@ -343,7 +353,20 @@ def main():
     ap.add_argument("--episode0", type=int, default=100, help="--osm_town: first episode seed")
     ap.add_argument("--via_ramp", type=int, default=None, choices=[0, 1],
                     help="routes that take a ramp (route.ramp_route; ramps towns; default 0, ramp_routes: 1)")
+    ap.add_argument("--rig", default=None, choices=list(CAMERA_RIGS),
+                    help="camera rig (keisim CAMERA_RIGS); default: the model's (front for the expert)")
+    ap.add_argument("--ego_patience", type=float, default=0.0,
+                    help="s the ego may stand before the NPCs that give way to it stop waiting for it "
+                         "(TrafficConfig.ego_patience_s; 0: they wait for ever); suffix _pat<S>")
+    ap.add_argument("--npc_past_line", action="store_true",
+                    help="NPCs standing a little past their stop line still obey its light "
+                         "(TrafficConfig.light_past_line); suffix _npcline")
+    ap.add_argument("--only", nargs="+", default=None, metavar="TOWN:EP",
+                    help="only these routes of the suite (e.g. 1018:9400), for checks on picked routes; give --out")
     args = ap.parse_args()
+    if args.rig is None:
+        from keipilot.agent import checkpoint_rig
+        args.rig = checkpoint_rig(args.ckpt) if args.agent == "model" else "front"
     if args.osm_town and args.osm_bbox is None:
         from keisim.realworld import OSM_BOXES
         if args.osm_town not in OSM_BOXES:
@@ -370,18 +393,26 @@ def main():
         tag += "_hold"
     if args.red_hold:
         tag += "_red"
+    if args.yield_hold is not None:
+        tag += "_yh" + "".join(f"_{x:g}" for x in args.yield_hold)
     if args.yield_visible:
         tag += "_yv"
     if args.osm_town:
         jobs = [(args.osm_town, args.episode0 + e) for e in range(args.routes)]
     else:
         jobs = SUITES[args.suite]
+    if args.only:
+        if not args.out:
+            ap.error("--only needs --out (a part of the suite must not take the suite's file name)")
+        keep = {tuple(int(x) for x in r.split(":")) for r in args.only}
+        jobs = [j for j in jobs if tuple(j) in keep]
     suffix = ("_dense" if args.dense else "") + ("" if args.weather == "random" else f"_{args.weather}") + \
         ("_keiview" if args.renderer == "keiview" else "") + \
         ("_kvdetail" if args.renderer == "keiview" and args.keiview_roads == "detail" else "") + \
         ("" if args.town_style == suite_style else f"_{args.town_style}") + \
         ("" if int(args.jam_fixes) == suite_fixes else ("_jamfix" if args.jam_fixes else "_nojamfix")) + \
-        ("" if args.blocked_timeout == suite_timeout else f"_wait{args.blocked_timeout:.0f}")
+        ("" if args.blocked_timeout == suite_timeout else f"_wait{args.blocked_timeout:.0f}") + \
+        (f"_pat{args.ego_patience:g}" if args.ego_patience else "") + ("_npcline" if args.npc_past_line else "")
     if args.osm_town:
         suffix = suffix.replace("_twophase", "")
         fail_dir = os.path.join("runs", "failures", args.osm_town, f"{tag}{suffix}")
@@ -391,9 +422,11 @@ def main():
          "max_steps": args.max_steps, "videos": args.videos, "video_dir": args.video_dir, "tag": tag,
          "dense": args.dense, "renderer": args.renderer, "keiview_roads": args.keiview_roads, "fail_dir": fail_dir,
          "brake_hold": args.brake_hold,
+         "yield_hold": None if args.yield_hold is None else (tuple(args.yield_hold) or True),
          "red_hold": args.red_hold, "town_style": args.town_style, "jam_fixes": bool(args.jam_fixes),
          "blocked_timeout": args.blocked_timeout, "osm_bbox": args.osm_bbox, "yield_visible": bool(args.yield_visible),
-         "via_ramp": bool(args.via_ramp)}
+         "rig": args.rig, "ego_patience": args.ego_patience, "via_ramp": bool(args.via_ramp),
+         "npc_past_line": args.npc_past_line}
     t0 = time.time()
     ctx = mp.get_context("spawn")
     with ctx.Pool(args.workers) as pool:

@@ -53,13 +53,18 @@ def main():
     for f in args.files:
         with open(f) as fh:
             d = json.load(fh)
-        runs.append((d["args"], d["results"]))
+        runs.append((d["args"], d["results"], f))
 
     def who(a):
-        return os.path.splitext(os.path.basename(a["ckpt"]))[0] if a["agent"] == "model" else "expert"
-    differ = {k: len({fn(a) for a, _ in runs}) > 1 for k, fn in
+        if a["agent"] != "model":
+            return "expert"
+        base = os.path.basename(a["ckpt"])
+        if base in ("last.pt", "best.pt"):          # runs/keipilot_mc11/last.pt -> keipilot_mc11
+            return os.path.basename(os.path.dirname(a["ckpt"]))
+        return os.path.splitext(base)[0]
+    differ = {k: len({fn(a) for a, *_ in runs}) > 1 for k, fn in
               (("who", who), ("renderer", lambda a: a["renderer"]), ("weather", lambda a: a["weather"]))}
-    for a, results in runs:
+    for a, results, f in runs:
         light = "陰影なし" if a.get("guardrail_light") == "flat" else f"ep{a['episode']}"
         name = " ".join([who(a)] * differ["who"] + [a["renderer"]] * differ["renderer"] + [a["weather"]] * differ["weather"]
                         + [light])
@@ -67,6 +72,8 @@ def main():
             if r["variant"] != args.variant or "pieces" not in r:
                 continue
             col = f"{name} {'逆' if r['reverse'] else '正'}"
+            if col in cols:          # another file with the same model, renderer, weather and episode
+                col += f" ({os.path.splitext(os.path.basename(f))[0]})"
             cols.append(col)
             for c in r["pieces"]:
                 key, label = case_of(c)

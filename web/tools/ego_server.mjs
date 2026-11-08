@@ -6,6 +6,8 @@
 //   {"id":2,"op":"render","cam":{"pos":[x,y,z],"fwd":[fx,fy,fz],"vfov":61.6},"t":12.3,
 //    "veh":[[id,x,y,yaw,L,W,H,r,g,b,kind,brake],...],"ped":[[id,x,y,yaw,h,...9 rgb...,phase],...],
 //    "labels":true,"reset":false}                           -> {"id":2,"ok":true,"rgb":"<b64>","sem":"<b64>","w":320,"h":160,"ms":6.1}
+//   a camera rig adds "cams":[{"pos":..,"fwd":..,"vfov":..,"w":150,"h":230,"face":true},...] (--w / --h at least as
+//   large as every camera; "cam" still places the sky and the shadows) -> {"id":2,"ok":true,"views":[{"rgb":..,"sem":..,"w":..,"h":..},...],"ms":..}
 //   {"id":3,"op":"quit"}
 // Images are raw RGB / uint8 class ids in OpenGL row order (bottom-up), base64 encoded.
 import fs from 'node:fs';

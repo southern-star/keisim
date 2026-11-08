@@ -135,23 +135,58 @@ class TrafficConfig:
     stuck_hidden_s: float = 45.0
     view_half_deg: float = 60.0
     view_dist: float = 110.0
+    # Patience with a standing ego: a car that gives way to the ego stops waiting for it once the ego has stood still
+    # this long before the crossing (s; 0: it waits as long as the ego stands). Without it, an NPC at its 止まれ waits
+    # for a standing ego for ever, and a model that cannot tell a standing car from a coming one waits for the NPC:
+    # neither goes (about three quarters of mc5b's long stands in Sapporo). Drivers go when the other car stays put.
+    ego_patience_s: float = 0.0
+    # An NPC standing or creeping (< 1 m/s) up to NPC_OVER m past its stop line still obeys the light there (and the
+    # box rule). Without it, one that had stopped with its front a little over the line at green (in a queue, or
+    # braking for the box rule) counted as past the line and drove into the junction at red (grid long3d_dense
+    # 1018/9500: into the ego setting off at its green). Off by default: the old evaluations stay reproducible.
+    light_past_line: bool = False
 
 
 @dataclass
 class CameraConfig:
     width: int = 320
     height: int = 160
-    fov_deg: float = 100.0
+    fov_deg: float = 100.0            # horizontal field of view
     x: float = 0.6                    # forward offset from vehicle centre (m)
     y: float = 0.0
     z: float = 1.55                   # mount height (m)
     pitch_deg: float = 8.0            # downward pitch
     max_dist: float = 110.0           # far clipping distance for objects
     supersample: int = 2              # render at N x resolution then downsample
+    name: str = "front"               # the camera's name in a rig (CAMERA_RIGS)
+    yaw_deg: float = 0.0              # mounting yaw, + to the left (side cameras)
+    # pinhole, or cylindrical (keisim/render/rig.py): fov_deg around a vertical axis, fov_deg / width per column and
+    # as much per row at the horizon (rows are tan(elevation)); pitch_deg is then the elevation below the horizon of
+    # the middle row, so the horizon stays a straight line
+    projection: str = "pinhole"
     # guardrails (curve test course): "sun" shades them like every face (Lambert, the sun's direction); "flat" lights
     # every guardrail face as if the sun stood 45 deg in front of it at its elevation, whatever its azimuth (both
     # rails of a road look the same; scripts/curve_test.py --guardrail_light)
     guardrail_light: str = "sun"
+
+
+# Camera rigs: EnvConfig.camera, then EnvConfig.extra_cameras. "front" is the one camera of KeiPilot up to v0.10.
+# "wide_narrow" is a forward pair like openpilot's road cameras: a cylindrical 180 deg wide camera, which sees the cars
+# with priority from the 止まれ lines (from the wait position, 30 m up the priority road, 100 deg sees none and 165 deg
+# 85 %: tools/sightline.py), and a 50 deg narrow camera for distant lights and cars (2.5 times the size at the centre).
+CAMERA_RIGS = {
+    "front": (CameraConfig(),),
+    "wide_narrow": (CameraConfig(name="wide", projection="cylindrical", fov_deg=180.0),
+                    CameraConfig(name="narrow", fov_deg=50.0, pitch_deg=2.0)),
+}
+
+
+def set_camera_rig(cfg, rig="front"):
+    """Give EnvConfig `cfg` the cameras of CAMERA_RIGS[rig] (fresh copies); returns cfg."""
+    from dataclasses import replace
+    cams = [replace(c) for c in CAMERA_RIGS[rig]]
+    cfg.camera, cfg.extra_cameras = cams[0], tuple(cams[1:])
+    return cfg
 
 
 # Town styles (TownConfig overrides). "classic" is every suite up to KeiPilot v0.5; "varied" mixes block lengths
@@ -211,6 +246,8 @@ class EnvConfig:
     town: TownConfig = field(default_factory=TownConfig)
     traffic: TrafficConfig = field(default_factory=TrafficConfig)
     camera: CameraConfig = field(default_factory=CameraConfig)
+    # cameras rendered besides `camera` (set_camera_rig); with any, obs["rgbs"] / obs["segs"] hold every camera's image
+    extra_cameras: tuple = ()
     dt: float = 0.05                  # physics step (20 Hz)
     action_repeat: int = 2            # control at 10 Hz
     route_length: tuple = (450.0, 800.0)
@@ -229,3 +266,8 @@ class EnvConfig:
     # horizontal field of view, not behind a building; Traffic.visible_from), so its labels follow from the image:
     # with all of them, a car outside the 100 deg view made the expert wait where the image looked clear.
     expert_yield_visible: bool = False
+
+    @property
+    def cameras(self):
+        """Every camera of the rig: camera first, then extra_cameras."""
+        return (self.camera,) + tuple(self.extra_cameras)

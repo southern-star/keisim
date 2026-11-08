@@ -18,7 +18,10 @@ def main():
     val = ck.get("val", {})
     info = {"source": os.path.basename(os.path.dirname(src)) + "/" + os.path.basename(src),
             "epoch": ck.get("epoch"), "val_ADE_m": val.get("ADE_m"), "val_tl_acc": val.get("tl_acc")}
-    torch.save({"model": model, "model_cfg": ck.get("model_cfg", {}), "info": info}, dst)
+    out = {"model": model, "model_cfg": ck.get("model_cfg", {}), "info": info}
+    if "rig" in ck:                     # the camera rig (keipilot.agent.checkpoint_rig); front-camera exports have none
+        out["rig"] = ck["rig"]
+    torch.save(out, dst)
     print(f"{dst}: {os.path.getsize(dst) / 1e6:.1f} MB", info)
 
 
