@@ -159,7 +159,8 @@ async function build() {
       ? '弱点の試験コースです。KeiPilot v0.10 が KeiSim で間違えたカーブ（ガードレールが内側・外側・両側、低いガードレール、180 度）を 1 本の道に並べています。'
       : '交差点のない 1 本道の試験コースです。半径 15〜150 m の左右のカーブが続きます。';
     if (sum) sum.insertAdjacentHTML('afterbegin', `<p class="tp">${what}この道は「${variant}」（${courseKm} km）です。` +
-      '白線のない道の急カーブで、モデルがガードレールに引き寄せられないかを見ます。交差点がないので、ナビはいつも直進です。</p>');
+      '白線のない道の急カーブで、モデルがガードレールに引き寄せられないかを見ます。交差点がないので、ナビはいつも直進です。' +
+      (PILOT_MC ? 'Mc 版は、ガードレールの急カーブをこの試験コースとは別の道で学習しています。' : '') + '</p>');
   } else if (PILOT && town.data && town.data.cfg && town.data.cfg.signal_mode === 'two_phase') {
     const kana = document.querySelector('#intro .kana'); if (kana) kana.textContent = 'KeiPilot · 二段階の信号の町';
     const sum = $('townsum');

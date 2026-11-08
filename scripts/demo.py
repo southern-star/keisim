@@ -4,6 +4,7 @@
   python scripts/demo.py --agent expert --out runs/demo_expert.mp4
   python scripts/demo.py --agent model --ckpt runs/keipilot/best.pt --town 1001 --episode 7
   python scripts/demo.py --agent model --ckpt runs/keipilot.pt --osm_town osm_sapporo --episode 110 --route 600
+  python scripts/demo.py --agent model --ckpt runs/keipilot_mc.pt --osm_town osm_sapporo --episode 110 --route 600   # KeiPilot Mc
 """
 from __future__ import annotations
 
@@ -17,9 +18,11 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from keisim.config import TOWN_STYLES, EnvConfig, town_config  # noqa: E402
+from keisim.config import CAMERA_RIGS, TOWN_STYLES, EnvConfig, set_camera_rig, town_config  # noqa: E402
 from keisim.env import KeiEnv  # noqa: E402
 from keisim.viz import VideoWriter, colorize_seg, compose_dashboard, info_lines  # noqa: E402
+
+MC_YIELD_HOLD = (4, 1, 3.5, 4, 0.5, 0.5, 10)     # KeiPilot Mc's YieldHold, as it is evaluated (evaluate.py --yield_hold)
 
 
 def main():
@@ -36,7 +39,12 @@ def main():
     ap.add_argument("--renderer", default="keisim", choices=["keisim", "keiview"], help="camera renderer")
     ap.add_argument("--keiview_roads", default="plain", choices=["plain", "detail"],
                     help="KeiView road surface: plain (as trained) or detail (markings, signs, ...)")
-    ap.add_argument("--no_safety", action="store_true", help="model: without the BrakeHold / RedHold safety layers")
+    ap.add_argument("--no_safety", action="store_true",
+                    help="model: without the safety layers (BrakeHold / RedHold, and YieldHold for camera rigs)")
+    ap.add_argument("--rig", default=None, choices=list(CAMERA_RIGS),
+                    help="camera rig (keisim CAMERA_RIGS); default: the model's (front for the expert)")
+    ap.add_argument("--yield_hold", type=float, nargs="*", default=None, metavar="X",
+                    help="model: the YieldHold safety layer (keipilot.agent.YieldHold: on margin v stand [brake [none_p after_m]]); default: KeiPilot Mc's for camera-rig models, none for one camera")
     ap.add_argument("--town_style", default="classic", choices=list(TOWN_STYLES),
                     help="twophase: Japan's two-phase signals, right turns wait for gaps in the oncoming traffic; "
                          "roadtypes: twophase with main roads, residential roads without sidewalks and alleys")
@@ -52,8 +60,14 @@ def main():
             ap.error(f"--osm_town {args.osm_town}: not in keisim.realworld.OSM_BOXES, give --osm_bbox S W N E")
         args.osm_bbox = list(OSM_BOXES[args.osm_town])
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+    if args.rig is None:
+        if args.agent == "model":
+            from keipilot.agent import checkpoint_rig
+            args.rig = checkpoint_rig(args.ckpt)
+        else:
+            args.rig = "front"
 
-    cfg = EnvConfig()
+    cfg = set_camera_rig(EnvConfig(), args.rig)
     cfg.renderer = args.renderer
     cfg.keiview_roads = args.keiview_roads
     town = args.town
@@ -73,7 +87,11 @@ def main():
     agent = None
     if args.agent == "model":
         from keipilot.agent import KeiPilotAgent
-        agent = KeiPilotAgent(args.ckpt, brake_hold=not args.no_safety, red_hold=not args.no_safety)
+        yield_hold = None
+        if not args.no_safety:
+            yield_hold = ((tuple(args.yield_hold) or True) if args.yield_hold is not None
+                          else MC_YIELD_HOLD if args.rig != "front" else None)
+        agent = KeiPilotAgent(args.ckpt, brake_hold=not args.no_safety, red_hold=not args.no_safety, yield_hold=yield_hold)
         agent.reset()
     vw = VideoWriter(args.out, fps=10)
     cam = env.assets.camera
@@ -91,15 +109,19 @@ def main():
             lines = info_lines(e.v, plan["target_speed"], obs["command"], tl_gt=plan["tl_state"], reason=plan["reason"])
             title = "privileged expert"
         else:
-            action, mp = agent.act(obs["rgb"], obs["command"], obs["target_point"], e.v, dt, with_seg=True)
+            action, mp = agent.act(obs.get("rgbs", obs["rgb"]), obs["command"], obs["target_point"], e.v, dt, with_seg=True)
             paths_cam = [(plan["path"], (80, 255, 80)), (mp["path"], (255, 80, 255))]
             seg_panel = colorize_seg(mp["seg"])
             lines = info_lines(e.v, mp["target_speed"], obs["command"], tl_pred=mp["tl"], tl_gt=plan["tl_state"],
                                extra=[f"expert target {plan['target_speed'] * 3.6:5.1f} km/h"])
-            title = "KeiPilot (camera only)  green=expert  magenta=model"
+            title = ("KeiPilot (camera only)" if args.rig == "front" else f"KeiPilot Mc ({args.rig})") + "  green=expert  magenta=model"
         lines.append(f"t={env.elapsed:5.1f}s  RC={env.metrics()['RC'] * 100:4.1f}%")
         bev = env.render_bev(paths=paths_cam)
         frame = compose_dashboard(obs["rgb"], bev, seg_panel, lines, cam=cam, pose=e.pose, paths=paths_cam, title=title)
+        x = 640                                 # camera rigs: the main view is the first camera, the others small at its top right
+        for img in obs.get("rgbs", [])[1:]:
+            x -= 164
+            frame[4:84, x:x + 160] = cv2.resize(img, (160, 80), interpolation=cv2.INTER_AREA)
         vw.write(frame)
         if args.show:
             cv2.imshow("KeiSim", frame)
