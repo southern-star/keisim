@@ -19,7 +19,9 @@ from .roadnet import Town
 from .route import ramp_route, random_route
 from .world import World
 
-PENALTY = {"vehicle": 0.60, "pedestrian": 0.50, "static": 0.65, "red_light": 0.70, "off_road": 0.80}
+PENALTY = {"vehicle": 0.60, "pedestrian": 0.50, "static": 0.65, "red_light": 0.70, "off_road": 0.80, "crosswalk": 0.70}
+CW_FAIL = 1.5      # s: crosswalks at signals: the ego's front entering a zebra while someone is on its stretch of it or
+#                    gets there within this long (Pedestrians.crosswalk_blocked) is a "crosswalk" infraction
 
 
 class TownAssets:
@@ -270,6 +272,12 @@ class KeiEnv:
                 if s_front_prev < s_stop <= s_front:
                     if self.world.town.signal_state_for_lane(lid, self.world.t) == TL_RED:
                         self._infraction("red_light", lid)
+            # not giving way at a zebra (crosswalks at signals)
+            if self.world.peds.cw_on:
+                for s0c, _, ci, u0, u1, _ in self.route.crossings:
+                    if s_front_prev < s0c <= s_front and \
+                            self.world.peds.crosswalk_blocked(ci, u0, u1, self.world.t, CW_FAIL):
+                        self._infraction("crosswalk", ci)
             # progress
             if self.s_ego > self.progress:
                 self.progress = min(self.s_ego, self.route.s_end)

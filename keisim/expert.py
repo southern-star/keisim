@@ -14,7 +14,7 @@ import numpy as np
 from .config import TL_GREEN, TL_NONE, TL_RED, TL_YELLOW
 from .geometry import world_to_local
 from .route import LC_CHECK, LC_PUSH, LC_PUSH_TO, change_room, link_map
-from .traffic import PASS_SPEED, YIELD_GAP, Traffic, corridor_gaps, vehicle_circles
+from .traffic import CW_MARGIN, CW_REACH, PASS_SPEED, YIELD_GAP, Traffic, corridor_gaps, vehicle_circles
 
 PATH_S = np.arange(1, 11) * 2.0          # label waypoints every 2 m up to 20 m
 LABEL_VERSION = 7                        # 3: yellow per traffic law; 4: at yellow, stop whenever the ego still can;
@@ -342,6 +342,34 @@ class Expert:
                             if tta < clear_time(d_y, v, ego.LENGTH) + LATE_MARGIN:
                                 target, reason = 0.0, "yield"
                 break
+
+        # --- crosswalks at signals (TrafficConfig.crosswalks; 道路交通法 38 条): the ego gives way to people on a
+        # zebra its route crosses, or setting off from its kerb, who would reach the ego's stretch of it within
+        # CW_REACH s (Pedestrians.crosswalk_blocked); it stops with its front bumper CW_MARGIN before the zebra.
+        # A turn that waits at its connector's wait point (a right turn at a two-phase signal) holds there instead
+        # while the zebra of its exit is taken within CW_REACH s plus the drive on to it, so that it does not stand
+        # across the oncoming lanes. Past the zebra's start (committed) the corridor check alone stops for someone
+        # in the way. Independent of the ego speed: part of target_nolight.
+        if peds.cw_on and route.crossings:
+            s_front = s + hl
+            for s0c, _, ci, u0, u1, kc in route.crossings:
+                d = s0c - s_front
+                if d > 45.0:
+                    break
+                if d < -0.5:
+                    continue
+                stop_at = None
+                conn = w.town.lanes[route.lanes[kc - 1]] if kc > 0 else None
+                if conn is not None and conn.kind == "conn" and conn.yields and conn.wait_s is not None:
+                    d_wait = route.offsets[kc - 1] + conn.wait_s - route.s0[kc - 1] - s_front
+                    if d_wait >= -0.5 and peds.crosswalk_blocked(ci, u0, u1, w.t, CW_REACH + (d - d_wait) / 3.0):
+                        stop_at = max(d_wait, 0.0)
+                if stop_at is None and peds.crosswalk_blocked(ci, u0, u1, w.t):
+                    stop_at = d - CW_MARGIN
+                if stop_at is not None:
+                    v_c = stop_profile(stop_at, self.B_COMF)
+                    if v_c < target:
+                        target, reason = v_c, "crosswalk"
 
         # --- 止まれ (Town.from_graph: the minor road's approaches to priority crossings, Lane.stop_sign_s). The ego
         # stops with its front bumper STOP_SIGN_MARGIN before the painted line (the line stays in the camera's view),

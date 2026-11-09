@@ -787,6 +787,7 @@ data/                    収集データ (リポジトリ外, 約 3 GB。scripts
   - NPC は、黄で 3.5 m/s² で止まれるなら止まります。
 * **交通**: NPC は IDM + カーブ減速 + 信号遵守 + 前方コリドー (歩行者・自車も考慮) + 「出口が詰まっていたら交差点に入らない」。
   long2 では、さらに「交差点の中に別の方向の車がいたら入らない」と、カメラに映らない所で詰まった車の移動が加わります。
+  `--crosswalks` では、右左折のときに横断歩道を渡る人に譲ります (下の「横断歩道を渡る人と歩行者用の信号」)。
   前方コリドーの探索は格子で近くの車だけに絞るので、NPC 500 台の街でも実時間の 2.4 倍で動きます。
 * **街のタイプ**: classic (区画 70〜100 m、今までのすべてのスイート)、varied (区画 70〜200 m を混ぜる、long2)、twophase (varied + 2 現示の信号と右折待ち、long3)、roadtypes (twophase + 道路の種類、下)。
   KeiView には `town_<seed>-<設定のハッシュ>.json` として別々に書き出します。
@@ -859,6 +860,61 @@ data/                    収集データ (リポジトリ外, 約 3 GB。scripts
   - **ブラウザ版** (`web/?pilot=1&town=2000-8c5d282b`、メニューの「片側2車線とランプ」): ramps の街 2000 と 2002 を同梱し、KeiSim の車線
     (エクスポートの `lane_graph`) のまま、ナビのルートの車線変更とランプ、周りの車の車線変更とランプ、道路ごとの制限速度、細い道のカーブの
     譲り合いを JavaScript に移しました (`web/src/lanes.js`、詳しくは [web/README.md](web/README.md))。ランプの手前から走り始めます。
+* **横断歩道を渡る人と歩行者用の信号** (`--crosswalks P`、`TrafficConfig.crosswalks`): 2 現示の信号交差点の横断歩道を、人が歩行者用の信号に合わせて渡ります。
+  今までは横断歩道を描いてあるだけで、人は道の途中のどこでも渡っていました。右左折する車 (エキスパートと NPC) は、横断歩道を渡る人に譲ります。
+  大きな交差点 (片側 2 車線の交差点、スクランブル、向こう側の見えにくい交差点) を作る前の、最初の一歩です。
+  - **横断歩道** (`Town.ped_crossings`): 2 現示の信号交差点で、道路の端の両側に歩道か路側帯がある所です。
+    twophase の街 1012 では 20 か所すべて、roadtypes の街 1105 では 44 か所のうち 34 か所 (路地には歩道がありません) です。
+    classic の街 (方向ごとの現示) にはありません。どの車線が横断歩道のどこを通るかは `Town.lane_crossings` にあります。
+  - **歩行者用の信号** (`Junction.ped_signal`): 横断歩道と同じ向きに走る車が青のあいだ青で、最後の 4 秒は点滅 (`TrafficConfig.ped_flash`)、そのあとは赤です。
+    横断歩道を横切る向きの車が青になるまでに、黄と全赤のぶん (5 秒) が空きます。
+  - **人**:
+    - 歩道を歩いて横断歩道まで来た人は、確率 `P` でそこで待ちます。青になってから 0.3〜3 秒で (人ごとに違う) 渡り始めます。
+    - 渡りきれる時間が残っていないときは、次の青まで待ちます (急いでも 1.9 m/s)。15 % の人は、点滅でも急いで渡り始めます。
+    - ほかに、横断歩道ごとに平均 1 人 (`TrafficConfig.crosswalk_spawn`) の「角の人」がいます。渡っては 3〜45 m 歩いて戻り、また渡ります。
+      自車のルートが曲がる交差点の出口の横断歩道には、3 倍います。
+    - 歩道のない道 (路側帯を歩く道) では、道路の端から 0.3 m 外で待ちます。路側帯で待つと、曲がって入ってくる車の通り道にかかるためです。
+      最初は、路側帯で待つ人に自車が譲り、その自車を対向の車が待ち、その車が横断歩道をふさいで人が渡れない、という止まり方をしました。
+    - 横断歩道の上で、止まっている車に 3 秒ふさがれた人は、渡り始めた側へ戻って、次の青を待ちます (`CW_STALL`)。
+      交差点に詰まって横断歩道の上で止まった車と、その車が待つ人が、互いに待ち続けないためです。
+    - 待っている人は、2 m/s より速い車が 1.5 秒以内に自分の渡る道の 1.8 m 以内に来るなら、青でも渡り始めません (`CW_HELD`)。
+      止まれない近さの車の前に出ないためです。最初は、左折で横断歩道の 2 m 手前にいたエキスパートの前で、そこへ着いた人が渡り始め、違反になりました。
+  - **車の譲り方** (エキスパートと NPC は同じ規則、`Pedestrians.crosswalk_blocked`):
+    - ルートが通る横断歩道で、自分の車線の幅 (左右に 0.3 m ずつ足す) を、渡っている人か渡り始める人が 4 秒以内に通るなら、横断歩道の 1 m 手前で止まります (道路交通法 38 条)。
+    - 右折は、横断歩道の手前ではなく、交差点の中の右折待ちの位置で待ちます。対向車線の上で止まらないためです。
+    - 待つ理由は "crosswalk" です (`collect.py` の reason 9)。
+  - **違反**: 自車の前が横断歩道に入るとき、自分の車線の幅に人がいるか 1.5 秒以内に来るなら、"crosswalk" の違反です (減点 0.70、`summarize.py` の zebra/km)。
+  - **今までと同じ**: `--crosswalks 0` (既定) では、今までの街とエピソードは変わりません。
+    twophase・roadtypes・ramps・classic の 600 ステップの記録 (自車、NPC、人、エキスパートの目標速度) が、main とビット単位で一致しました。
+  - **自車が曲がる交差点**: twophase の街 8 個 × 3 エピソード (600 m) で、エキスパートが横断歩道の人に譲ったのは、左折 26 回のうち 8 回、右折 26 回のうち 9 回でした。
+    角の人を 2 倍にしても、ほとんど変わりませんでした (修正の途中の版で、左折 7 → 10 回、右折 10 → 10 回)。
+    人は青になってから数秒で渡り始めるので、曲がる車が着くころには渡り終えていることが多いためです。
+  - **評価スイート**: `crosswalks` (long3 の街 1010〜1019、使っていないエピソード、2.5 km × 20 本) と `crosswalks_sub`
+    (suburban の街 2000〜2009、片側 2 車線の幹線の長い横断歩道) です。どちらも `--crosswalks 0.7` が既定です。
+    `crosswalk_yield_s` は、エキスパートの計画が横断歩道で譲っていた秒数です (誰が運転していても数えます)。
+    - **エキスパート** (`runs/eval/expert_crosswalks*.json`):
+
+      | スイート | 完走 | 違反 | 平均速度 | 横断歩道で譲った時間 (譲ったルート) |
+      |---|---|---|---|---|
+      | `crosswalks` (2 現示の街、50.1 km) | 20/20 | 0 | 11.4 km/h | 56 秒 (16 本) |
+      | `crosswalks_sub` (郊外の街、49.0 km) | 19/20 | 車 1 | 11.7 km/h | 112 秒 (17 本) |
+      | 参考: `suburban` (横断歩道を渡る人なし) | 19/20 | 車 1 | 13.1 km/h | — |
+
+      `crosswalks_sub` の 1 本は、街の端のカーブ (信号も横断歩道もない) で、渋滞に並んで止まっていた自車に、対向から曲がってきたトラックの車体がかかったものです。
+      `suburban` スイートの 1 本 (生活道路のカーブでのトラックとの接触) と同じ種類で、横断歩道とは関係がありません。
+      郊外の街で譲る時間が長いのは、片側 2 車線の幹線の横断歩道が長いためだと考えています。
+    - **KeiPilot Mc (v0.11、横断歩道を渡る人を学習していない)**: クラウドの CPU では 2.5 km のルートに時間がかかりすぎるので、`crosswalks` スイートの同じ街とエピソードを 600 m にして、エキスパートと並べました
+      (`--route_length 600 --max_steps 4000`、`runs/eval/*_crosswalks_600m.json`)。
+
+      | 600 m × 20 本 | 完走 | 横断歩道の違反 | 歩行者との衝突 | DS |
+      |---|---|---|---|---|
+      | エキスパート | 20/20 | 0 | 0 | 1.000 |
+      | KeiPilot Mc | 17/20 | 3 本 | 2 本 | 0.888 |
+
+      - 3 本とも、横断歩道を渡っている人の前で止まらずに横断歩道へ入りました。そのうち 2 本は、そのまま人に当たりました。
+      - 残りの 1 本 (街 1012、エピソード 9801) は、混んだ道での時間切れです。エキスパートもこのルートに 400 秒のうち 377 秒かかっていて、横断歩道とは関係がありません。
+      - 普段のスイートの Mc は歩行者とほとんど当たらないので、横断歩道の人に譲ることは、まだ学習していない弱点です。次は、ここを学習する事例を集めます。
+  - ブラウザ版 (web/) の人は、まだ横断歩道を渡りません。
 * **レンダラ**: 地面は 1 枚の上面テクスチャを **厳密なホモグラフィ** で透視投影する（距離帯ごとにミップレベルを選択）。
   物体は低ポリゴンの凸パーツを、背面カリング + 近平面クリップ + ランバート陰影 + 距離フォグで描画する。
   ブレーキランプ・窓・信号灯はデカール。天候は晴れ / 曇り / 夕焼け / 霧 + ランダム化。
@@ -963,6 +1019,7 @@ uv run scripts/demo.py --agent model --ckpt runs/keipilot_mc.pt --town 1001 --ep
 uv run scripts/demo.py --agent expert --town 1000 --episode 3 --out runs/demo_expert.mp4
 uv run scripts/demo.py --agent model --ckpt runs/keipilot.pt --town_style twophase --town 1012 --episode 9200 --show   # 右折待ちのある街
 uv run scripts/demo.py --agent expert --town_style roadtypes --town 1105 --episode 55 --show   # 幹線道路・生活道路・路地のある街
+uv run scripts/demo.py --agent expert --town_style twophase --crosswalks 0.7 --town 1011 --episode 9005 --route 400 --show   # 横断歩道を渡る人に譲る
 
 # ベンチマーク (v0.5 の数字は安全層つき: --brake_hold --red_hold)
 uv run scripts/evaluate.py --agent model --ckpt runs/keipilot.pt --suite test --brake_hold --red_hold --videos 3
@@ -973,6 +1030,9 @@ uv run scripts/evaluate.py --agent model --ckpt runs/keipilot.pt --suite long --
 uv run scripts/evaluate.py --agent model --ckpt runs/keipilot.pt --suite long2 --dense --brake_hold --red_hold  # varied の街 + 交通の修正
 uv run scripts/evaluate.py --agent model --ckpt runs/keipilot.pt --suite long3 --dense --brake_hold --red_hold  # 2 現示の信号と右折待ち
 uv run scripts/evaluate.py --agent model --ckpt runs/keipilot.pt --suite long3b --dense --brake_hold --red_hold # 同じ街の別のルートと交通
+uv run scripts/evaluate.py --agent expert --suite crosswalks          # 横断歩道を渡る人 (--crosswalks 0.7 が既定)。片側 2 車線の街は --suite crosswalks_sub
+uv run scripts/evaluate.py --agent model --ckpt runs/keipilot_mc.pt --suite crosswalks --brake_hold --red_hold --yield_hold 4 1 3.5 4 0.5 0.5 10
+#   GPU なしで何本も並べるときは OMP_NUM_THREADS=1 を付ける (付けないと、ワーカーごとに全部のコアを使おうとして遅くなる)
 uv run scripts/summarize.py
 
 # 再現: データ収集 → BC → DAgger → 追加学習

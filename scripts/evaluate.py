@@ -61,6 +61,11 @@ SUITES = {
     # the road before the ramp, on its approach lane or beside it
     "ramp_routes": [(t, 9900 + e) for t in (2000, 2001, 2002, 2003, 2005, 2008, 2010, 2011, 2012, 2014)
                     for e in range(3)],
+    # crosswalks at signals (TrafficConfig.crosswalks): people cross on the zebras of two-phase signals with their
+    # light, turning cars give way. long3's towns, 2.5 km routes, episodes no other suite uses
+    "crosswalks": [(t, 9800 + e) for t in range(1010, 1020) for e in range(2)],
+    # the same in the suburban towns (片側2車線 main roads: wider zebras)
+    "crosswalks_sub": [(t, 9850 + e) for t in range(2000, 2010) for e in range(2)],
 }
 CAP_SCALE = {"classic": 1, "varied": 2, "twophase": 2, "roadtypes": 2, "suburban": 2, "ramps": 2}      # NPC count caps per town style
 # per-suite defaults for arguments left unset on the command line
@@ -81,6 +86,8 @@ SUITE_DEFAULTS["ramps"] = {**SUITE_DEFAULTS["long3"], "town_style": "ramps"}
 SUITE_DEFAULTS["ramp_routes"] = {"route_length": 600.0, "max_steps": 6000, "town_style": "ramps", "jam_fixes": True,
                                  "blocked_timeout": 180.0, "via_ramp": 1}
 SUITE_DEFAULTS["long3e"] = SUITE_DEFAULTS["long3f"] = SUITE_DEFAULTS["long3"]
+SUITE_DEFAULTS["crosswalks"] = {**SUITE_DEFAULTS["long3"], "crosswalks": 0.7}
+SUITE_DEFAULTS["crosswalks_sub"] = {**SUITE_DEFAULTS["long3"], "town_style": "suburban", "crosswalks": 0.7}
 
 
 _ENV = None
@@ -113,6 +120,7 @@ def run_route(job):
     cfg.expert_yield_visible = bool(args.get("yield_visible", False))
     cfg.traffic.ego_patience_s = float(args.get("ego_patience", 0.0))
     cfg.traffic.light_past_line = bool(args.get("npc_past_line", False))
+    cfg.traffic.crosswalks = float(args.get("crosswalks", 0.0))
     if args.get("dense"):
         cfg.traffic.vehicle_spacing = (20.0, 28.0)
         cfg.traffic.ped_spacing = (14.0, 20.0)
@@ -211,6 +219,8 @@ def run_route(job):
               "lane_changes": int(sum(1 for c in env.route.changes if c["s_b"] < env.s_ego)),
               "ramps": int(sum(1 for j in env.route.junctions
                                if env.world.town.lanes[j["lane"]].kind == "ramp" and j["s_out"] < env.s_ego))})
+    if env.world.peds.cw_on:      # crosswalks at signals: s the expert's plan gave way at a zebra (whoever drove)
+        m["crosswalk_yield_s"] = round(sum(1 for x in log if x[3] == "crosswalk") * dt, 1)
     if kv is not None:
         m["keiview_ms"] = {"town": kv_town_ms, "frames": len(kv_ms),
                            "mean": float(np.mean(kv_ms)) if kv_ms else None,
@@ -292,6 +302,9 @@ def summarize(results):
         **({"lane_changes": int(sum(r.get("lane_changes", 0) for r in results))}
            if any(r.get("lane_changes") for r in results) else {}),
         **({"ramps": int(sum(r.get("ramps", 0) for r in results))} if any(r.get("ramps") for r in results) else {}),
+        **({"crosswalk_yield_s": round(sum(r.get("crosswalk_yield_s", 0.0) for r in results), 1),
+            "routes_with_crosswalk_yield": int(sum(r.get("crosswalk_yield_s", 0.0) > 0 for r in results))}
+           if any("crosswalk_yield_s" in r for r in results) else {}),
     }
     kinds = {}
     for r in results:
@@ -361,6 +374,10 @@ def main():
     ap.add_argument("--npc_past_line", action="store_true",
                     help="NPCs standing a little past their stop line still obey its light "
                          "(TrafficConfig.light_past_line); suffix _npcline")
+    ap.add_argument("--crosswalks", type=float, default=None,
+                    help="crosswalks at signals: the chance that a person at a two-phase signal's road end crosses on "
+                         "the zebra with the pedestrian light; turning cars give way (TrafficConfig.crosswalks; "
+                         "default: the suite's, 0 for the existing ones); suffix _cw<P> when it differs")
     ap.add_argument("--only", nargs="+", default=None, metavar="TOWN:EP",
                     help="only these routes of the suite (e.g. 1018:9400), for checks on picked routes; give --out")
     args = ap.parse_args()
@@ -376,8 +393,9 @@ def main():
         SUITE_DEFAULTS["osm"] = {"town_style": "twophase", "jam_fixes": True, "blocked_timeout": 180.0}
         args.suite = "osm"
     dflt = {"route_length": 600.0, "max_steps": 4000, "town_style": "classic", "jam_fixes": 0, "blocked_timeout": 90.0,
-            "via_ramp": 0, **SUITE_DEFAULTS.get(args.suite, {})}
+            "via_ramp": 0, "crosswalks": 0.0, **SUITE_DEFAULTS.get(args.suite, {})}
     suite_style, suite_fixes, suite_timeout = dflt["town_style"], int(dflt["jam_fixes"]), dflt["blocked_timeout"]
+    suite_cw = float(dflt["crosswalks"])
     for k, v in dflt.items():
         if getattr(args, k) is None:
             setattr(args, k, v)
@@ -412,7 +430,8 @@ def main():
         ("" if args.town_style == suite_style else f"_{args.town_style}") + \
         ("" if int(args.jam_fixes) == suite_fixes else ("_jamfix" if args.jam_fixes else "_nojamfix")) + \
         ("" if args.blocked_timeout == suite_timeout else f"_wait{args.blocked_timeout:.0f}") + \
-        (f"_pat{args.ego_patience:g}" if args.ego_patience else "") + ("_npcline" if args.npc_past_line else "")
+        (f"_pat{args.ego_patience:g}" if args.ego_patience else "") + ("_npcline" if args.npc_past_line else "") + \
+        ("" if args.crosswalks == suite_cw else f"_cw{args.crosswalks:g}")
     if args.osm_town:
         suffix = suffix.replace("_twophase", "")
         fail_dir = os.path.join("runs", "failures", args.osm_town, f"{tag}{suffix}")
@@ -426,7 +445,7 @@ def main():
          "red_hold": args.red_hold, "town_style": args.town_style, "jam_fixes": bool(args.jam_fixes),
          "blocked_timeout": args.blocked_timeout, "osm_bbox": args.osm_bbox, "yield_visible": bool(args.yield_visible),
          "rig": args.rig, "ego_patience": args.ego_patience, "via_ramp": bool(args.via_ramp),
-         "npc_past_line": args.npc_past_line}
+         "npc_past_line": args.npc_past_line, "crosswalks": args.crosswalks}
     t0 = time.time()
     ctx = mp.get_context("spawn")
     with ctx.Pool(args.workers) as pool:

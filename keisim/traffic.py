@@ -7,6 +7,7 @@ import numpy as np
 
 from .config import TL_GREEN, TL_RED, TL_YELLOW, TrafficConfig
 from .geometry import box_corners, curvature_of, rays_clear, wrap
+from .roadnet import PED_FLASH, PED_GREEN
 from .route import (LC_CHECK, LC_PUSH, LC_PUSH_TO, LC_START_MARGIN, blend_weight, change_room, change_window,
                     lane_moves, link_map, pick_move)
 
@@ -158,6 +159,22 @@ LOOKBACK_LANE = 60.0        # m: min_arrival's look into the junction before a s
 STOP_SIGN_NPC_AT = 1.0      # m: 止まれ: NPCs stop with the front bumper this far before the line (as the expert)
 STOP_SIGN_NPC_ZONE = 3.0    # m: ... and the stop counts when they stand within this much of it
 NPC_OVER = 3.0              # m: TrafficConfig.light_past_line: a standing NPC this far past its stop line still obeys it
+# crosswalks at signals (TrafficConfig.crosswalks, Town.ped_crossings)
+CW_REACH = 4.0              # s: a car's stretch of a zebra is taken while someone on it (or setting off) gets there
+#                             sooner than this
+CW_PAST = 0.5               # m: ... and until they are this far past it
+CW_MARGIN = 1.0             # m: a car giving way stops with its front bumper this far before the zebra
+CW_LATE = 0.15              # chance that someone waiting still sets off in the flashing green (and hurries)
+CW_SPEED_MAX = 1.9          # m/s: the fastest walk over a zebra (to make it before the light changes)
+CW_GIVE_UP = 150.0          # s: someone who has waited this long walks on instead
+CW_FOCUS = 2.0              # the zebras at the exits of the ego's turns get 1 + this times as many corner people
+CW_REACT = (0.3, 3.0)       # s: someone waiting steps off this long into the green (each their own)
+CW_CORNER_WALK = (3.0, 45.0)   # m: a corner person walks this far on from the zebra before coming back to it
+CW_HELD = (1.5, 1.8, 1.0)   # someone waiting at a zebra does not step off while a car moving faster than [2] m/s comes
+#                             within [1] m of their way over it within [0] s (or is there): it could not stop for them
+CW_STALL = 3.0              # s: someone on a zebra held up this long by a car standing in front of them walks back to
+#                             their kerb (and waits there again): a car stuck on the zebra and the people it waits for
+#                             would otherwise stand for ever
 
 
 def near_pairs(origin, radius, cxy):
@@ -840,6 +857,40 @@ class Traffic:
                     break
                 base += ln.length
 
+    def _crosswalk_gaps(self, stop_gap, hl, peds, t):
+        """Crosswalks at signals (TrafficConfig.crosswalks), as the expert: a car whose route crosses a zebra within
+        40 m stops with its front bumper CW_MARGIN before it while Pedestrians.crosswalk_blocked holds for its lane's
+        stretch; a turn that waits at its connector's wait point holds there instead while the zebra of its exit is
+        taken within CW_REACH s plus the drive on to it. Not past the zebra's start, nor when it could not stop at
+        6 m/s^2 any more (the corridor check still stops for someone in the way)."""
+        if not peds.crosswalk_people(t):
+            return                                   # nobody on a zebra or setting off
+        lanes, lc = self.town.lanes, self.town.lane_crossings
+        s0 = self.cfg.idm_s0
+        for i in range(self.n):
+            r, k = self.route[i], self.ri[i]
+            v = float(self.v[i])
+            base = -(self.s[i] + hl[i])                # front bumper -> start of lane r[kk]
+            for kk in range(k, min(len(r), k + 4)):
+                lid = r[kk]
+                for ci, a0, _, u0, u1 in lc.get(lid, ()):
+                    d = base + a0
+                    if d < -0.5 or d > 40.0:
+                        continue
+                    gap = x = None
+                    conn = lanes[r[kk - 1]] if kk > k else None
+                    if conn is not None and conn.kind == "conn" and conn.yields and conn.wait_s is not None:
+                        d_wait = base - conn.length + conn.wait_s
+                        if d_wait >= -0.5 and peds.crosswalk_blocked(ci, u0, u1, t, CW_REACH + (d - d_wait) / 3.0):
+                            gap, x = max(d_wait, 0.0), d_wait       # (as _yield_gaps: the wait point is the obstacle)
+                    if gap is None and peds.crosswalk_blocked(ci, u0, u1, t):
+                        gap, x = d + s0 - CW_MARGIN, d - CW_MARGIN
+                    if gap is not None and not (v > 1.0 and x < v * v / 12.0):
+                        stop_gap[i] = min(stop_gap[i], gap)
+                base += lanes[lid].length
+                if base > 40.0:
+                    break
+
     def _yield_gaps(self, stop_gap, t, ego_info, hl):
         """Turns that give way wait at their connector's wait point while must_yield holds."""
         lanes = self.town.lanes
@@ -888,9 +939,10 @@ class Traffic:
         return False
 
     def step(self, dt, t, ext_xy, ext_r, ext_owner, ext_speed, ext_yaw, ego_xy, ego_v=0.0, ego_yaw=None,
-             ego_info=None, ped_margin=None, pass_xy=None, ego_len=4.4, ego_wait=None):
+             ego_info=None, ped_margin=None, pass_xy=None, ego_len=4.4, ego_wait=None, peds=None):
         """ext_*: external obstacles (ego circles with owner -1, pedestrians owner -2-k). ped_margin: optional lateral
-        margin per pedestrian (default 0.9 m); pass_xy: pedestrians walking in a 路側帯, passed at PASS_SPEED."""
+        margin per pedestrian (default 0.9 m); pass_xy: pedestrians walking in a 路側帯, passed at PASS_SPEED.
+        peds: the Pedestrians (crosswalks at signals: _crosswalk_gaps)."""
         n = self.n
         if n == 0:
             return
@@ -956,6 +1008,8 @@ class Traffic:
             self._stop_sign_gaps(stop_gap, hl)
         if self.has_yields:          # two-phase signals: turns wait for a gap in the oncoming traffic
             self._yield_gaps(stop_gap, t, ego_info, hl)
+        if peds is not None and peds.cw_on:      # crosswalks at signals: give way to the people on them
+            self._crosswalk_gaps(stop_gap, hl, peds, t)
         lc_pair = ()
         if self.has_lc:              # multi-lane roads: room for lane changes
             ego = None if ego_yaw is None else (ego_xy, ego_v, ego_yaw, ego_len)
@@ -1086,13 +1140,23 @@ SKIN = np.array([[150, 180, 220], [120, 160, 205], [90, 125, 170], [60, 90, 130]
 
 
 class Pedestrians:
-    WALK, CROSS = 0, 1
+    WALK, CROSS, WAIT = 0, 1, 2
 
-    def __init__(self, town, cfg: TrafficConfig, rng, n):
+    def __init__(self, town, cfg: TrafficConfig, rng, n, focus_cw=()):
+        """n walkers; with TrafficConfig.crosswalks also the corner people of the zebras at signals (crosswalk_spawn
+        each on average, 1 + CW_FOCUS times as many at focus_cw: the zebras at the exits of the ego's turns)."""
         self.town, self.cfg, self.rng = town, cfg, rng
         ww = town.walkways
         if not ww:                      # no sidewalk nor 路側帯 anywhere (keisim/curve_course.py): nobody walks
             n = 0
+        pc = town.ped_crossings
+        self.cw_on = cfg.crosswalks > 0 and bool(pc) and bool(ww)
+        corner_cw = []                  # the zebra of each corner person (random draws only with crosswalks on)
+        if self.cw_on:
+            focus = set(focus_cw)
+            for ci in range(len(pc)):
+                corner_cw += [ci] * int(rng.poisson(cfg.crosswalk_spawn * (1.0 + CW_FOCUS * (ci in focus))))
+            n += len(corner_cw)
         self.n = n
         lens = np.array([w["poly"].length for w in ww])
         if ww:
@@ -1124,7 +1188,107 @@ class Pedestrians:
             for j, b in enumerate(ww):
                 if i != j and a["road"] == b["road"] and a.get("side") != b.get("side"):
                     self.partner[i] = j
+        # crosswalks at signals (TrafficConfig.crosswalks): cw = the zebra someone waits at or crosses on (-1: none),
+        # cw_from = the kerb they cross from (0: pts[0]), cw_late = they set off in the flashing green too.
+        # The corner people (the last len(corner_cw)) stay round their zebra: over it, they walk CW_CORNER_WALK m on
+        # (cw_back: the walkway s where they turn) and come back to cross again; walkers cross on a zebra they come
+        # to with the chance TrafficConfig.crosswalks. Random draws only with crosswalks on: without, every episode
+        # is as before.
+        self.cw = np.full(n, -1)
+        self.cw_from = np.zeros(n, int)
+        self.cw_wait = np.zeros(n)
+        self.cw_late = np.zeros(n, bool)
+        self.cw_react = np.zeros(n)             # s into the green before they step off
+        self.corner = np.zeros(n, bool)
+        self.cw_back = np.full(n, np.nan)
+        self.cw_stall = np.zeros(n)             # s held up on the zebra by a standing car (CW_STALL)
+        self.cw_retreat = np.zeros(n, bool)     # walking back to the kerb they set off from
+        self.cw_skip = np.zeros(n, bool)        # back at it: they let this green go (until their light is red)
+        self.cw_held = np.zeros(n, bool)        # a car is about to cross their way (CW_HELD): they wait for it
+        self.ww_cw = [[] for _ in ww]          # walkway -> [(zebra, kerb, s of the zebra on it)]
+        for ci, c in enumerate(pc):
+            for side in (0, 1):
+                self.ww_cw[c["ww"][side]].append((ci, side, c["ww_s"][side]))
+        self._cw_t = None                      # crosswalk_people's cache (the time it is for)
+        for j, ci in enumerate(corner_cw):
+            i = n - len(corner_cw) + j
+            self.corner[i] = True
+            self._start_wait(i, ci, int(rng.integers(2)), there=True)
         self._update_pose()
+
+    def _start_wait(self, i, ci, side, there=False):
+        """Person i waits at zebra ci's kerb `side`: spread along the zebra and a little back from the kerb point. They
+        walk to that spot (c1; from the walkway in a 路側帯 it is just off the road), or are there already (there)."""
+        c, rng = self.town.ped_crossings[ci], self.rng
+        d = c["dir"] if side == 0 else -c["dir"]           # towards the road
+        along = np.array([-d[1], d[0]])
+        self.mode[i], self.cw[i], self.cw_from[i], self.cw_wait[i] = self.WAIT, ci, side, 0.0
+        self.cw_skip[i] = False
+        self.cw_late[i] = rng.random() < CW_LATE
+        self.cw_react[i] = rng.uniform(*CW_REACT)
+        self.w[i], self.s[i] = c["ww"][side], c["ww_s"][side]
+        self.c1[i] = c["pts"][side] + along * rng.uniform(-1.1, 1.1) - d * rng.uniform(0.0, 0.5)
+        if there:
+            self.xy[i] = self.c1[i]
+            self.yaw[i] = math.atan2(d[1], d[0])
+        self.vel[i] = 0.0
+
+    def _start_crossing(self, i, speed):
+        """Person i, waiting at a zebra, walks over it to the other kerb, then on along that walkway away from the
+        junction."""
+        c, rng = self.town.ped_crossings[self.cw[i]], self.rng
+        other = 1 - int(self.cw_from[i])
+        j = c["ww"][other]
+        poly = self.town.walkways[j]["poly"]
+        s2 = float(np.clip(c["ww_s"][other] + rng.uniform(-1.1, 1.1), 1.0, poly.length - 1.0))
+        p2 = np.array(poly.interp1(s2))
+        h2 = poly.heading1(s2)
+        lat2 = rng.uniform(-0.5, 0.5) * self.lat_scale[j]
+        self.mode[i] = self.CROSS
+        self.c0[i] = self.xy[i]
+        self.c1[i] = p2 + np.array([-math.sin(h2), math.cos(h2)]) * lat2
+        self.w[i], self.s[i], self.lat[i], self.dir[i] = j, s2, lat2, c["away"][other]
+        self.speed[i] = speed
+        self.cw_stall[i], self.cw_retreat[i] = 0.0, False
+        if self.corner[i]:
+            back = s2 + c["away"][other] * rng.uniform(*CW_CORNER_WALK)
+            self.cw_back[i] = float(np.clip(back, 1.5, poly.length - 1.5))
+
+    def crosswalk_people(self, t):
+        """zebra -> (u, sgn, speed) arrays of the people on it (u from its pts[0]; sgn +1 walking towards pts[1]) and
+        of those waiting at a kerb while they may set off (green; flashing for the late ones), at u 0 / width.
+        Cached for time t."""
+        if self._cw_t == t:
+            return self._cw_cache
+        out = {}
+        if self.cw_on:
+            pc, J = self.town.ped_crossings, self.town.junctions
+            flash = self.cfg.ped_flash
+            for i in np.nonzero(self.cw >= 0)[0]:
+                ci = int(self.cw[i])
+                c = pc[ci]
+                sgn = 1.0 if self.cw_from[i] == 0 else -1.0
+                if self.mode[i] == self.CROSS:
+                    u, v = float((self.xy[i] - c["pts"][0]) @ c["dir"]), float(self.speed[i])
+                else:
+                    v = self._set_off_speed(i, c, t, flash)
+                    if v is None:
+                        continue
+                    u = 0.0 if sgn > 0 else c["width"]
+                out.setdefault(ci, []).append((u, sgn, max(v, 1.0)))
+        self._cw_t, self._cw_cache = t, {k: np.array(v) for k, v in out.items()}
+        return self._cw_cache
+
+    def crosswalk_blocked(self, ci, u0, u1, t, horizon=CW_REACH):
+        """Is the stretch [u0, u1] of zebra ci (a lane's car, Town.lane_crossings) walked on now, or within `horizon` s,
+        by someone on the zebra or setting off from its kerb who has not yet passed it (by CW_PAST)?"""
+        a = self.crosswalk_people(t).get(ci)
+        if a is None:
+            return False
+        u, sgn, v = a[:, 0], a[:, 1], a[:, 2]
+        fwd = (sgn > 0) & (u <= u1 + CW_PAST) & (u0 - u <= horizon * v)
+        back = (sgn < 0) & (u >= u0 - CW_PAST) & (u - u1 <= horizon * v)
+        return bool(np.any(fwd | back))
 
     def _update_pose(self):
         ww = self.town.walkways
@@ -1153,16 +1317,30 @@ class Pedestrians:
         tta = along[near] / np.maximum(veh_v[near], 0.5)
         return not np.any((along[near] < 18.0) | (tta < 3.5))
 
-    def step(self, dt, veh_xy, veh_v, veh_yaw, trigger=None):
-        """trigger: optional boolean mask of pedestrians that should try to cross now."""
+    def step(self, dt, veh_xy, veh_v, veh_yaw, trigger=None, t=None):
+        """trigger: optional boolean mask of pedestrians that should try to cross now. t: the time (the pedestrian
+        lights at the zebras, TrafficConfig.crosswalks)."""
         ww = self.town.walkways
         rng = self.rng
         self.cooldown -= dt
         self.phase += self.speed * dt * 4.2 * (self.vel > 0.1)
+        if self.cw_on:
+            self._update_held(veh_xy, veh_v, veh_yaw)
         for i in range(self.n):
+            if self.mode[i] == self.WAIT:
+                self._wait_step(i, dt, t)
+                continue
             if self.mode[i] == self.WALK:
                 poly = ww[self.w[i]]["poly"]
+                s_prev = float(self.s[i])
                 self.s[i] += self.dir[i] * self.speed[i] * dt
+                if self.cw_on:
+                    b = self.cw_back[i]
+                    if b == b and (s_prev - b) * (self.s[i] - b) <= 0.0:      # a corner person turns back
+                        self.dir[i] *= -1
+                        self.cw_back[i] = np.nan
+                    if self.ww_cw[self.w[i]] and self._reach_zebra(i, s_prev):
+                        continue
                 if self.s[i] < 1.0 or self.s[i] > poly.length - 1.0:
                     self.dir[i] *= -1
                     self.s[i] = min(max(float(self.s[i]), 1.0), poly.length - 1.0)
@@ -1189,7 +1367,13 @@ class Pedestrians:
                 d = self.c1[i] - self.xy[i]
                 L = math.hypot(d[0], d[1])
                 if L < 0.15:
+                    if self.cw_retreat[i]:          # back at their kerb: wait there again
+                        self._back_at_kerb(i)
+                        continue
                     self.mode[i] = self.WALK
+                    if self.cw[i] >= 0:            # over a zebra: no crossing in the middle of the road for a while
+                        self.cw[i] = -1
+                        self.cooldown[i] = rng.uniform(15, 40)
                     continue
                 # do not walk into a vehicle standing right in front
                 if len(veh_xy):
@@ -1198,6 +1382,10 @@ class Pedestrians:
                     side = np.abs(rel[:, 0] * d[1] - rel[:, 1] * d[0]) / L
                     if np.any((fwd > 0.0) & (fwd < 3.2) & (side < 2.6)):
                         self.vel[i] = 0.0
+                        if self.cw[i] >= 0 and not self.cw_retreat[i]:
+                            self.cw_stall[i] += dt
+                            if self.cw_stall[i] > CW_STALL:
+                                self._retreat(i)
                         continue
                 stepl = min(L, self.speed[i] * dt)
                 self.xy[i] = self.xy[i] + d / L * stepl
@@ -1205,6 +1393,113 @@ class Pedestrians:
                 self.vel[i] = self.speed[i]
         # refresh walking poses
         self._update_pose()
+
+    def _update_held(self, veh_xy, veh_v, veh_yaw):
+        """cw_held of the people waiting at a zebra: a car faster than CW_HELD[2] m/s whose straight-line position
+        within CW_HELD[0] s comes within CW_HELD[1] m of their way over the zebra (kerb to kerb)."""
+        self.cw_held[:] = False
+        wait = np.nonzero((self.mode == self.WAIT) & (self.cw >= 0))[0]
+        if not len(wait) or not len(veh_xy):
+            return
+        T, R, V = CW_HELD
+        fast = veh_v > V
+        if not fast.any():
+            return
+        u = np.stack([np.cos(veh_yaw[fast]), np.sin(veh_yaw[fast])], -1) * veh_v[fast, None]
+        taus = np.linspace(0.0, T, 4)
+        pts = (veh_xy[fast, None, :] + u[:, None, :] * taus[None, :, None]).reshape(-1, 2)
+        for i in wait:
+            c = self.town.ped_crossings[self.cw[i]]
+            a, b = c["pts"][0], c["pts"][1]
+            ab = b - a
+            q = np.clip(((pts - a) @ ab) / (ab @ ab), 0.0, 1.0)
+            dist = np.hypot(*(pts - (a + q[:, None] * ab)).T)
+            self.cw_held[i] = bool((dist < R).any())
+
+    def _retreat(self, i):
+        """Person i, held up on a zebra by a standing car (CW_STALL), walks back to where they set off from."""
+        start = self.c0[i].copy()
+        self.c0[i] = self.xy[i]
+        self.c1[i] = start
+        self.cw_from[i] = 1 - self.cw_from[i]           # now walking towards that kerb (Pedestrians.crosswalk_people)
+        self.cw_retreat[i] = True
+
+    def _back_at_kerb(self, i):
+        """Person i walked back off a zebra (_retreat): they wait at that kerb again."""
+        c = self.town.ped_crossings[self.cw[i]]
+        side = 1 - int(self.cw_from[i])
+        d = c["dir"] if side == 0 else -c["dir"]
+        self.mode[i], self.cw_from[i], self.cw_wait[i] = self.WAIT, side, 0.0
+        self.cw_retreat[i], self.cw_stall[i], self.cw_skip[i] = False, 0.0, True
+        self.w[i], self.s[i] = c["ww"][side], c["ww_s"][side]
+        self.yaw[i] = math.atan2(d[1], d[0])
+        self.vel[i] = 0.0
+
+    def _reach_zebra(self, i, s_prev):
+        """A walker heading for a junction end of their walkway just passed its zebra: with TrafficConfig.crosswalks
+        chance they stop to wait there (True)."""
+        s = float(self.s[i])
+        for ci, side, s_c in self.ww_cw[self.w[i]]:
+            c = self.town.ped_crossings[ci]
+            if self.dir[i] != -c["away"][side] or (s_prev - s_c) * (s - s_c) > 0.0:
+                continue
+            if self.corner[i] or self.rng.random() < self.cfg.crosswalks:
+                self._start_wait(i, ci, side)
+                return True
+        return False
+
+    def _set_off_speed(self, i, c, t, flash, react=False):
+        """Whether person i, waiting at zebra c, sets off now (react: also past their reaction time; without, about
+        to): at the green when there is time to get over before the cars crossing the road get theirs, walking at
+        least the speed that takes (up to CW_SPEED_MAX); the late ones also in the flashing green, hurrying. Not
+        after stepping back (cw_skip) until their light has turned red, nor while a car is about to cross their way
+        (cw_held). Returns that least speed (CW_SPEED_MAX for
+        the hurrying late ones), or None."""
+        J = self.town.junctions[c["junction"]]
+        st, left = J.ped_signal(c["phase"], t, flash)
+        if self.cw_skip[i]:
+            if st not in (PED_GREEN, PED_FLASH):
+                self.cw_skip[i] = False
+            return None
+        if self.cw_held[i]:
+            return None
+        if st == PED_GREEN:
+            if react and J.green + J.yellow + J.allred - left < self.cw_react[i]:
+                return None
+            need = c["width"] / max(left - 1.0, 0.1)
+            return max(need, 1.0) if need <= CW_SPEED_MAX else None
+        if st == PED_FLASH and self.cw_late[i]:
+            return CW_SPEED_MAX
+        return None
+
+    def _wait_step(self, i, dt, t):
+        """Waiting at a zebra: step off once _set_off_speed says so (at their own pace if it is fast enough). First
+        they walk to their spot at the kerb (_start_wait)."""
+        self.vel[i] = 0.0
+        self.cw_wait[i] += dt
+        c = self.town.ped_crossings[self.cw[i]]
+        to = self.c1[i] - self.xy[i]
+        gap = math.hypot(to[0], to[1])
+        if gap > 0.02:
+            stepl = min(gap, self.speed[i] * dt)
+            self.xy[i] = self.xy[i] + to / gap * stepl
+            if gap > 0.1:
+                self.yaw[i] = math.atan2(to[1], to[0])
+            self.vel[i] = self.speed[i]
+            if gap - stepl <= 0.02:                      # there: face the road
+                d = c["dir"] if self.cw_from[i] == 0 else -c["dir"]
+                self.yaw[i] = math.atan2(d[1], d[0])
+            return
+        if t is not None:
+            v = self._set_off_speed(i, c, t, self.cfg.ped_flash, react=True)
+            if v is not None:
+                hurry = v >= CW_SPEED_MAX                       # (the late ones in the flashing green)
+                pace = self.rng.uniform(1.6, CW_SPEED_MAX) if hurry else self.rng.uniform(1.1, 1.6)
+                self._start_crossing(i, float(np.clip(max(pace, v), 1.0, CW_SPEED_MAX)))
+                return
+        if self.cw_wait[i] > CW_GIVE_UP:           # (a light that never lets them over): walk on
+            self.mode[i], self.cw[i] = self.WALK, -1
+            self.dir[i] = c["away"][int(self.cw_from[i])]
 
     def velocity_vectors(self):
         return np.stack([np.cos(self.yaw), np.sin(self.yaw)], -1) * self.vel[:, None]

@@ -1388,3 +1388,148 @@ def test_curve_course():
         worst = max(worst, abs(-(e.x - p[0]) * np.sin(h) + (e.y - p[1]) * np.cos(h)))
         _, _, done, info = env.step(env.expert_action())
     assert not done and env.s_ego >= route.s_end - 3.0 and worst < 0.35, (env.status, worst)
+
+
+def test_crosswalks_at_signals():
+    """Zebras at two-phase signals (Town.ped_crossings): where they are, their pedestrian light, and people crossing
+    on them with it while the cars give way (TrafficConfig.crosswalks); off, nobody uses them."""
+    from keisim.config import TL_GREEN, town_config
+    from keisim.roadnet import PED_FLASH, PED_GREEN, PED_RED
+    assert not Town(1000).ped_crossings                          # split signals (classic): no pedestrian light
+    town = Town(1012, town_config("twophase"))
+    pc = town.ped_crossings
+    assert len(pc) >= 10
+    for ci, c in enumerate(pc):
+        J = town.junctions[c["junction"]]
+        assert J.signalized and J.phases == 2 and c["phase"] == 1 - J.groups[c["arm"]]
+        assert 6.0 < c["width"] < 25.0 and abs(np.hypot(*(c["pts"][1] - c["pts"][0])) - c["width"]) < 1e-6
+        road = town.roads[c["road"]]
+        for lid in list(road.lanes_ab) + list(road.lanes_ba):
+            mine = [x for x in town.lane_crossings[lid] if x[0] == ci]
+            assert len(mine) == 1
+            _, s0, s1, u0, u1 = mine[0]
+            assert 0.0 <= s0 < s1 <= town.lanes[lid].length and 0.0 < u0 < u1 < c["width"]
+        # the light: green / flashing only within the green of the cars running along the zebra
+        for t in np.arange(0.0, J.cycle, 0.25):
+            st, left = J.ped_signal(c["phase"], t, 4.0)
+            if st != PED_RED:
+                assert J.signal_state(c["phase"], t) == TL_GREEN
+                assert J.signal_state(J.groups[c["arm"]], t) != TL_GREEN and left > 4.0
+            if st == PED_FLASH:
+                assert J.remaining(c["phase"], t) <= 4.0 + 1e-6
+            if st == PED_GREEN:
+                assert J.remaining(c["phase"], t) > 4.0 - 1e-6
+
+    def run(crosswalks, steps):
+        cfg = EnvConfig()
+        cfg.town = town_config("twophase")
+        cfg.traffic.box_rule = cfg.traffic.release_hidden = True
+        cfg.traffic.crosswalks = crosswalks
+        cfg.render_rgb = cfg.render_seg = False
+        env = KeiEnv(cfg)
+        env.reset(1012, 7, route_length=500, render=False)
+        pd = env.world.peds
+        seen = {"set_off": 0, "set_off_red": 0, "on_zebra": 0, "crosswalk": 0}
+        for _ in range(steps):
+            prev = pd.mode.copy()
+            _, _, done, info = env.step(env.expert_action())
+            for i in np.nonzero((prev == pd.WAIT) & (pd.mode == pd.CROSS))[0]:
+                c = pc[pd.cw[i]]
+                seen["set_off"] += 1
+                J = town.junctions[c["junction"]]          # (one env step: action_repeat world steps of dt)
+                seen["set_off_red"] += all(J.ped_signal(c["phase"], env.world.t - k * cfg.dt, cfg.traffic.ped_flash)[0]
+                                           == PED_RED for k in range(1, cfg.action_repeat + 1))
+            seen["on_zebra"] += int(((pd.mode == pd.CROSS) & (pd.cw >= 0)).sum())
+            seen["crosswalk"] += env.plan["reason"] == "crosswalk"
+            if done:
+                break
+        return env, info, seen
+
+    env, info, seen = run(0.0, 200)
+    assert not env.world.peds.cw_on and seen["on_zebra"] == 0 and (env.world.peds.mode != env.world.peds.WAIT).all()
+    env, info, seen = run(0.7, 1200)
+    assert env.world.peds.cw_on and seen["set_off"] >= 5 and seen["on_zebra"] > 0
+    assert seen["set_off_red"] == 0
+    assert not [i for i in info["infractions"] if i["type"] in ("pedestrian", "crosswalk")], info["infractions"]
+    # the expert's route crosses zebras, and the exits of its turns are among them
+    kinds = [k for _, k, _ in env.route.zebras(env.world.town)]
+    assert "exit" in kinds and "entry" in kinds
+
+
+def test_crosswalk_blocked():
+    """Pedestrians.crosswalk_blocked: a car's stretch of a zebra is taken by someone on it who has not passed it yet,
+    or who gets there within the horizon, and by someone waiting at the kerb while their light is green."""
+    from keisim.config import EnvConfig, town_config
+    from keisim.roadnet import PED_GREEN
+    cfg = EnvConfig()
+    cfg.town = town_config("twophase")
+    cfg.traffic.crosswalks = 1.0
+    cfg.traffic.crosswalk_spawn = 0.0
+    cfg.render_rgb = cfg.render_seg = False
+    env = KeiEnv(cfg)
+    env.reset(1012, 3, route_length=300, render=False)
+    w = env.world
+    pd = w.peds
+    town = w.town
+    c = town.ped_crossings[0]
+    J = town.junctions[c["junction"]]
+    t_green = next(t for t in np.arange(0.0, J.cycle, 0.1) if J.ped_signal(c["phase"], t, 4.0)[0] == PED_GREEN)
+    t_red = next(t for t in np.arange(0.0, J.cycle, 0.1) if J.signal_state(c["phase"], t) == 0)
+    width = c["width"]
+    u0, u1 = width - 4.0, width - 1.0                   # a lane's stretch near kerb 1
+    pd.cw[:] = -1
+    pd.mode[:] = pd.WALK
+
+    def put(u, side, mode, t):
+        pd.cw[0], pd.cw_from[0], pd.mode[0], pd.speed[0] = 0, side, mode, 1.3
+        pd.xy[0] = c["pts"][0] + c["dir"] * u
+        pd._cw_t = None
+        return pd.crosswalk_blocked(0, u0, u1, t)
+    assert not pd.crosswalk_blocked(0, u0, u1, t_green)          # nobody there
+    assert put(width - 2.0, 0, pd.CROSS, t_green)                # on the stretch
+    assert put(u1 + 0.3, 0, pd.CROSS, t_green)                   # just past it, within CW_PAST: still taken
+    assert not put(u1 + 0.8, 0, pd.CROSS, t_green)               # further past it: free
+    assert put(u0 - 3.0, 0, pd.CROSS, t_green)                   # 3 m short at 1.3 m/s: there within 4 s
+    assert not put(u0 - 7.0, 0, pd.CROSS, t_green)               # 7 m short: not within 4 s
+    assert not put(u0 - 2.0, 1, pd.CROSS, t_green)               # walking away from it, past it
+    assert put(u1 + 2.0, 1, pd.CROSS, t_green)                   # coming back from kerb 1 towards it
+    pd.cw[0], pd.cw_from[0], pd.mode[0] = 0, 1, pd.WAIT
+    pd._cw_t = None
+    assert pd.crosswalk_blocked(0, u0, u1, t_green)              # waiting at kerb 1 (1 m away) at green: taken
+    pd._cw_t = None
+    assert not pd.crosswalk_blocked(0, u0, u1, t_red)            # ... at red: they stay put
+
+
+def test_crosswalk_step_back():
+    """Someone on a zebra held up by a car standing in front of them (CW_STALL) walks back to their kerb and waits
+    there again: a car stuck on the zebra and the people it waits for do not stand for ever. People waiting at a
+    zebra of a road without a sidewalk stand off the carriageway."""
+    from keisim.config import TrafficConfig, town_config
+    from keisim.traffic import CW_STALL, Pedestrians
+    town = Town(1105, town_config("roadtypes"))
+    cfg = TrafficConfig()
+    cfg.crosswalks, cfg.crosswalk_spawn = 1.0, 0.0
+    pd = Pedestrians(town, cfg, np.random.default_rng(0), 3)
+    for c in town.ped_crossings:                              # waiting spots off the carriageway
+        rs = town.roads[c["road"]].spec
+        assert c["width"] >= 2 * rs.half_width + 0.6 - 1e-6
+    c = town.ped_crossings[0]
+    J = town.junctions[c["junction"]]
+    t = next(t for t in np.arange(0.0, J.cycle, 0.1) if J.ped_signal(c["phase"], t, cfg.ped_flash)[0] == 1
+             and J.ped_signal(c["phase"], t - 3.5, cfg.ped_flash)[0] == 1)
+    pd.mode[:] = pd.WALK
+    pd._start_wait(0, 0, 0, there=True)
+    start = pd.xy[0].copy()
+    pd.step(0.05, np.zeros((0, 2)), np.zeros(0), np.zeros(0), t=t)
+    assert pd.mode[0] == pd.CROSS                             # green (and past the reaction time): off they go
+    for _ in range(20):                                      # 1 m onto the zebra
+        pd.step(0.05, np.zeros((0, 2)), np.zeros(0), np.zeros(0), t=t)
+    car = pd.xy[0] + c["dir"] * 2.0                           # a car standing 2 m ahead of them on the zebra
+    k = 0
+    while pd.mode[0] == pd.CROSS and not pd.cw_retreat[0] and k < 200:
+        pd.step(0.05, car[None], np.zeros(1), np.zeros(1), t=t)
+        k += 1
+    assert pd.cw_retreat[0] and abs(k * 0.05 - CW_STALL) < 0.2
+    for _ in range(100):
+        pd.step(0.05, car[None], np.zeros(1), np.zeros(1), t=t)
+    assert pd.mode[0] == pd.WAIT and pd.cw[0] == 0 and pd.cw_from[0] == 0 and np.hypot(*(pd.xy[0] - start)) < 0.2

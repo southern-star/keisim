@@ -171,6 +171,8 @@ class Route:
         self.junctions = []
         self.stops = []
         self.stop_signs = []            # (s, lane id) of the 止まれ stop lines along the route (Town.from_graph)
+        self.crossings = []             # (s0, s1, zebra, u0, u1, lane index): the route's stretches over zebras at
+        #                                 signals (Town.lane_crossings; TrafficConfig.crosswalks)
         by_k = {c["k"]: c for c in self.changes}
         for k, lid in enumerate(self.lanes):
             lane = town.lanes[lid]
@@ -186,10 +188,29 @@ class Route:
                 self.stops.append((offs[k] + lane.stop_s - s0[k], lid))
             if lane.stop_sign_s is not None and lo[k] <= lane.stop_sign_s <= hi[k]:
                 self.stop_signs.append((offs[k] + lane.stop_sign_s - s0[k], lid))
+            for ci, a0, a1, u0, u1 in town.lane_crossings.get(lid, ()):
+                if lo[k] - 1e-6 <= a0 and a1 <= hi[k] + 1e-6:
+                    self.crossings.append((offs[k] + a0 - s0[k], offs[k] + a1 - s0[k], ci, u0, u1, k))
         # curvature along the flattened path
         curv = np.concatenate(curv)
         self.curv = curv[: len(self.poly.pts)] if len(curv) >= len(self.poly.pts) else np.pad(
             curv, (0, len(self.poly.pts) - len(curv)), mode="edge")
+
+    def zebras(self, town):
+        """(zebra, kind, turn) of each of self.crossings: kind "exit" (the zebra at the exit of a junction the route
+        turns or goes straight at; turn: its connector's), "entry" (the zebra of the road the route comes in by, before
+        the junction) or "other"."""
+        out = []
+        for _, _, ci, _, _, k in self.crossings:
+            jz = town.ped_crossings[ci]["junction"]
+            prev = town.lanes[self.lanes[k - 1]] if k > 0 else None
+            if prev is not None and prev.kind == "conn" and prev.junction == jz:
+                out.append((ci, "exit", prev.turn))
+            elif town.lanes[self.lanes[k]].end_junction == jz:
+                out.append((ci, "entry", None))
+            else:
+                out.append((ci, "other", None))
+        return out
 
     def retime_change(self, i, a0):
         """Move lane change i to start at A-local `a0` (clipped to its window) and rebuild the path. The path up to
