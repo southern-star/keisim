@@ -180,6 +180,31 @@ RAMP_LEAD = 40.0              # --focus_ramp / --ramp_early_drop: m before the r
 RAMP_EARLY = 0.5              # --ramp_early_drop: m toward the ramp ahead of the route's path into it
 
 
+CW_FOCUS_BEHIND = 2.0         # --focus_crosswalk: m the ego's front may be past a zebra's start and still count
+CW_FOCUS_REACH = 8.0          # --focus_crosswalk: s within which someone on the zebra (or setting off) reaches the ego's
+#                               stretch of it (Pedestrians.crosswalk_blocked with this horizon instead of CW_REACH)
+
+
+def crosswalk_near(env, ahead):
+    """--focus_crosswalk: a zebra at the exit of a junction the route goes through (Route.zebras), from `ahead` m
+    ahead of the ego's front to just past its start, where someone on it or setting off from its kerb gets to the
+    ego's stretch of it within CW_FOCUS_REACH s: slowing down for them, waiting and setting off again (crosswalks at
+    signals). Not the zebra before a junction, which people mostly cross while the ego waits at its red light."""
+    pd, t, rt = env.world.peds, env.world.t, env.route
+    if not pd.cw_on:
+        return False
+    if getattr(rt, "_zebra_kinds", None) is None:
+        rt._zebra_kinds = [kind for _, kind, _ in rt.zebras(env.world.town)]
+    s_front = env.s_ego + env.world.ego.LENGTH / 2
+    for (s0c, _, ci, u0, u1, _), kind in zip(rt.crossings, rt._zebra_kinds):
+        d = s0c - s_front
+        if d > ahead:
+            break
+        if kind == "exit" and d >= -CW_FOCUS_BEHIND and pd.crosswalk_blocked(ci, u0, u1, t, CW_FOCUS_REACH):
+            return True
+    return False
+
+
 def ramp_state(env):
     """(near, early) of the ego against the ramps its route takes: near, from RAMP_LEAD m before the change into a
     ramp to the end of the ramp's junction (the acceleration lane's merge included); early, ahead of the route's path
@@ -209,7 +234,7 @@ def osm_spec(spec):
 STAT_KEYS = ("steps", "steps_focus", "steps_lead_edge", "frames", "focus", "lead_edge", "lead_edge_vehicle",
              "lead_edge_tl_none", "lead_edge_tl_none_red", "steps_freeze", "freeze", "freezes", "stand_perts",
              "stand_pert", "steps_ramp", "ramp", "ramp_early_dropped",
-             "scene")
+             "scene", "crosswalk", "crosswalk_near")
 FREEZE_REASONS = ("curve", "cruise")    # --freeze_reasons: the expert drives on along the road, no one to wait for
 
 
@@ -293,6 +318,8 @@ def worker(wid, args, quota, out_dir, counter):
     cfg.traffic.ego_patience_s = args.ego_patience
     cfg.traffic.light_past_line = bool(args.npc_past_line)
     cfg.traffic.crosswalks = args.crosswalks
+    if args.crosswalk_spawn is not None:
+        cfg.traffic.crosswalk_spawn = args.crosswalk_spawn
     if args.mode == "dagger":
         cfg.blocked_timeout = 40.0
     env = KeiEnv(cfg)
@@ -400,10 +427,11 @@ def worker(wid, args, quota, out_dir, counter):
                 near_ramp, early = ramp_state(env) if (args.focus_ramp or args.ramp_early_drop) and \
                     env.world.town.ramps else (False, False)
                 focus = in_scene                    # the guardrail scenes are all in focus
+                cw_near = args.focus_crosswalk > 0 and crosswalk_near(env, args.focus_crosswalk)
                 if args.focus_yield < 1.0 and not focus:   # mostly frames around junction decisions, model mistakes
                     focus = np.isfinite(plan.get("yield_tta", np.nan)) or plan["reason"] in args.focus_reasons or \
                         (v_model is not None and abs(v_model - plan["target_speed"]) > args.focus_disagree) or edge \
-                        or (args.focus_ramp and near_ramp)
+                        or (args.focus_ramp and near_ramp) or cw_near
                     keep = keep and (focus or standing or rng.random() < args.focus_yield)
                 if args.ramp_early_drop and early and keep:
                     keep = False
@@ -420,6 +448,8 @@ def worker(wid, args, quota, out_dir, counter):
                     stats["stand_pert"] += int(standing)
                     stats["ramp"] += int(near_ramp)
                     stats["scene"] += int(in_scene)
+                    stats["crosswalk_near"] += int(cw_near)
+                    stats["crosswalk"] += int(plan["reason"] == "crosswalk")
                     if edge:
                         stats["lead_edge"] += 1
                         stats["lead_edge_vehicle"] += int(plan["reason"] == "vehicle")
@@ -484,6 +514,9 @@ def report(out_dir):
               f" ({tot['ramp'] / fr:.1%}); dropped ahead of the route's path into a ramp: {tot['ramp_early_dropped']}")
     if tot.get("scene"):
         print(f"{tot['scene']} frames ({tot['scene'] / fr:.1%}) on the guardrail scenes (--curve_scenes)")
+    if tot.get("crosswalk") or tot.get("crosswalk_near"):
+        print(f"crosswalks: {tot['crosswalk']} frames ({tot['crosswalk'] / fr:.1%}) where the expert gives way at a zebra, "
+              f"{tot['crosswalk_near']} ({tot['crosswalk_near'] / fr:.1%}) by a zebra with people in the way (--focus_crosswalk)")
     return tot
 
 
@@ -536,6 +569,12 @@ def parse_args(argv=None):
     ap.add_argument("--crosswalks", type=float, default=0.0,
                     help="crosswalks at signals (TrafficConfig.crosswalks): the chance that a person at a two-phase "
                          "signal's road end crosses on the zebra with the pedestrian light; turning cars give way")
+    ap.add_argument("--crosswalk_spawn", type=float, default=None,
+                    help="with --crosswalks: corner people per zebra on average (TrafficConfig.crosswalk_spawn, 1)")
+    ap.add_argument("--focus_crosswalk", type=float, default=0.0,
+                    help="with --focus_yield < 1, frames are also in focus while the zebra at the exit of a junction "
+                         "the route goes through, within this many m ahead, has someone on it or setting off who gets "
+                         "to the ego's stretch of it within CW_FOCUS_REACH s (crosswalk_near)")
     ap.add_argument("--renderer", default="keisim", choices=["keisim", "keiview"], help="camera renderer")
     ap.add_argument("--keiview_roads", default="plain", choices=["plain", "detail"],
                     help="KeiView road surface: plain (every KeiView dataset so far) or detail (markings, signs, ...)")
@@ -592,6 +631,8 @@ def main():
                **({"ego_patience": args.ego_patience} if args.ego_patience else {}),
                **({"npc_past_line": 1} if args.npc_past_line else {}),
                **({"crosswalks": args.crosswalks} if args.crosswalks > 0 else {}),
+               **({"crosswalk_spawn": args.crosswalk_spawn} if args.crosswalk_spawn is not None else {}),
+               **({"focus_crosswalk": args.focus_crosswalk} if args.focus_crosswalk > 0 else {}),
                **({"freeze_reasons": args.freeze_reasons} if args.freeze_takeover > 0 else {}),
                **({"stand_pert": args.stand_pert, "stand_hold": args.stand_hold} if args.stand_pert > 0 else {}),
                **({"via_ramp": args.via_ramp} if args.via_ramp > 0 else {}),
