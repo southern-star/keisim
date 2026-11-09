@@ -35,6 +35,7 @@ def sample_weights(d, dagger_weight=1.0, kv_weight=1.0):
     w[reason == 6] *= 3.0                       # yield (right turns, priority crossings): ~0.4 % of the frames
     w[reason == 7] *= 2.0                       # 徐行 towards a crossing the ego gives way at (real towns)
     w[reason == 8] *= 2.0                       # 止まれ: stopping at the minor road's stop line (real towns)
+    w[reason == 9] *= 3.0                       # giving way to people on a zebra (crosswalks at signals), as reason 3
     w[d["tl"] == 1] *= 2.0                      # yellow
     start = (d["v"] < 1.0) & (d["speed"] > 1.0)
     w[start] *= 3.0                             # moving off (anti-inertia)
