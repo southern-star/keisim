@@ -903,7 +903,17 @@ data/                    収集データ (リポジトリ外, 約 3 GB。scripts
       `crosswalks_sub` の 1 本は、街の端のカーブ (信号も横断歩道もない) で、渋滞に並んで止まっていた自車に、対向から曲がってきたトラックの車体がかかったものです。
       `suburban` スイートの 1 本 (生活道路のカーブでのトラックとの接触) と同じ種類で、横断歩道とは関係がありません。
       郊外の街で譲る時間が長いのは、片側 2 車線の幹線の横断歩道が長いためだと考えています。
-    - KeiPilot Mc (v0.11) の結果は、評価が終わってから足します。
+    - **KeiPilot Mc (v0.11、横断歩道を渡る人を学習していない)**: クラウドの CPU では 2.5 km のルートに時間がかかりすぎるので、`crosswalks` スイートの同じ街とエピソードを 600 m にして、エキスパートと並べました
+      (`--route_length 600 --max_steps 4000`、`runs/eval/*_crosswalks_600m.json`)。
+
+      | 600 m × 20 本 | 完走 | 横断歩道の違反 | 歩行者との衝突 | DS |
+      |---|---|---|---|---|
+      | エキスパート | 20/20 | 0 | 0 | 1.000 |
+      | KeiPilot Mc | 17/20 | 3 本 | 2 本 | 0.888 |
+
+      - 3 本とも、横断歩道を渡っている人の前で止まらずに横断歩道へ入りました。そのうち 2 本は、そのまま人に当たりました。
+      - 残りの 1 本 (街 1012、エピソード 9801) は、混んだ道での時間切れです。エキスパートもこのルートに 400 秒のうち 377 秒かかっていて、横断歩道とは関係がありません。
+      - 普段のスイートの Mc は歩行者とほとんど当たらないので、横断歩道の人に譲ることは、まだ学習していない弱点です。次は、ここを学習する事例を集めます。
   - ブラウザ版 (web/) の人は、まだ横断歩道を渡りません。
 * **レンダラ**: 地面は 1 枚の上面テクスチャを **厳密なホモグラフィ** で透視投影する（距離帯ごとにミップレベルを選択）。
   物体は低ポリゴンの凸パーツを、背面カリング + 近平面クリップ + ランバート陰影 + 距離フォグで描画する。
@@ -1022,6 +1032,7 @@ uv run scripts/evaluate.py --agent model --ckpt runs/keipilot.pt --suite long3 -
 uv run scripts/evaluate.py --agent model --ckpt runs/keipilot.pt --suite long3b --dense --brake_hold --red_hold # 同じ街の別のルートと交通
 uv run scripts/evaluate.py --agent expert --suite crosswalks          # 横断歩道を渡る人 (--crosswalks 0.7 が既定)。片側 2 車線の街は --suite crosswalks_sub
 uv run scripts/evaluate.py --agent model --ckpt runs/keipilot_mc.pt --suite crosswalks --brake_hold --red_hold --yield_hold 4 1 3.5 4 0.5 0.5 10
+#   GPU なしで何本も並べるときは OMP_NUM_THREADS=1 を付ける (付けないと、ワーカーごとに全部のコアを使おうとして遅くなる)
 uv run scripts/summarize.py
 
 # 再現: データ収集 → BC → DAgger → 追加学習
