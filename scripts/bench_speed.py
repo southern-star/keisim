@@ -64,15 +64,18 @@ def main():
     ckpt = sys.argv[1] if len(sys.argv) > 1 else None
     if ckpt and os.path.exists(ckpt):
         import torch
-        from keipilot.agent import KeiPilotAgent
+        from keipilot.agent import KeiPilotAgent, checkpoint_rig
+        from keisim.config import set_camera_rig
         agent = KeiPilotAgent(ckpt)
-        obs = env.reset(town_seed=1000, episode_seed=1)
+        menv = KeiEnv(set_camera_rig(EnvConfig(), checkpoint_rig(ckpt)))    # the model's cameras (KeiPilot Mc: both)
+        obs = menv.reset(town_seed=1000, episode_seed=1)
+        img = obs.get("rgbs", obs["rgb"])
         for _ in range(10):
-            agent.plan(obs["rgb"], obs["command"], obs["target_point"])
+            agent.plan(img, obs["command"], obs["target_point"])
         torch.cuda.synchronize()
         t = time.time()
         for _ in range(100):
-            agent.plan(obs["rgb"], obs["command"], obs["target_point"])
+            agent.plan(img, obs["command"], obs["target_point"])
         torch.cuda.synchronize()
         out["inf_ms"] = (time.time() - t) / 100 * 1000
         print(f"KeiPilot inference (bs=1, incl. transfer): {out['inf_ms']:.1f} ms")

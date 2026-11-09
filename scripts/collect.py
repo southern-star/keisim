@@ -26,7 +26,9 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from keisim.config import TL_NONE, TL_RED, EnvConfig  # noqa: E402
+from dataclasses import asdict  # noqa: E402
+
+from keisim.config import CAMERA_RIGS, TL_NONE, TL_RED, EnvConfig, set_camera_rig  # noqa: E402
 from keisim.env import KeiEnv  # noqa: E402
 from keipilot.data import STAND_CAP, ShardWriter, stand_update, write_meta  # noqa: E402
 from keisim.config import TOWN_STYLES, town_config  # noqa: E402
@@ -73,6 +75,50 @@ class Perturbation:
             self.l_t += dt
             self.l_on = self.l_t < self.l_T
         return a
+
+
+class StandPert:
+    """--stand_pert: at that share of the route's priority junctions the car brakes to a stand somewhere from
+    `before` m ahead of the junction to `after` m past it, where the expert drives on slowly (a reason in REASONS,
+    under v_max) and no car with priority is near, stands for --stand_hold s and is then handed back. In the data a
+    car standing at a junction was nearly always waiting for a car with priority, so the standing inputs (speed 0,
+    stand_m 0) themselves said "wait": KeiView's phantom stands never ended. These frames carry the expert's "go"."""
+
+    REASONS = ("crossing", "cruise", "curve")
+
+    def __init__(self, env, rng, p, hold, before=12.0, after=5.0, v_max=5.0):
+        self.rng, self.hold, self.v_max = rng, hold, v_max
+        town = env.world.town
+        self.at = sorted(float(rng.uniform(j["s_in"] - before, j["s_out"] + after)) for j in env.route.junctions
+                         if not j["signalized"] and len(town.junctions[j["junction"]].arms) >= 3 and rng.random() < p)
+        self.on = self.tail = False
+        self.left = 0.0                                     # s of standing still left
+
+    def __call__(self, env, a, dt):
+        """The action to apply instead of the driver's `a`, and whether this step belongs to a stand (the brake,
+        the stand, and the start until the car is moving again)."""
+        e, plan = env.world.ego, env.plan
+        if not (self.on or self.tail) and self.at and env.s_ego >= self.at[0]:
+            while self.at and env.s_ego >= self.at[0]:
+                self.at.pop(0)
+            tta = plan.get("yield_tta", np.nan)
+            if plan["reason"] in self.REASONS and plan["target_speed"] > 2.0 and e.v < self.v_max and \
+                    not (np.isfinite(tta) and tta < 6.0):
+                self.on, self.left = True, float(self.rng.uniform(*self.hold))
+                return self(env, a, dt)
+        if self.on:
+            a = np.array(a, float)
+            a[1], a[2] = 0.0, (0.6 if e.v > 0.05 else 1.0)
+            if e.v <= 0.05:
+                self.left -= dt
+                self.on = self.left > 0
+                self.tail = not self.on
+            return a, True
+        if self.tail:
+            self.left -= dt
+            self.tail = e.v < 1.0 and self.left > -3.0
+            return a, True
+        return a, False
 
 
 def random_offset(rng, virtual_prob):
@@ -130,6 +176,28 @@ def lead_at_edge(env, plan, max_gap):
     return abs(route_turn_deg(plan["path"])) >= LEAD_TURN_DEG
 
 
+RAMP_LEAD = 40.0              # --focus_ramp / --ramp_early_drop: m before the route's change into a ramp
+RAMP_EARLY = 0.5              # --ramp_early_drop: m toward the ramp ahead of the route's path into it
+
+
+def ramp_state(env):
+    """(near, early) of the ego against the ramps its route takes: near, from RAMP_LEAD m before the change into a
+    ramp to the end of the ramp's junction (the acceleration lane's merge included); early, ahead of the route's path
+    into the ramp (RAMP_EARLY m or more toward the ramp before or during that change). The expert changes over where
+    the deceleration lane runs beside the lane, after its taper: a model that moves over in the taper gets a label
+    back out of the ramp it is meant to take, and mc9 learned from those to stay out of it (11-05)."""
+    T, rt, s = env.world.town, env.route, env.s_ego
+    near = early = False
+    for c in rt.changes:
+        if T.lanes[c["to"]].kind == "ramp" and c["s_a"] - RAMP_LEAD <= s <= c["s_b"]:
+            side = next(rp["side"] for rp in T.ramps if rp["lane"] == c["to"])
+            near, early = True, early or env.lat * side >= RAMP_EARLY
+    for j in rt.junctions:
+        if T.lanes[j["lane"]].kind == "ramp" and j["s_in"] - RAMP_LEAD <= s <= j["s_out"]:
+            near = True
+    return near, early
+
+
 def osm_spec(spec):
     """--osm_towns entry: NAME (a box of OSM_BOXES) or NAME:S,W,N,E."""
     name, _, box = spec.partition(":")
@@ -139,27 +207,33 @@ def osm_spec(spec):
 # per-worker counts (stats_wNN.json, saved with every shard so a resumed run keeps them): every recording step
 # (steps_*) and the kept frames
 STAT_KEYS = ("steps", "steps_focus", "steps_lead_edge", "frames", "focus", "lead_edge", "lead_edge_vehicle",
-             "lead_edge_tl_none", "lead_edge_tl_none_red", "scene")
+             "lead_edge_tl_none", "lead_edge_tl_none_red", "steps_freeze", "freeze", "freezes", "stand_perts",
+             "stand_pert", "steps_ramp", "ramp", "ramp_early_dropped",
+             "scene")
+FREEZE_REASONS = ("curve", "cruise")    # --freeze_reasons: the expert drives on along the road, no one to wait for
 
 
 def record(env, writer, rng, v_prob, weather_id, virtual_prob, offset=False, rgb=None, seg=None, prev=None,
            stand_m=np.nan):
     """offset=False: draw a random virtual camera for this frame; else use the given one (None = real camera).
     rgb/seg: an already rendered frame for that camera; prev: its frame `--history` s earlier.
-    stand_m: metres the ego has driven since it last stood (keipilot.data.stand_update)."""
+    stand_m: metres the ego has driven since it last stood (keipilot.data.stand_update).
+    Camera rigs: every camera of the rig is rendered on the same (displaced) rig and stored."""
     plan = env.plan
     e = env.world.ego
     if offset is False:
         offset = random_offset(rng, virtual_prob)
+    extra = ()
     if rgb is None:
-        rgb, seg = env.render_camera(offset=offset)
+        views = env.render_cameras(offset=offset)
+        (rgb, seg), extra = views[0], views[1:]
     if offset is None:
         path, tp = plan["path"], env.target_point()
     else:
         vp = env.virtual_pose(offset)
         path = env.expert.path_local(env.route, env.s_ego, vp)
         tp = env.target_point(vp)
-    writer.add(rgb, seg, prev=prev, cmd=np.int8(env.command()), tp=np.asarray(tp, np.float32),
+    writer.add(rgb, seg, prev=prev, extra=extra, cmd=np.int8(env.command()), tp=np.asarray(tp, np.float32),
                path=np.asarray(path, np.float32), speed=np.float32(plan["target_speed"]),
                tl=np.int8(plan["tl_state"]), v=np.float32(e.v), reason=np.int8(REASONS.get(plan["reason"], 0)),
                town=np.int32(env.town_seed), episode=np.int64(env.episode_seed), step=np.int32(env._step),
@@ -167,7 +241,7 @@ def record(env, writer, rng, v_prob, weather_id, virtual_prob, offset=False, rgb
                # inputs of the expert's traffic-light decision -> labels for counterfactual ego speeds
                target_nolight=np.float32(plan["target_nolight"]), lt_over=np.bool_(plan["lt_over"]),
                lt_d=np.float32(plan["lt_d"]), lt_st=np.int8(plan["lt_st"]), lt_trem=np.float32(plan["lt_trem"]),
-               lt_blocked=np.bool_(plan["lt_blocked"]),
+               lt_blocked=np.bool_(plan["lt_blocked"]), lt_in=np.float32(plan.get("lt_in", np.nan)),
                # auxiliary label: earliest arrival of a car with priority at the next right turn that gives way
                yield_tta=np.float32(plan.get("yield_tta", np.nan)),
                # 止まれ: the pending stop line ahead and the target without it (counterfactual standing frames)
@@ -187,7 +261,7 @@ def worker(wid, args, quota, out_dir, counter):
     n0 = sum(len(np.load(f)["jpg_off"]) - 1 for f in have)
     if n0 >= quota:                                     # this worker's share is complete
         return n0
-    cfg = EnvConfig()
+    cfg = set_camera_rig(EnvConfig(), args.rig)
     cfg.town = town_config(args.town_style)
     cfg.traffic.box_rule = cfg.traffic.release_hidden = bool(args.jam_fixes)
     if args.town_style != "classic" or args.osm_towns:   # varied / real towns: twice the caps keep the classic density
@@ -216,6 +290,8 @@ def worker(wid, args, quota, out_dir, counter):
         cfg.traffic.ped_spacing = tuple(args.ped_spacing)
     if args.vehicle_spacing is not None:
         cfg.traffic.vehicle_spacing = tuple(args.vehicle_spacing)
+    cfg.traffic.ego_patience_s = args.ego_patience
+    cfg.traffic.light_past_line = bool(args.npc_past_line)
     if args.mode == "dagger":
         cfg.blocked_timeout = 40.0
     env = KeiEnv(cfg)
@@ -255,17 +331,20 @@ def worker(wid, args, quota, out_dir, counter):
             left = args.episodes_per_town
         left -= 1
         ep_seed = int(rng.integers(1 << 40))
+        via = args.via_ramp > 0 and bool(rng.random() < args.via_ramp)     # (no draw at 0: the old random streams)
         route = None
         env.cfg.traffic.max_vehicles = 0 if in_scene else base_vehicles     # one road between dead ends: no traffic
         if in_scene:
             from keisim.curve_course import scene_route
             route = scene_route(town, rng, rng.uniform(args.route_min, args.route_max))
-        env.reset(town_seed=town, episode_seed=ep_seed, render=False, route=route)
+        env.reset(town_seed=town, episode_seed=ep_seed, render=False, via_ramp=via, route=route)
         env._step = 0
         weather_id = WEATHERS.get(env.weather.name, 0)
         pert = Perturbation(rng) if args.mode == "expert" else None
         beta_on = False
         beta_t = 0.0
+        frozen_t = 0.0                                      # --freeze_takeover: s the model has stood against the expert
+        stand_pert = StandPert(env, rng, args.stand_pert, args.stand_hold) if args.stand_pert > 0 else None
         if agent is not None:
             agent.reset()
         done = False
@@ -284,7 +363,8 @@ def worker(wid, args, quota, out_dir, counter):
             if agent is None:
                 a = pert(a_exp, dt)
             else:
-                rgb, _ = env.render_camera(want_seg=False)
+                views = env.render_cameras(want_seg=False)
+                rgb = [v[0] for v in views] if len(views) > 1 else views[0][0]
                 a, p_model = agent.act(rgb, env.command(), env.target_point(), env.world.ego.v, dt)
                 v_model, tl_model = p_model["target_speed"], p_model["tl"]
                 # beta-mixture: short expert takeovers keep episodes progressing
@@ -295,22 +375,49 @@ def worker(wid, args, quota, out_dir, counter):
                     v_model = None
                     beta_t -= dt
                     beta_on = beta_t > 0
+                # --freeze_takeover: the model asks to stand while the expert drives on (the look-based freezes in
+                # curves and left turns, which never end by themselves). After that many s the expert drives for a
+                # while: a freeze adds a few frames of the standing car with the expert's "go", not blocked_timeout's
+                # worth of the same picture, and the episode goes on
+                if args.freeze_takeover > 0:
+                    frozen = v_model is not None and v_model < 0.5 and env.plan["target_speed"] > 2.0 and \
+                        env.plan["reason"] in args.freeze_reasons
+                    frozen_t = frozen_t + dt if frozen else 0.0
+                    if frozen_t >= args.freeze_takeover:
+                        beta_on, beta_t, frozen_t = True, rng.uniform(3.0, 5.0), 0.0
+                        stats["freezes"] += 1
+            standing = False                                # --stand_pert: braking to, holding or leaving a stand
+            if stand_pert is not None:
+                was = stand_pert.on
+                a, standing = stand_pert(env, a, dt)
+                stats["stand_perts"] += int(stand_pert.on and not was)
             if env._step % args.every == 0:
                 plan = env.plan
                 stopped = env.world.ego.v < 0.2 and plan["target_speed"] == 0.0
-                keep = not stopped or rng.random() < args.stopped_keep
+                keep = standing or not stopped or rng.random() < args.stopped_keep
                 edge = args.focus_lead_edge > 0 and lead_at_edge(env, plan, args.focus_lead_edge)
+                near_ramp, early = ramp_state(env) if (args.focus_ramp or args.ramp_early_drop) and \
+                    env.world.town.ramps else (False, False)
                 focus = in_scene                    # the guardrail scenes are all in focus
                 if args.focus_yield < 1.0 and not focus:   # mostly frames around junction decisions, model mistakes
                     focus = np.isfinite(plan.get("yield_tta", np.nan)) or plan["reason"] in args.focus_reasons or \
-                        (v_model is not None and abs(v_model - plan["target_speed"]) > args.focus_disagree) or edge
-                    keep = keep and (focus or rng.random() < args.focus_yield)
+                        (v_model is not None and abs(v_model - plan["target_speed"]) > args.focus_disagree) or edge \
+                        or (args.focus_ramp and near_ramp)
+                    keep = keep and (focus or standing or rng.random() < args.focus_yield)
+                if args.ramp_early_drop and early and keep:
+                    keep = False
+                    stats["ramp_early_dropped"] += 1
                 stats["steps"] += 1
+                stats["steps_ramp"] += int(near_ramp)
                 stats["steps_focus"] += int(focus)
                 stats["steps_lead_edge"] += int(edge)
+                stats["steps_freeze"] += int(frozen_t > 0)
                 if keep:
                     stats["frames"] += 1
                     stats["focus"] += int(focus)
+                    stats["freeze"] += int(frozen_t > 0)
+                    stats["stand_pert"] += int(standing)
+                    stats["ramp"] += int(near_ramp)
                     stats["scene"] += int(in_scene)
                     if edge:
                         stats["lead_edge"] += 1
@@ -342,7 +449,9 @@ def worker(wid, args, quota, out_dir, counter):
         if wid == 0:
             el = time.time() - t0
             share = f"  focus {stats['focus'] / max(stats['frames'], 1):.0%}" + (
-                f"  lead at the edge {stats['lead_edge'] / max(stats['frames'], 1):.0%}" if args.focus_lead_edge > 0 else "")
+                f"  lead at the edge {stats['lead_edge'] / max(stats['frames'], 1):.0%}" if args.focus_lead_edge > 0 else "") + (
+                f"  freezes {stats['freezes']}" if args.freeze_takeover > 0 else "") + (
+                f"  stands {stats['stand_perts']}" if args.stand_pert > 0 else "")
             print(f"[w0] {n}/{quota} frames  {(n - n0) / max(el, 1e-6):.1f} fps{share}  last={info['status']}", flush=True)
     writer.flush()
     save_stats()
@@ -363,6 +472,15 @@ def report(out_dir):
     print(f"{tot['frames']} frames kept: focus {tot['focus'] / fr:.1%}, lead at the edge / on a curve {tot['lead_edge'] / fr:.1%}"
           f" (reason vehicle {tot['lead_edge_vehicle'] / le:.0%}, true light none {tot['lead_edge_tl_none'] / le:.0%},"
           f" model red with no light {tot['lead_edge_tl_none_red'] / le:.1%} of them)")
+    if tot["freezes"] or tot["steps_freeze"]:
+        print(f"freezes handed to the expert: {tot['freezes']}; frames kept while the model stood against the expert:"
+              f" {tot['freeze']} ({tot['freeze'] / fr:.1%})")
+    if tot["stand_perts"]:
+        print(f"stands made (--stand_pert): {tot['stand_perts']}; frames kept from them: {tot['stand_pert']}"
+              f" ({tot['stand_pert'] / fr:.1%})")
+    if tot.get("steps_ramp") or tot.get("ramp_early_dropped"):
+        print(f"recording steps by a ramp the route takes: {tot['steps_ramp']}; frames kept there: {tot['ramp']}"
+              f" ({tot['ramp'] / fr:.1%}); dropped ahead of the route's path into a ramp: {tot['ramp_early_dropped']}")
     if tot.get("scene"):
         print(f"{tot['scene']} frames ({tot['scene'] / fr:.1%}) on the guardrail scenes (--curve_scenes)")
     return tot
@@ -398,6 +516,22 @@ def parse_args(argv=None):
     ap.add_argument("--focus_lead_edge", type=float, default=0.0,
                     help="with --focus_yield < 1, frames are also in focus when a vehicle leads within this many m and "
                          "is partly outside the camera's view or the route turns 30 deg or more over the next 15 m")
+    ap.add_argument("--freeze_takeover", type=float, default=0.0,
+                    help="dagger: once the driving model has asked to stand (target < 0.5 m/s) for this many s while the "
+                         "expert drives on (> 2 m/s, a reason in --freeze_reasons), the expert drives for 3-5 s (0: off)")
+    ap.add_argument("--freeze_reasons", nargs="*", default=list(FREEZE_REASONS),
+                    help="--freeze_takeover's expert reasons; add crossing for the stands after a 止まれ, at the "
+                         "give-way crossing nobody comes to")
+    ap.add_argument("--stand_pert", type=float, default=0.0,
+                    help="share of the priority junctions where the car is made to stand a while although the expert "
+                         "drives on (StandPert; 0: off)")
+    ap.add_argument("--stand_hold", type=float, nargs=2, default=[1.0, 4.0], help="--stand_pert: s standing (range)")
+    ap.add_argument("--ego_patience", type=float, default=0.0,
+                    help="s the ego may stand before the NPCs that give way to it stop waiting for it "
+                         "(TrafficConfig.ego_patience_s; 0: they wait for ever)")
+    ap.add_argument("--npc_past_line", type=int, default=0, choices=[0, 1],
+                    help="1: NPCs standing a little past their stop line still obey its light "
+                         "(TrafficConfig.light_past_line)")
     ap.add_argument("--renderer", default="keisim", choices=["keisim", "keiview"], help="camera renderer")
     ap.add_argument("--keiview_roads", default="plain", choices=["plain", "detail"],
                     help="KeiView road surface: plain (every KeiView dataset so far) or detail (markings, signs, ...)")
@@ -411,16 +545,33 @@ def parse_args(argv=None):
     ap.add_argument("--osm_towns", nargs="*", default=[], metavar="NAME[:S,W,N,E]",
                     help="drive real towns (keisim/realworld.py; boxes of OSM_BOXES or given) instead of procedural "
                          "ones; a town is picked per --episodes_per_town episodes. Use --jam_fixes 1 as evaluate.py does")
+    ap.add_argument("--via_ramp", type=float, default=0.0,
+                    help="share of the episodes whose route takes one of the town's ramps (route.ramp_route, "
+                         "evaluate.py --via_ramp; ramps towns: the random routes rarely do)")
+    ap.add_argument("--focus_ramp", type=int, default=0, choices=[0, 1],
+                    help="with --focus_yield < 1, frames by a ramp the route takes are in focus (ramp_state: from "
+                         "RAMP_LEAD m before the change into it to the end of its junction)")
+    ap.add_argument("--ramp_early_drop", type=int, default=0, choices=[0, 1],
+                    help="drop the frames where the ego is ahead of the route's path into a ramp (moved over in the "
+                         "taper): their label leads back out of the ramp (ramp_state)")
     ap.add_argument("--osm_seed0", type=int, default=1000, help="seeds of the real towns' variants (per worker)")
     ap.add_argument("--allow_eval_town", action="store_true", help="let --osm_towns include osm_sapporo (tests only)")
     ap.add_argument("--history", type=float, default=0.0, help="also store the frame this many s earlier (multi-frame)")
     ap.add_argument("--segment", type=float, default=3.0, help="with --history: seconds a virtual camera is kept")
+    ap.add_argument("--rig", default="front", choices=list(CAMERA_RIGS),
+                    help="camera rig (keisim CAMERA_RIGS): every camera's image is stored (jpg_c1, ...)")
     ap.add_argument("--curve_scenes", type=float, default=0.0,
                     help="probability that a town is a random winding road with guardrails and (mostly) no paint "
                          "(keisim/curve_course.py scene_town; 1: only those)")
     args = ap.parse_args(argv)
     if any(osm_spec(t)[0] == "osm_sapporo" for t in args.osm_towns) and not args.allow_eval_town:
         ap.error("osm_sapporo is the evaluation town (evaluate.py --osm_town): collect in other boxes")
+    if args.rig != "front" and args.history:
+        ap.error("camera rigs: no --history")
+    if args.mode == "dagger":
+        from keipilot.agent import checkpoint_rig
+        if checkpoint_rig(args.ckpt) != args.rig:
+            ap.error(f"--ckpt drives with the camera rig {checkpoint_rig(args.ckpt)}: pass it as --rig")
     if not 0.0 <= args.curve_scenes <= 1.0:
         ap.error("--curve_scenes is a probability")
     return args
@@ -434,6 +585,15 @@ def main():
                **({"osm_towns": args.osm_towns, "osm_seed0": args.osm_seed0} if args.osm_towns else {}),
                **({"keiview_roads": args.keiview_roads} if args.keiview_roads != "plain" else {}),
                **({"yield_visible": 1} if args.yield_visible else {}),
+               **({"ego_patience": args.ego_patience} if args.ego_patience else {}),
+               **({"npc_past_line": 1} if args.npc_past_line else {}),
+               **({"freeze_reasons": args.freeze_reasons} if args.freeze_takeover > 0 else {}),
+               **({"stand_pert": args.stand_pert, "stand_hold": args.stand_hold} if args.stand_pert > 0 else {}),
+               **({"via_ramp": args.via_ramp} if args.via_ramp > 0 else {}),
+               **({"focus_ramp": 1} if args.focus_ramp else {}),
+               **({"ramp_early_drop": 1} if args.ramp_early_drop else {}),
+               **({"rig": args.rig, "cameras": [asdict(c) for c in set_camera_rig(EnvConfig(), args.rig).cameras]}
+                  if args.rig != "front" else {}),
                **({"curve_scenes": args.curve_scenes} if args.curve_scenes else {}))
     ctx = mp.get_context("spawn" if args.mode == "dagger" else "fork")
     counter = ctx.Value("i", 0)

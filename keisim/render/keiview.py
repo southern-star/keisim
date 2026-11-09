@@ -5,6 +5,9 @@ gl="auto" (default) falls back to SwiftShader on the CPU (~2 s/frame).
 Same contract as CameraRenderer.render(): returns (bgr uint8 HxWx3, semantic class ids HxW or
 None) for the KeiSim camera configuration, so the expert labels, the model and every script work
 unchanged. Towns are exported on demand to web/.towns/ with scripts/export_town.py.
+
+Camera rigs (keisim/config.py CAMERA_RIGS): render_rig() draws every camera of the rig in one request. A cylindrical
+camera is drawn as the pinhole faces of KeiSim's CylinderRenderer and stitched with the same maps (keisim/render/rig.py).
 """
 from __future__ import annotations
 
@@ -16,11 +19,14 @@ import math
 import os
 import subprocess
 import sys
+from dataclasses import replace
 
+import cv2
 import numpy as np
 
-from ..config import town_key
+from ..config import SEM, town_key
 from .camera import camera_pose
+from .rig import CylinderRenderer, cylinder_faces
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 WEB_DIR = os.path.join(ROOT, "web")
@@ -50,12 +56,32 @@ def export_town(seed: int, town_cfg=None, out_dir: str | None = None) -> str:
     return path
 
 
+def _vfov(cam_cfg):
+    return math.degrees(2.0 * math.atan(math.tan(math.radians(cam_cfg.fov_deg) / 2.0) * cam_cfg.height / cam_cfg.width))
+
+
 class KeiViewRenderer:
-    def __init__(self, cam_cfg, quality="medium", gl="auto", node="node", max_dist=160.0, log_path=None, roads="plain"):
+    def __init__(self, cam_cfg, quality="medium", gl="auto", node="node", max_dist=160.0, log_path=None, roads="plain",
+                 cameras=None):
+        """cameras: every camera of the rig (EnvConfig.cameras, cam_cfg first), for render_rig()."""
         self.cfg = cam_cfg
-        self.W, self.H = cam_cfg.width, cam_cfg.height
-        hfov = math.radians(cam_cfg.fov_deg)
-        self.vfov = math.degrees(2.0 * math.atan(math.tan(hfov / 2.0) * self.H / self.W))
+        self.cameras = tuple(cameras) if cameras else (cam_cfg,)
+        # what each camera draws: its pinhole shots, and the maps that stitch them (None: one plain image)
+        self._shots = []
+        for c in self.cameras:
+            if c.projection == "cylindrical":
+                faces, map_x, map_y, _ = cylinder_faces(c, CylinderRenderer.FACES, CylinderRenderer.OVERSAMPLE)
+                # KeiView's pixel centres are at half-integer coordinates, KeiSim's at integers
+                self._shots.append((faces, (map_x - 0.5, map_y - 0.5)))
+            elif c.projection == "pinhole":
+                self._shots.append(([c], None))
+            else:
+                raise ValueError(f"unknown projection {c.projection!r}")
+        self.rig = len(self.cameras) > 1 or self._shots[0][1] is not None
+        # the canvas: every shot fits in it (the front camera alone: its own size)
+        self.W = max(s.width for shots, _ in self._shots for s in shots)
+        self.H = max(s.height for shots, _ in self._shots for s in shots)
+        self.vfov = _vfov(cam_cfg)
         self.max_dist = max_dist
         self.town = None
         self._id = 0
@@ -112,6 +138,7 @@ class KeiViewRenderer:
                                                               os.path.join(ROOT, "scripts", "export_town.py"))
                 mod = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(mod)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
                 tmp = f"{path}.{os.getpid()}.tmp"
                 with open(tmp, "w") as f:
                     json.dump(mod.export_town(seed), f, separators=(",", ":"))
@@ -161,7 +188,20 @@ class KeiViewRenderer:
                            + [round(float(scene.ped_phase[i]), 3)])
         return veh, ped
 
+    @staticmethod
+    def _decode(v):
+        """(bgr, class ids or None) of one image of a reply, top row first."""
+        W, H = v["w"], v["h"]
+        rgb = np.frombuffer(base64.b64decode(v["rgb"]), np.uint8).reshape(H, W, 3)[::-1, :, ::-1]
+        seg = None
+        if v.get("sem"):
+            seg = np.ascontiguousarray(np.frombuffer(base64.b64decode(v["sem"]), np.uint8).reshape(H, W)[::-1])
+        return np.ascontiguousarray(rgb), seg
+
     def render(self, pose, scene, t, want_rgb=True, want_seg=True, offset=None):
+        """(bgr, class ids or None) of the first camera."""
+        if self.rig:
+            return self.render_rig(pose, scene, t, want_rgb, want_seg, offset, which=[0])[0]
         C, R = camera_pose(self.cfg, *pose, offset)
         veh, ped = self._actors(C, scene)
         req = {"op": "render", "cam": {"pos": [float(v) for v in C], "fwd": [float(v) for v in R[2]], "vfov": self.vfov},
@@ -171,12 +211,45 @@ class KeiViewRenderer:
         self._new_episode = False
         r = self._call(req)
         self.last_ms = r.get("ms", 0.0)
-        W, H = r["w"], r["h"]
-        rgb = np.frombuffer(base64.b64decode(r["rgb"]), np.uint8).reshape(H, W, 3)[::-1, :, ::-1]
-        seg = None
-        if r.get("sem"):
-            seg = np.ascontiguousarray(np.frombuffer(base64.b64decode(r["sem"]), np.uint8).reshape(H, W)[::-1])
-        return np.ascontiguousarray(rgb), seg
+        return self._decode(r)
+
+    def render_rig(self, pose, scene, t, want_rgb=True, want_seg=True, offset=None, which=None):
+        """[(bgr, class ids or None)] of every camera of the rig (or of the cameras `which`), in one request: the same
+        scene state, sky and shadows for all."""
+        which = range(len(self.cameras)) if which is None else which
+        # the level rig places the sky dome and the sun's shadow box, and finds the actors
+        C, R = camera_pose(replace(self.cameras[0], yaw_deg=0.0, pitch_deg=0.0), *pose, offset)
+        veh, ped = self._actors(C, scene)
+        cams, spans = [], []
+        for ci in which:
+            shots, maps = self._shots[ci]
+            spans.append((ci, len(cams), len(shots)))
+            for s in shots:
+                Cs, Rs = camera_pose(s, *pose, offset)
+                cams.append({"pos": [float(v) for v in Cs], "fwd": [float(v) for v in Rs[2]], "vfov": _vfov(s),
+                             "w": s.width, "h": s.height, "face": maps is not None})
+        req = {"op": "render", "cam": {"pos": [float(v) for v in C], "fwd": [float(v) for v in R[2]], "vfov": 60.0},
+               "cams": cams, "t": float(t), "veh": veh, "ped": ped, "labels": bool(want_seg), "reset": self._new_episode}
+        if self._new_episode:
+            req["light"] = self._light
+        self._new_episode = False
+        r = self._call(req)
+        self.last_ms = r.get("ms", 0.0)
+        imgs = [self._decode(v) for v in r["views"]]
+        out = []
+        for ci, i0, n in spans:
+            maps = self._shots[ci][1]
+            rgbs, segs = [v[0] for v in imgs[i0:i0 + n]], [v[1] for v in imgs[i0:i0 + n]]
+            if maps is None:
+                out.append((rgbs[0], segs[0]))
+                continue
+            rgb = cv2.remap(np.concatenate(rgbs, 1), *maps, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+            seg = None
+            if segs[0] is not None:
+                seg = cv2.remap(np.concatenate(segs, 1), *maps, cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT,
+                                borderValue=int(SEM["sky"]))
+            out.append((rgb, seg))
+        return out
 
     def close(self):
         if getattr(self, "proc", None) is None or self.proc.poll() is not None:

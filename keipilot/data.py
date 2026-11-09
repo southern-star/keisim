@@ -12,7 +12,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from keisim.expert import STOP_SIGN_MARGIN, STOP_SIGN_V, STOP_SIGN_ZONE, target_for_speed
+from keisim.expert import CROSSING_V, STOP_SIGN_MARGIN, STOP_SIGN_V, STOP_SIGN_ZONE, target_for_speed
 
 LABEL_KEYS = ("cmd", "tp", "path", "speed", "tl", "v", "reason", "town", "episode", "step", "weather", "virtual")
 # inputs of the expert's traffic-light decision (keisim.expert.target_for_speed); shards recorded before
@@ -27,6 +27,10 @@ CF_DEFAULTS = {"target_nolight": np.float32(np.nan), "lt_over": False, "lt_d": n
 # 2026-10-24, NaN where missing (older shards keep their light counterfactuals: these keys are optional)
 SS_KEYS = ("ss_d", "ss_go")
 SS_DEFAULTS = {"ss_d": np.float32(np.nan), "ss_go": np.float32(np.nan)}
+# the stop line to the junction's entry [m] (label version 7's box rule, keisim.expert.light_stop); recorded since
+# 2026-11-06, NaN where missing (target_for_speed then takes keisim.expert.BOX_IN)
+SS_KEYS += ("lt_in",)
+SS_DEFAULTS["lt_in"] = np.float32(np.nan)
 SS_STAND_PROB = 0.5     # counterfactual frames before a pending stop line: chance of the speed 0 (standing at it)
 # the ego's one piece of memory (memory-input models): how far it has driven since it last stood (v < STAND_V), as
 # the expert remembers a stop made at a 止まれ line. Without it a single frame cannot tell a car that is still to stop
@@ -57,17 +61,30 @@ class ShardWriter:
 
     def _reset(self):
         self.jpg, self.seg, self.prev = [], [], []
+        self.extra = []                  # per extra camera of the rig: ([jpg], [seg])
         self.lab = {k: [] for k in LABEL_KEYS}
 
-    def add(self, rgb, seg, prev=None, **labels):
-        """prev: the same camera's frame from `history` seconds earlier (multi-frame models), None if unknown."""
-        ok, j = cv2.imencode(".jpg", rgb, [cv2.IMWRITE_JPEG_QUALITY, self.q])
+    def _jpg(self, rgb):
+        return cv2.imencode(".jpg", rgb, [cv2.IMWRITE_JPEG_QUALITY, self.q])[1].reshape(-1)
+
+    @staticmethod
+    def _seg(seg):
         seg_small = cv2.resize(seg, (seg.shape[1] // 2, seg.shape[0] // 2), interpolation=cv2.INTER_NEAREST)
-        ok2, s = cv2.imencode(".png", seg_small, [cv2.IMWRITE_PNG_COMPRESSION, 3])
-        self.jpg.append(j.reshape(-1))
-        self.seg.append(s.reshape(-1))
+        return cv2.imencode(".png", seg_small, [cv2.IMWRITE_PNG_COMPRESSION, 3])[1].reshape(-1)
+
+    def add(self, rgb, seg, prev=None, extra=(), **labels):
+        """prev: the same camera's frame from `history` seconds earlier (multi-frame models), None if unknown.
+        extra: (rgb, seg) of the rig's other cameras (EnvConfig.extra_cameras), stored as jpg_c1, seg_c1, ..."""
+        self.jpg.append(self._jpg(rgb))
+        self.seg.append(self._seg(seg))
+        if not self.extra:
+            self.extra = [([], []) for _ in extra]
+        assert len(extra) == len(self.extra), "every frame of a shard has the same cameras"
+        for (jl, sl), (r, s) in zip(self.extra, extra):
+            jl.append(self._jpg(r))
+            sl.append(self._seg(s))
         if prev is not None:
-            prev = cv2.imencode(".jpg", prev, [cv2.IMWRITE_JPEG_QUALITY, self.q])[1].reshape(-1)
+            prev = self._jpg(prev)
         self.prev.append(np.zeros(0, np.uint8) if prev is None else prev)
         for k in LABEL_KEYS:
             self.lab[k].append(labels[k])
@@ -86,6 +103,10 @@ class ShardWriter:
         if any(len(x) for x in self.prev):
             arrs["jpg_prev"] = np.concatenate(self.prev)
             arrs["jpg_prev_off"] = np.concatenate([[0], np.cumsum([len(x) for x in self.prev])]).astype(np.int64)
+        for c, (jl, sl) in enumerate(self.extra, 1):
+            for key, xs in ((f"jpg_c{c}", jl), (f"seg_c{c}", sl)):
+                arrs[key] = np.concatenate(xs)
+                arrs[key + "_off"] = np.concatenate([[0], np.cumsum([len(x) for x in xs])]).astype(np.int64)
         path = os.path.join(self.out_dir, f"{self.prefix}_{self.k:04d}.npz")
         np.savez(path, jpg=np.concatenate(self.jpg), jpg_off=jo, seg=np.concatenate(self.seg), seg_off=so, **arrs)
         self.total += len(self.jpg)
@@ -128,10 +149,19 @@ def _npy_len(zf, key):
         return read(fp)[0][0]
 
 
+def _n_cams(zf):
+    """Cameras of an open shard (zipfile): the first one plus its extra cameras jpg_c1, jpg_c2, ..."""
+    names, c = set(zf.namelist()), 1
+    while f"jpg_c{c}.npy" in names:
+        c += 1
+    return c
+
+
 def load_shards(dirs, with_prev=True):
     """All shards of `dirs` in memory. The byte buffers (jpg, seg, jpg_prev; ~45 GB for v0.7's data) are allocated
     once from the shard headers and filled in place, so loading peaks at about the data size instead of twice that.
-    with_prev=False skips the earlier frames (a quarter of the bytes) for single-frame models."""
+    with_prev=False skips the earlier frames (a quarter of the bytes) for single-frame models.
+    Shards of a camera rig also hold jpg_c1 / seg_c1, ... (data["n_cams"] cameras); all shards need the same rig."""
     files = []
     dir_version, dir_renderer = {}, {}
     for d in dirs if isinstance(dirs, (list, tuple)) else [dirs]:
@@ -144,12 +174,19 @@ def load_shards(dirs, with_prev=True):
             dir_renderer[f] = m.get("renderer", "keisim")
     if not files:
         raise FileNotFoundError(f"no shards in {dirs}")
-    sizes = []
+    sizes, cams = [], []
     for f in files:
         with zipfile.ZipFile(f) as zf:
-            sizes.append((_npy_len(zf, "jpg"), _npy_len(zf, "seg"), _npy_len(zf, "jpg_prev") if with_prev else 0))
+            cams.append(_n_cams(zf))
+            sizes.append((_npy_len(zf, "jpg"), _npy_len(zf, "seg"), _npy_len(zf, "jpg_prev") if with_prev else 0)
+                         + tuple(_npy_len(zf, f"{k}_c{c}") for c in range(1, cams[-1]) for k in ("jpg", "seg")))
+    n_cams = cams[0]
+    if any(c != n_cams for c in cams):
+        raise ValueError(f"shards of different camera rigs ({sorted(set(cams))} cameras) in {dirs}")
+    extra_keys = tuple(f"{k}_c{c}" for c in range(1, n_cams) for k in ("jpg", "seg"))
     total = np.sum(np.array(sizes, np.int64), axis=0)
-    buf = {k: np.empty(int(n), np.uint8) for k, n in zip(("jpg", "seg", "jpg_prev"), total)}
+    buf = {k: np.empty(int(n), np.uint8) for k, n in zip(("jpg", "seg", "jpg_prev") + extra_keys, total)}
+    xo, xbase = {k: [] for k in extra_keys}, dict.fromkeys(extra_keys, 0)
     jo, so, src = [], [], []
     po, pbase = [], 0
     lab = {k: [] for k in LABEL_KEYS + CF_KEYS + AUX_KEYS + SS_KEYS + MEM_KEYS}
@@ -157,7 +194,7 @@ def load_shards(dirs, with_prev=True):
     jbase = sbase = 0
     for fi, f in enumerate(files):
         z = np.load(f)
-        nj, ns, npv = sizes[fi]
+        nj, ns, npv = sizes[fi][:3]
         src.append(np.full(len(z["jpg_off"]) - 1, fi, np.int32))
         buf["jpg"][jbase:jbase + nj] = z["jpg"]
         buf["seg"][sbase:sbase + ns] = z["seg"]
@@ -165,6 +202,10 @@ def load_shards(dirs, with_prev=True):
         so.append(z["seg_off"][:-1] + sbase)
         jbase += nj
         sbase += ns
+        for key, nx in zip(extra_keys, sizes[fi][3:]):
+            buf[key][xbase[key]:xbase[key] + nx] = z[key]
+            xo[key].append(z[key + "_off"][:-1] + xbase[key])
+            xbase[key] += nx
         n_frames = len(z["jpg_off"]) - 1
         if npv:
             buf["jpg_prev"][pbase:pbase + npv] = z["jpg_prev"]
@@ -188,7 +229,10 @@ def load_shards(dirs, with_prev=True):
         "jpg": buf["jpg"], "jpg_off": np.concatenate(jo + [np.array([jbase])]),
         "seg": buf["seg"], "seg_off": np.concatenate(so + [np.array([sbase])]),
         "jpg_prev": buf["jpg_prev"], "jpg_prev_off": np.concatenate(po + [np.array([pbase])]),
+        "n_cams": n_cams,
     }
+    for key in extra_keys:
+        data[key], data[key + "_off"] = buf[key], np.concatenate(xo[key] + [np.array([xbase[key]])])
     for k in LABEL_KEYS + CF_KEYS + AUX_KEYS + SS_KEYS + MEM_KEYS:
         data[k] = np.concatenate(lab[k])
     data["cf_ok"] = np.concatenate(cf_ok)
@@ -205,7 +249,20 @@ def load_shards(dirs, with_prev=True):
         data["speed"] = data["speed"].astype(np.float32)
         data["speed"][v1] = relabel_v1(data["speed"][v1], data["reason"][v1])
     data["label_version"] = version
-    data["keiview"] = np.array([dir_renderer[f] == "keiview" for f in files])[data["src"]]
+    # label version 6 (keisim.expert): 徐行 (CROSSING_V) from a 止まれ line's stop zone on, up to the wait point.
+    # Older frames in the zone (a pending line within it) only differ in the counterfactual "standing at the line"
+    # (ss_go), which takes the cap exactly. Past the stop the recorded inputs cannot place a frame before or after
+    # the wait point: in directories with 止まれ lines, a frame after a stand within the last STAND_CAP m, with a
+    # crossing ahead that gives way and no line pending, may be stale (stale_creep; train.py drops it). All of them
+    # go, whatever their label: dropping only the faster ones (mc5) left the waits, 43 % of what remained of rounds
+    # 1-3's KeiSim frames there against 13 % in label version 6 frames, and mc5 hesitated after its 止まれ stops
+    old = version < 6
+    zone = old & np.isfinite(data["ss_d"]) & (data["ss_d"] <= STOP_SIGN_MARGIN + STOP_SIGN_ZONE)
+    data["ss_go"][zone] = np.minimum(data["ss_go"][zone], CROSSING_V)
+    in_stop_dir = np.isin(data["src"], [i for i, d in enumerate(file_dir) if d in stop_dirs])
+    data["stale_creep"] = (old & in_stop_dir & np.isnan(data["ss_d"]) & np.isfinite(data["yield_tta"]) &
+                           (data["stand_m"] < STAND_CAP))
+    data["keiview"] =np.array([dir_renderer[f] == "keiview" for f in files])[data["src"]]
     data["on_policy"] = np.array([os.path.basename(files[i]).startswith("dagger") for i in range(len(files))])[data["src"]]
     return data, files
 
@@ -251,6 +308,10 @@ class DrivingDataset(Dataset):
         d = self.d
         img = cv2.imdecode(d["jpg"][d["jpg_off"][i]:d["jpg_off"][i + 1]], cv2.IMREAD_COLOR)
         seg = cv2.imdecode(d["seg"][d["seg_off"][i]:d["seg_off"][i + 1]], cv2.IMREAD_UNCHANGED)
+        n_cams = d.get("n_cams", 1)
+        extra = [(cv2.imdecode(d[f"jpg_c{c}"][d[f"jpg_c{c}_off"][i]:d[f"jpg_c{c}_off"][i + 1]], cv2.IMREAD_COLOR),
+                  cv2.imdecode(d[f"seg_c{c}"][d[f"seg_c{c}_off"][i]:d[f"seg_c{c}_off"][i + 1]], cv2.IMREAD_UNCHANGED))
+                 for c in range(1, n_cams)]
         v, speed, known = float(d["v"][i]), float(d["speed"][i]), True
         stand = float(d["stand_m"][i])
         cf = bool(d["cf_ok"][i])
@@ -262,6 +323,7 @@ class DrivingDataset(Dataset):
             img = self._augment(img, rng, p)
             if prev is not None:
                 prev = None if rng.random() < self.history_drop else self._augment(prev, rng, p)
+            extra = [(self._augment(e, rng), s) for e, s in extra]     # each camera its own look
             if cf and self.cf_prob > 0 and rng.random() < self.cf_prob:
                 ss_d = float(d["ss_d"][i])
                 if math.isfinite(ss_d) and ss_d <= STOP_SIGN_MARGIN + STOP_SIGN_ZONE and rng.random() < SS_STAND_PROB:
@@ -278,6 +340,10 @@ class DrivingDataset(Dataset):
         img = img[:, :, ::-1].transpose(2, 0, 1).copy()  # BGR -> RGB, CHW, uint8
         has_prev = prev is not None
         prev = prev[:, :, ::-1].transpose(2, 0, 1).copy() if has_prev else np.zeros_like(img)
+        if extra:       # camera rigs: (K, 3, H, W) and (K, H/2, W/2); no earlier frames
+            img = np.stack([img] + [e[:, :, ::-1].transpose(2, 0, 1) for e, _ in extra])
+            seg = np.stack([seg] + [s for _, s in extra])
+            prev = np.zeros(1, np.uint8)
         return {
             "img": torch.from_numpy(img),
             "seg": torch.from_numpy(seg.astype(np.int64)),

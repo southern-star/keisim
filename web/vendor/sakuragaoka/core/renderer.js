@@ -168,7 +168,9 @@ export function createRenderPipeline(renderer, quality) {
 
   const _v = new THREE.Vector3();
   const clearND = new THREE.Color(0.5, 0.5, 1.0);
-  function render(scene, camera, sunDir, t) {
+  // opts (KeiView's camera rigs, web/src/ego.js): shadows: false reuses the last shadow map (more cameras of the same
+  // frame); leak: false drops the light leak (the faces of a stitched wide image, where it would show the seams)
+  function render(scene, camera, sunDir, t, { shadows = true, leak = true } = {}) {
     // 1. normal + depth pre-pass (outline source) — layer 0 only
     ndMat.uniforms.uFar.value = camera.far; compMat.uniforms.uFar.value = camera.far;
     const bg = scene.background, fog = scene.fog;
@@ -183,7 +185,7 @@ export function createRenderPipeline(renderer, quality) {
     scene.overrideMaterial = null; scene.background = bg; scene.fog = fog;
     // 2. colour pass — all layers
     camera.layers.enableAll();
-    renderer.shadowMap.needsUpdate = true;
+    renderer.shadowMap.needsUpdate = shadows;
     renderer.setRenderTarget(rtColor);
     renderer.setClearColor(0xdde9f3, 1.0);
     renderer.clear();
@@ -205,7 +207,7 @@ export function createRenderPipeline(renderer, quality) {
     const onScreen = inFront * (1 - Math.min(1, Math.max(0, Math.hypot(Math.max(0, Math.abs(sx - 0.5) - 0.5), Math.max(0, Math.abs(sy - 0.5) - 0.5)) * 2.5)));
     // light leak stays near the sun side edge even when the sun is off-screen
     compMat.uniforms.uSunScreen.value.set(inFront ? THREE.MathUtils.clamp(sx, -0.3, 1.3) : (sx < 0.5 ? 1.4 : -0.4), inFront ? THREE.MathUtils.clamp(sy, -0.2, 1.3) : 1.2, onScreen);
-    compMat.uniforms.uLeak.value = inFront ? 1.0 : 0.25;
+    compMat.uniforms.uLeak.value = !leak ? 0.0 : inFront ? 1.0 : 0.25;
     compMat.uniforms.uTime.value = t;
     compMat.uniforms.tBloom.value = rtB2.texture; compMat.uniforms.tBloom2.value = rtB4.texture;
     pass(compMat, null);
