@@ -31,7 +31,10 @@ class World:
                 self.traffic.spawn_many(1, ego_xy, avoid_r=16.0, lanes=[first], s_range=(s0 + 16.0, min(L - 3, s0 + 45.0)))
         self.traffic.spawn_many(n_veh - self.traffic.n, ego_xy, avoid_r=14.0)
         n_ped = int(min(tc.max_peds, sum(r.length for r in town.roads) / rng.uniform(*tc.ped_spacing)))
-        self.peds = Pedestrians(town, tc, rng, n_ped)
+        focus = ()
+        if route is not None and tc.crosswalks > 0:     # the zebras at the exits of the route's turns
+            focus = [ci for ci, kind, turn in route.zebras(town) if kind == "exit" and turn != "straight"]
+        self.peds = Pedestrians(town, tc, rng, n_ped, focus_cw=focus)
         self.route = route
         self.ego_s = None                  # the ego's arc length along its route (set by KeiEnv after each step)
         self.ego_stood = 0.0               # s the ego has stood still (TrafficConfig.ego_patience_s)
@@ -89,7 +92,8 @@ class World:
             ped_margin = np.where(walk, 0.2, 0.9)
             pass_xy = pd.xy[walk]
         self.traffic.step(dt, self.t, ext_xy, ext_r, ext_o, ext_v, ext_yaw, e.xy, e.v, e.yaw, ego_info,
-                          ped_margin=ped_margin, pass_xy=pass_xy, ego_len=e.LENGTH, ego_wait=self._ego_lc_wait())
+                          ped_margin=ped_margin, pass_xy=pass_xy, ego_len=e.LENGTH, ego_wait=self._ego_lc_wait(),
+                          peds=pd)
         # pedestrians (crossing is triggered more often just ahead of the ego)
         tr = self.traffic
         veh_xy = np.vstack([tr.xy, e.xy[None]])
@@ -103,7 +107,7 @@ class World:
             lat = np.abs(d[:, 0] * u[1] - d[:, 1] * u[0])
             near = (along > 20.0) & (along < 45.0) & (lat < 11.0)
             trigger = near & (self.rng.random(pd.n) < self.cfg.traffic.ego_cross_rate * dt)
-        pd.step(dt, veh_xy, veh_v, veh_yaw, trigger)
+        pd.step(dt, veh_xy, veh_v, veh_yaw, trigger, t=self.t)
         self.t += dt
 
     def _ego_lc_wait(self):

@@ -145,6 +145,16 @@ class TrafficConfig:
     # braking for the box rule) counted as past the line and drove into the junction at red (grid long3d_dense
     # 1018/9500: into the ego setting off at its green). Off by default: the old evaluations stay reproducible.
     light_past_line: bool = False
+    # Crosswalks at signals (Town.ped_crossings: the zebras at the ends of the roads of two-phase signalised junctions).
+    # crosswalks: the chance that a person walking up to such an end crosses there: they wait at the kerb for the
+    # pedestrian green (the green of the cars crossing that road's flow, minus ped_flash s of flashing) and walk over
+    # on the zebra; turning cars give way to them (Traffic._crosswalk_gaps, the expert). 0: nobody uses the zebras
+    # (every town and evaluation up to here). crosswalk_spawn: corner people per zebra on average (with crosswalks
+    # > 0; three times as many at the exits of the ego's turns): extra people who start at a zebra's kerb and stay
+    # round it, crossing again and again (Pedestrians).
+    crosswalks: float = 0.0
+    crosswalk_spawn: float = 1.0
+    ped_flash: float = 4.0
 
 
 @dataclass

@@ -30,6 +30,11 @@ MIRROR_PASS = 3.6        # m: a right turn whose centre line runs this close to 
 STOP_SIGN_SETBACK = 2.0  # m: the 止まれ stop line of a minor road's approach to a priority crossing, before its lane's end
 TOMARE_GAP, TOMARE_LEN = 0.8, 2.6   # m: the painted 止まれ ends this far before the stop line and is this long
 TOMARE_CHAR_W, TOMARE_SPACE = 0.72, 0.12   # m: width of each of its three characters across the lane, and between them
+# crosswalks at signals (Town._make_markings paints the zebra 0.8-4.2 m from the road's end at the junction circle):
+# its middle line, and half its length along the road (Town.ped_crossings)
+ZEBRA_MID, ZEBRA_HALF = 2.5, 1.7
+ZEBRA_KERB = 0.3         # m: people wait at least this far beyond the road edge (Town.ped_crossings' kerb points)
+PED_RED, PED_GREEN, PED_FLASH = 0, 1, 2      # Junction.ped_signal
 # at-grade left-turn ramps (Town._make_ramps), A-local / C-local metres: the ramp leaves the approach lane A
 # RAMP_SETBACK before its end (the stop line is 5 m before it) after RAMP_DEC of deceleration lane beside it (reached
 # by a RAMP_TAPER_IN taper), goes round the corner and runs RAMP_ACC beside the lane C it turns into (from
@@ -216,6 +221,7 @@ class Junction:
         self.yellow = 2.5
         self.allred = 1.5
         self.offset = 0.0
+        self.groups = None              # signal phase of each arm (signalised junctions)
 
     @property
     def cycle(self):
@@ -235,6 +241,22 @@ class Junction:
         if r < self.green + self.yellow:
             return TL_YELLOW
         return TL_RED
+
+    def ped_signal(self, phase, t, flash):
+        """Pedestrian light of a zebra that is green with the cars of `phase`: (state, s left), state PED_RED,
+        PED_GREEN (the first green - flash s of the phase) or PED_FLASH (its last `flash` s); s left: until the
+        phase's yellow and all-red are over (the cars crossing the zebra's road get their green then)."""
+        per = self.green + self.yellow + self.allred
+        tau = (t + self.offset) % (per * self.phases)
+        r = tau - phase * per
+        if not 0.0 <= r < per:
+            return PED_RED, 0.0
+        left = per - r
+        if r < self.green - flash:
+            return PED_GREEN, left
+        if r < self.green:
+            return PED_FLASH, left
+        return PED_RED, left
 
     def remaining(self, phase, t):
         """Seconds until the state of `phase` changes."""
@@ -420,6 +442,8 @@ class Town:
         self.max_vehicle_dims = None         # (length, width) cap of the NPC cars (keisim.realworld: narrow roads)
         self.ramps: list[dict] = []          # at-grade left-turn ramps (_make_ramps)
         self.guardrails: list[dict] = []     # ガードレール (RoadSpec.guardrail): {road, side (+1 left of a -> b), pts}
+        self.ped_crossings: list[dict] = []  # the zebras at signals people can cross on (_make_ped_crossings)
+        self.lane_crossings: dict = {}       # lane id -> [(crossing index, s0, s1, u0, u1)]: its stretch over a zebra
 
     # ------------------------------------------------------------------ build
     def _build(self):
@@ -666,6 +690,7 @@ class Town:
                     J.yellow = cfg.signal_yellow
                     J.allred = cfg.signal_allred
                 J.offset = float(rng.uniform(0, J.cycle))
+                J.groups = list(group)
                 for k, arm in enumerate(J.arms):
                     for lid in arm["ins"]:
                         lin = self.lanes[lid]
@@ -1518,6 +1543,7 @@ class Town:
                                       "in_road": in_road})
         if self.ramps:
             self._walkways_round_ramps()
+        self._make_ped_crossings()
         self.in_road_walkways = any(w["in_road"] for w in self.walkways)
         self.narrow_lanes = any(self.lanes[l].width < NARROW_LANE for l in self.road_lanes)
         # road lanes trucks may use: wide lanes from which wide lanes go on (prune dead ends of the wide network)
@@ -1533,6 +1559,75 @@ class Town:
                         changed = True
             self.truck_lanes = ok or None
         self.speed_varies = len({l.speed_limit for l in self.lanes}) > 1
+
+    def _make_ped_crossings(self):
+        """The zebras people can cross on (TrafficConfig.crosswalks): every road end at a two-phase signalised junction
+        (the zebras of _make_markings) with a walkway on both sides that comes to the zebra (not one moved away by a
+        ramp). Each: {junction, road, end, phase (the signal phase whose cars run along the zebra: its pedestrian
+        green), pts (the two kerb points: walkway side +1, side -1), dir (unit, from pts[0] to pts[1]), width
+        (between them), ww (the two walkway indices), ww_s (the zebra's s on each), away (walking direction on each
+        walkway that leaves the junction)}. lane_crossings: lane id -> [(crossing, s0, s1, u0, u1)]: the lane's
+        stretch [s0, s1] over the zebra, and the stretch [u0, u1] of the zebra (from pts[0]) its car covers (lane
+        width + 0.3 m each side). Reads only the finished geometry (no random draws): towns are the same with or
+        without it."""
+        by_side = {}
+        for i, w in enumerate(self.walkways):
+            by_side.setdefault((w["road"], w["side"]), []).append(i)
+        for road in self.roads:
+            rs = road.spec
+            for end, jid in (("a", road.a), ("b", road.b)):
+                J = self.junctions[jid]
+                if not J.signalized or J.phases != 2 or J.groups is None:
+                    continue
+                k = next((k for k, a in enumerate(J.arms) if a["road"] == road.id and a["end"] == end), None)
+                if k is None:
+                    continue
+                s_mid = ZEBRA_MID if end == "a" else road.length - ZEBRA_MID
+                if not ZEBRA_HALF < s_mid < road.length - ZEBRA_HALF:
+                    continue
+                c = np.array(road.poly.interp1(s_mid))
+                h = road.poly.heading1(s_mid)
+                n = np.array([-math.sin(h), math.cos(h)])
+                ww = rs.walkway()
+                if ww is None:
+                    continue
+                # the kerb points: where the walkway meets the zebra; on roads without a sidewalk (walkways in the
+                # 路側帯) just off the carriageway (ZEBRA_KERB), so that the people waiting there stand clear of the
+                # cars turning in and out
+                kerb = max(ww[0], rs.half_width + ZEBRA_KERB)
+                t = np.array([math.cos(h), math.sin(h)])
+                ends = []
+                for sgn in (1.0, -1.0):
+                    best = None
+                    for i in by_side.get((road.id, sgn), []):
+                        w = self.walkways[i]
+                        ws, _ = w["poly"].project(c + n * sgn * ww[0])
+                        p = np.array(w["poly"].interp1(ws))
+                        miss = float(np.hypot(*(p - (c + n * sgn * ww[0]))))
+                        if miss < 0.5 and abs(float((p - c) @ t)) < 0.5 and (best is None or miss < best[2]):
+                            best = (i, ws, miss, p if kerb == ww[0] else c + n * sgn * kerb)
+                    if best is None:
+                        break
+                    ends.append(best)
+                if len(ends) < 2:
+                    continue
+                p0, p1 = ends[0][3], ends[1][3]
+                width = float(np.hypot(*(p1 - p0)))
+                d = (p1 - p0) / width
+                ci = len(self.ped_crossings)
+                towards_end = 1.0 if end == "b" else -1.0
+                self.ped_crossings.append({"junction": J.id, "road": road.id, "end": end, "arm": k,
+                                           "phase": 1 - J.groups[k], "pts": (p0, p1), "dir": d, "width": width,
+                                           "ww": (ends[0][0], ends[1][0]), "ww_s": (ends[0][1], ends[1][1]),
+                                           "away": (-towards_end, -towards_end)})
+                for lid in list(road.lanes_ab) + list(road.lanes_ba):
+                    lane = self.lanes[lid]
+                    sx, _ = lane.poly.project(c)
+                    q = np.array(lane.poly.interp1(sx))
+                    u = float((q - p0) @ d)
+                    half = lane.width / 2 + 0.3
+                    self.lane_crossings.setdefault(lid, []).append(
+                        (ci, float(sx - ZEBRA_HALF), float(sx + ZEBRA_HALF), u - half, u + half))
 
     def _walkways_round_ramps(self):
         """The sidewalk paths beside a ramp move out to its far side (the ramp's own sidewalk). Where a path would
