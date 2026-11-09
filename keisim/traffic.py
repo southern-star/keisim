@@ -170,6 +170,8 @@ CW_GIVE_UP = 150.0          # s: someone who has waited this long walks on inste
 CW_FOCUS = 2.0              # the zebras at the exits of the ego's turns get 1 + this times as many corner people
 CW_REACT = (0.3, 3.0)       # s: someone waiting steps off this long into the green (each their own)
 CW_CORNER_WALK = (3.0, 45.0)   # m: a corner person walks this far on from the zebra before coming back to it
+CW_HELD = (1.5, 1.8, 1.0)   # someone waiting at a zebra does not step off while a car moving faster than [2] m/s comes
+#                             within [1] m of their way over it within [0] s (or is there): it could not stop for them
 CW_STALL = 3.0              # s: someone on a zebra held up this long by a car standing in front of them walks back to
 #                             their kerb (and waits there again): a car stuck on the zebra and the people it waits for
 #                             would otherwise stand for ever
@@ -1202,6 +1204,7 @@ class Pedestrians:
         self.cw_stall = np.zeros(n)             # s held up on the zebra by a standing car (CW_STALL)
         self.cw_retreat = np.zeros(n, bool)     # walking back to the kerb they set off from
         self.cw_skip = np.zeros(n, bool)        # back at it: they let this green go (until their light is red)
+        self.cw_held = np.zeros(n, bool)        # a car is about to cross their way (CW_HELD): they wait for it
         self.ww_cw = [[] for _ in ww]          # walkway -> [(zebra, kerb, s of the zebra on it)]
         for ci, c in enumerate(pc):
             for side in (0, 1):
@@ -1321,6 +1324,8 @@ class Pedestrians:
         rng = self.rng
         self.cooldown -= dt
         self.phase += self.speed * dt * 4.2 * (self.vel > 0.1)
+        if self.cw_on:
+            self._update_held(veh_xy, veh_v, veh_yaw)
         for i in range(self.n):
             if self.mode[i] == self.WAIT:
                 self._wait_step(i, dt, t)
@@ -1389,6 +1394,28 @@ class Pedestrians:
         # refresh walking poses
         self._update_pose()
 
+    def _update_held(self, veh_xy, veh_v, veh_yaw):
+        """cw_held of the people waiting at a zebra: a car faster than CW_HELD[2] m/s whose straight-line position
+        within CW_HELD[0] s comes within CW_HELD[1] m of their way over the zebra (kerb to kerb)."""
+        self.cw_held[:] = False
+        wait = np.nonzero((self.mode == self.WAIT) & (self.cw >= 0))[0]
+        if not len(wait) or not len(veh_xy):
+            return
+        T, R, V = CW_HELD
+        fast = veh_v > V
+        if not fast.any():
+            return
+        u = np.stack([np.cos(veh_yaw[fast]), np.sin(veh_yaw[fast])], -1) * veh_v[fast, None]
+        taus = np.linspace(0.0, T, 4)
+        pts = (veh_xy[fast, None, :] + u[:, None, :] * taus[None, :, None]).reshape(-1, 2)
+        for i in wait:
+            c = self.town.ped_crossings[self.cw[i]]
+            a, b = c["pts"][0], c["pts"][1]
+            ab = b - a
+            q = np.clip(((pts - a) @ ab) / (ab @ ab), 0.0, 1.0)
+            dist = np.hypot(*(pts - (a + q[:, None] * ab)).T)
+            self.cw_held[i] = bool((dist < R).any())
+
     def _retreat(self, i):
         """Person i, held up on a zebra by a standing car (CW_STALL), walks back to where they set off from."""
         start = self.c0[i].copy()
@@ -1425,13 +1452,16 @@ class Pedestrians:
         """Whether person i, waiting at zebra c, sets off now (react: also past their reaction time; without, about
         to): at the green when there is time to get over before the cars crossing the road get theirs, walking at
         least the speed that takes (up to CW_SPEED_MAX); the late ones also in the flashing green, hurrying. Not
-        after stepping back (cw_skip) until their light has turned red. Returns that least speed (CW_SPEED_MAX for
+        after stepping back (cw_skip) until their light has turned red, nor while a car is about to cross their way
+        (cw_held). Returns that least speed (CW_SPEED_MAX for
         the hurrying late ones), or None."""
         J = self.town.junctions[c["junction"]]
         st, left = J.ped_signal(c["phase"], t, flash)
         if self.cw_skip[i]:
             if st not in (PED_GREEN, PED_FLASH):
                 self.cw_skip[i] = False
+            return None
+        if self.cw_held[i]:
             return None
         if st == PED_GREEN:
             if react and J.green + J.yellow + J.allred - left < self.cw_react[i]:
