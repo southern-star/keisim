@@ -66,8 +66,11 @@ SUITES = {
     "crosswalks": [(t, 9800 + e) for t in range(1010, 1020) for e in range(2)],
     # the same in the suburban towns (片側2車線 main roads: wider zebras)
     "crosswalks_sub": [(t, 9850 + e) for t in range(2000, 2010) for e in range(2)],
+    # big junctions (bigjunction towns, seeds no other suite uses): main roads with a centre strip and right-turn
+    # lanes, scramble crossings, people on the zebras (--crosswalks 0.7); 2.5 km routes
+    "bigjunction": [(t, 9800 + e) for t in range(3000, 3010) for e in range(2)],
 }
-CAP_SCALE = {"classic": 1, "varied": 2, "twophase": 2, "roadtypes": 2, "suburban": 2, "ramps": 2}      # NPC count caps per town style
+CAP_SCALE = {"classic": 1, "varied": 2, "twophase": 2, "roadtypes": 2, "suburban": 2, "ramps": 2, "bigjunction": 2}      # NPC count caps per town style
 # per-suite defaults for arguments left unset on the command line
 SUITE_DEFAULTS = {
     "long": {"route_length": 2500.0, "max_steps": 20000},
@@ -88,6 +91,7 @@ SUITE_DEFAULTS["ramp_routes"] = {"route_length": 600.0, "max_steps": 6000, "town
 SUITE_DEFAULTS["long3e"] = SUITE_DEFAULTS["long3f"] = SUITE_DEFAULTS["long3"]
 SUITE_DEFAULTS["crosswalks"] = {**SUITE_DEFAULTS["long3"], "crosswalks": 0.7}
 SUITE_DEFAULTS["crosswalks_sub"] = {**SUITE_DEFAULTS["long3"], "town_style": "suburban", "crosswalks": 0.7}
+SUITE_DEFAULTS["bigjunction"] = {**SUITE_DEFAULTS["long3"], "town_style": "bigjunction", "crosswalks": 0.7}
 
 
 _ENV = None

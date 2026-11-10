@@ -1576,3 +1576,59 @@ def test_scramble_crossings():
         env.step([0.0, 0.0, 1.0])
         seen += int(((pd.mode == pd.CROSS) & np.isin(pd.cw, list(on_diag))).sum())
     assert seen > 0
+
+
+def test_bigjunction_town():
+    """bigjunction towns: main roads with a centre strip (RoadSpec.median) and right-turn lanes (lane kind 'pocket')
+    before their signals; only the right-turn lane turns right there, cars change into it from the inner lane, and
+    the expert drives one. Towns of the other styles have neither."""
+    from keisim.config import town_config
+    from keisim.route import Route, change_window, random_route
+    plain = Town(2000, town_config("suburban"))
+    assert not any(l.kind == "pocket" for l in plain.lanes) and all(r.spec.median == 0.0 for r in plain.roads)
+    cfg = town_config("bigjunction")
+    t = Town(3007, cfg)
+    mains = [r for r in t.roads if r.spec.kind == "main"]
+    assert mains and all(r.spec.median == cfg.main_median for r in mains)
+    pockets = [l for l in t.lanes if l.kind == "pocket"]
+    assert len(pockets) >= 4 and any(J.scramble for J in t.junctions)
+    for P in pockets:
+        J = t.junctions[P.end_junction]
+        arm = next(a for a in J.arms if P.id in a["ins"])
+        inner = t.lanes[arm["ins"][-2]]
+        assert P.succ and all(t.lanes[c].turn == "right" for c in P.succ)
+        assert not any(t.lanes[c].turn == "right" for c in inner.succ)      # the inner lane goes straight on
+        assert change_window(inner, 0.0, P) is not None
+        assert P.signal == inner.signal and P.stop_s is not None and not P.pred
+        assert np.hypot(*(P.pts[-1] - inner.pts[-1])) > 2.5                  # beside it, in the centre strip
+        assert (t.surface(P.pts) == 1).all()
+    # random routes take them: a change from the inner lane, then its right turn
+    rng = np.random.default_rng(1)
+    used = 0
+    for _ in range(40):
+        r = random_route(t, rng, 800, turn_weights={"right": 4.0})
+        for k, x in enumerate(r.lanes):
+            if t.lanes[x].kind == "pocket":
+                assert any(c["to"] == x for c in r.changes) and t.lanes[r.lanes[k + 1]].turn == "right"
+                used += 1
+    assert used > 0
+    # the expert drives a right-turn lane: from 90 m before the junction on the inner lane
+    P = max(pockets, key=lambda l: t.lanes[next(a for a in t.junctions[l.end_junction].arms
+                                                if l.id in a["ins"])["ins"][-2]].length)
+    J = t.junctions[P.end_junction]
+    inner = t.lanes[next(a for a in J.arms if P.id in a["ins"])["ins"][-2]]
+    conn = P.succ[0]
+    route = Route(t, [inner.id, P.id, conn, t.lanes[conn].succ[0]], max(0.0, inner.length - 90.0))
+    ecfg = EnvConfig()
+    ecfg.town = cfg
+    ecfg.blocked_timeout = 180.0           # (a scramble crossing's red lasts up to 75 s; right turns queue behind it)
+    ecfg.render_rgb = ecfg.render_seg = False
+    env = KeiEnv(ecfg)
+    env.reset(3007, 4, render=False, route=route)
+    on_pocket = 0
+    for _ in range(3000):
+        _, _, done, info = env.step(env.expert_action())
+        on_pocket += env.route.lane_at(env.s_ego) == P.id
+        if done:
+            break
+    assert info["status"] == "success" and not info["infractions"] and on_pocket > 0

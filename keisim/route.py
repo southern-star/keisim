@@ -62,7 +62,8 @@ def link_map(lane_a, lane_b, s):
 def change_window(lane_a, s_lo=0.0, lane_b=None):
     """(a_min, a_max, lc): where on `lane_a` a change into lane_b can start, and its length; None if there is no
     room for one (from A-local s_lo on). Siblings (or lane_b None): from LC_ENTRY after the lane's start to LC_EXIT
-    before its end; a ramp's lane: along the stretch where the two run side by side (Lane.links)."""
+    before its end; a ramp's lane or a right-turn lane: along the stretch where the two run side by side
+    (Lane.links). A change into a right-turn lane is LC_MIN long."""
     lk = None if lane_b is None else lane_a.links.get(lane_b.id)
     if lk is None or lk[3] is None:
         lo = max(LC_ENTRY, s_lo)
@@ -72,7 +73,8 @@ def change_window(lane_a, s_lo=0.0, lane_b=None):
         hi = lk[1]
     if hi - lo < LC_MIN:
         return None
-    lc = min(LC_LEN, hi - lo)
+    # into a right-turn lane (Town._make_pockets): a short change (slow cars in its queue), so that its start can wait
+    lc = min(LC_MIN if lane_b is not None and lane_b.kind == "pocket" else LC_LEN, hi - lo)
     return lo, hi - lc, lc
 
 
@@ -280,7 +282,7 @@ def lane_moves(town, cur, s_lo=0.0, truck_lanes=None):
     """The movements from road lane `cur` at the end of its road, for a car that may change lanes from cur-local
     s_lo on: [(turn, src, lanes)], src the lane it is made from (cur, or a sibling it changes to first), lanes the
     route's next lanes: [src, if it changes] + [the junction's connector], or + [a ramp, the lane it merges into]
-    (Town._make_ramps). A change only where its window fits (a ramp after a lane change: from where that ends).
+    (Town._make_ramps), or + [a right-turn lane, its connector] (Town._make_pockets). A change only where its window fits (a ramp after a lane change: from where that ends).
     truck_lanes: only connectors into these lanes (unless none is) and ramps into them."""
     lanes = town.lanes
     srcs = [(cur, s_lo)]
@@ -297,6 +299,10 @@ def lane_moves(town, cur, s_lo=0.0, truck_lanes=None):
         moves += [(lanes[c].turn, src.id, pre + [c]) for c in sc]
         for rid in src.links:
             R = lanes[rid]
+            if R.kind == "pocket" and change_window(src, lo, R) is not None:      # a right-turn lane (右折専用車線)
+                moves += [(lanes[c].turn, src.id, pre + [rid, c]) for c in R.succ
+                          if not truck_lanes or lanes[c].succ[0] in truck_lanes]
+                continue
             if R.kind != "ramp" or change_window(src, lo, R) is None:
                 continue
             (cid,) = R.links

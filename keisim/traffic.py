@@ -1514,6 +1514,12 @@ class Pedestrians:
     def velocity_vectors(self):
         return np.stack([np.cos(self.yaw), np.sin(self.yaw)], -1) * self.vel[:, None]
 
+    def waiting_at_kerb(self):
+        """People standing at a zebra's kerb for their light (TrafficConfig.crosswalks): off the carriageway, beside the
+        cars turning in and out of the road; when they set off, the crosswalk rule takes over (crosswalk_blocked).
+        Passed as closely as the people walking in a 路側帯."""
+        return self.mode == self.WAIT
+
     def walking_in_road(self):
         """Pedestrians walking along a 路側帯 (on the road surface, beside the lane; not crossing), away from the ends of
         their walkway: at a junction mouth turning cars sweep across the 路側帯, so there they count like anyone else."""

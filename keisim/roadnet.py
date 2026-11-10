@@ -18,7 +18,7 @@ import numpy as np
 
 from .config import ROAD_KINDS, TL_GREEN, TL_RED, TL_YELLOW, TownConfig
 from .geometry import (Polyline, arc_bezier, box_corners, cubic_bezier, curvature_of,
-                       headings_of, offset_polyline, resample, unit, wrap)
+                       headings_of, normals_of, offset_polyline, resample, unit, wrap)
 from .glyphs import TOMARE
 
 LANE_DS = 0.5
@@ -35,6 +35,10 @@ TOMARE_CHAR_W, TOMARE_SPACE = 0.72, 0.12   # m: width of each of its three chara
 ZEBRA_MID, ZEBRA_HALF = 2.5, 1.7
 ZEBRA_KERB = 0.3         # m: people wait at least this far beyond the road edge (Town.ped_crossings' kerb points)
 PED_RED, PED_GREEN, PED_FLASH = 0, 1, 2      # Junction.ped_signal
+# right-turn lanes (Town._make_pockets): full width over POCKET_LEN m before the junction, after a POCKET_TAPER m taper
+# out of the inner lane; at least POCKET_MIN m, the two of a road POCKET_GAP m apart. Cars change into one from the
+# inner lane from 3 m into the taper to POCKET_SOLID m before the stop line.
+POCKET_LEN, POCKET_TAPER, POCKET_MIN, POCKET_GAP, POCKET_SOLID = 40.0, 15.0, 25.0, 10.0, 8.0
 # at-grade left-turn ramps (Town._make_ramps), A-local / C-local metres: the ramp leaves the approach lane A
 # RAMP_SETBACK before its end (the stop line is 5 m before it) after RAMP_DEC of deceleration lane beside it (reached
 # by a RAMP_TAPER_IN taper), goes round the corner and runs RAMP_ACC beside the lane C it turns into (from
@@ -57,7 +61,7 @@ class Lane:
         if len(k) > 7:
             k = np.convolve(np.pad(k, 3, mode="edge"), np.ones(7) / 7.0, mode="valid")
         self.curv = k
-        self.kind = kind                  # 'road' or 'conn'
+        self.kind = kind                  # 'road', 'conn', 'ramp' (Town._make_ramps) or 'pocket' (_make_pockets)
         self.road = -1
         self.junction = -1                # connectors: junction id
         self.start_junction = -1
@@ -95,7 +99,7 @@ class RoadSpec:
     [{side: "left" / "right", s0, s1 (m along the polyline given to from_graph, from junction a), beam (or None)}]."""
 
     def __init__(self, kind, lane_width, shoulder, sidewalk, speed_limit, center="dashed", edge="classic",
-                 oneway=False, lanes=1, guardrail=None, guardrail_beam=None, guardrail_spans=None):
+                 oneway=False, lanes=1, guardrail=None, guardrail_beam=None, guardrail_spans=None, median=0.0):
         self.kind = kind
         self.lane_width, self.shoulder, self.sidewalk = lane_width, shoulder, sidewalk
         self.speed_limit = speed_limit
@@ -116,8 +120,11 @@ class RoadSpec:
             if sp["side"] not in ("left", "right") or not sp["s0"] < sp["s1"]:
                 raise ValueError(f"guardrail span: {sp!r}")
         self.guardrail_spans = [dict(sp) for sp in guardrail_spans or ()]
+        # median: a centre strip (m) between the two directions (TownConfig.main_median): 導流帯, and the right-turn
+        # lanes before the junctions (Town._make_pockets)
+        self.median = 0.0 if self.oneway else float(median)
         # the lanes' outer edge, from the centre line
-        self.lane_outer = lane_width / 2.0 if oneway else lane_width * self.lanes
+        self.lane_outer = lane_width / 2.0 if oneway else self.median / 2.0 + lane_width * self.lanes
         self.half_width = self.lane_outer + shoulder  # road surface, centre line to edge
         self.walk_outer = self.half_width + sidewalk  # outer edge of the sidewalk (= half_width without one)
 
@@ -133,7 +140,7 @@ class RoadSpec:
         the road's centre line, kerb lane first."""
         if self.oneway:
             return [0.0]
-        return [(self.lanes - k - 0.5) * self.lane_width for k in range(self.lanes)]
+        return [self.median / 2.0 + (self.lanes - k - 0.5) * self.lane_width for k in range(self.lanes)]
 
     @classmethod
     def street(cls, cfg, oneway=False):
@@ -145,7 +152,8 @@ class RoadSpec:
         if kind == "street":
             return cls.street(cfg, oneway)
         lanes = cfg.main_lanes if kind == "main" and not oneway else 1
-        return cls(kind, **ROAD_KINDS[kind], oneway=oneway, lanes=lanes)
+        median = getattr(cfg, "main_median", 0.0) if kind == "main" else 0.0
+        return cls(kind, **ROAD_KINDS[kind], oneway=oneway, lanes=lanes, median=median)
 
     def walkway(self):
         """Where pedestrians walk along this road: (offset from the centre line, lateral spread factor, on the road
@@ -170,6 +178,8 @@ class Road:
         self.walk_outer = spec.walk_outer
         self.lanes_ab: list[int] = []     # lane ids driven from a to b, kerb lane first
         self.lanes_ba: list[int] = []     # ... from b to a (none on one-way roads)
+        self.pockets: list[int] = []      # right-turn lanes (Town._make_pockets)
+        self.pocket_span: dict = {}       # end "a" / "b" -> (full length, taper) of the right-turn lane there
 
     @property
     def lane_ab(self):
@@ -633,6 +643,7 @@ class Town:
             J.incoming = [lid for a in J.arms for lid in a["ins"]]
             J.outgoing = [lid for a in J.arms for lid in a["outs"]]
 
+        self._make_pockets()                         # right-turn lanes (RoadSpec.median): extra approach lanes
         ramp_skip = self._plan_ramps()               # (approach lane, exit lane) of the left turns ramps take over
         scramble = self._plan_scrambles()            # junction -> green of its phases (TownConfig.scramble)
 
@@ -652,6 +663,10 @@ class Town:
 
         for J in self.junctions:
             for ia, arm_in in enumerate(J.arms):
+                # a right-turn lane (Town._make_pockets) takes the approach's right turns; its other lanes share the
+                # rest as an approach without one
+                n_road = sum(self.lanes[x].kind != "pocket" for x in arm_in["ins"])
+                pocket = n_road < len(arm_in["ins"])
                 for k, lid_in in enumerate(arm_in["ins"]):
                     lin = self.lanes[lid_in]
                     moves = []                                 # (out arm, turn) of this approach
@@ -662,7 +677,13 @@ class Town:
                         turn = "left" if dh > 0.5 else ("right" if dh < -0.5 else "straight")
                         moves.append((arm_out, turn))
                         kerb_turn = turn if cfg.left_hand_traffic else {"left": "right", "right": "left"}.get(turn, turn)
-                        for lid_out in self._lane_map(len(J.arms), k, len(arm_in["ins"]), kerb_turn, arm_out["outs"]):
+                        if lin.kind == "pocket":
+                            outs = [arm_out["outs"][-1]] if turn == "right" else []
+                        elif pocket and turn == "right":
+                            outs = []
+                        else:
+                            outs = self._lane_map(len(J.arms), k, n_road, kerb_turn, arm_out["outs"])
+                        for lid_out in outs:
                             if (lin.id, lid_out) not in ramp_skip:
                                 connect(J, lin, self.lanes[lid_out], turn)
                     if not lin.succ:                           # a lane that no movement suits: it goes on anyway
@@ -811,10 +832,69 @@ class Town:
                 self._ramp_plans.append((J.id, A.id, C.id))
         return {(a, c) for _, a, c in self._ramp_plans}
 
+    def _make_pockets(self):
+        """Right-turn lanes (右折専用車線, lane kind 'pocket') of the roads with a centre strip (RoadSpec.median; left-hand
+        traffic): at each end of such a road at a signalised junction where its cars may turn right, a lane in the
+        centre strip as wide as it, POCKET_LEN m long (less on short roads, at least POCKET_MIN; the road's two take
+        at most half of it each, POCKET_GAP m apart) after a POCKET_TAPER m taper out of the inner lane, where every
+        lane of the approach can go straight on (else its inner lane is the right-turn lane already). Cars change
+        into it from the inner lane (Lane.links, like a ramp's), from 3 m into the taper to POCKET_SOLID m before the
+        stop line, and only it turns right there: it joins the approach's lanes (arm "ins", innermost), so
+        _lane_map gives it the right turns and the inner lane goes straight on. No random draws."""
+        cfg = self.cfg
+        if not cfg.left_hand_traffic:
+            return
+        for road in self.roads:
+            rs = road.spec
+            if rs.median <= 0.0 or rs.oneway:
+                continue
+            L = road.length
+            budget = min(POCKET_LEN + POCKET_TAPER, (L - POCKET_GAP) / 2.0)
+            plen = budget - POCKET_TAPER
+            if plen < POCKET_MIN:
+                continue
+            c, s = road.center, road.poly.s
+            n = normals_of(c)
+            inner_off = rs.lane_offsets()[-1]
+            for end, jid in (("a", road.a), ("b", road.b)):
+                J = self.junctions[jid]
+                arm = next((a for a in J.arms if a["road"] == road.id and a["end"] == end), None)
+                if not J.signalized or arm is None or not arm["ins"]:
+                    continue
+                h_in = self.lanes[arm["ins"][0]].heading[-1]
+                dh = [(o, float(wrap(self.lanes[o["outs"][0]].heading[0] - h_in))) for o in J.arms
+                      if o is not arm and o["outs"]]
+                straight = next((o for o, d in dh if abs(d) <= 0.5), None)
+                if not any(d < -0.5 for _, d in dh) or straight is None or len(straight["outs"]) < len(arm["ins"]):
+                    continue        # no right turn here, or a lane that cannot go straight on (it turns right itself)
+                u = L - s if end == "b" else s                 # distance to this end
+                m = u <= plen + POCKET_TAPER
+                x = np.clip((u[m] - plen) / POCKET_TAPER, 0.0, 1.0)
+                off = inner_off * x * x * (3.0 - 2.0 * x)        # inner lane -> the road's centre line
+                sgn = 1.0 if end == "b" else -1.0              # driving side of the direction into this end
+                pts = c[m] + n[m] * (sgn * off)[:, None]
+                if end == "a":
+                    pts = pts[::-1]
+                P = Lane(len(self.lanes), pts, "pocket", rs.speed_limit, rs.median)
+                P.road, P.end_junction = road.id, J.id
+                P.start_junction = road.a if end == "b" else road.b
+                P.lane_index = P.nlanes = rs.lanes
+                A = self.lanes[arm["ins"][-1]]                 # the inner lane
+                a_lo = A.length - (plen + POCKET_TAPER) + 3.0
+                a_hi = A.length - cfg.stop_line_setback - POCKET_SOLID
+                r0 = P.poly.project(np.asarray(A.poly.interp1(a_lo)))[0]
+                r1 = P.poly.project(np.asarray(A.poly.interp1(a_hi)))[0]
+                A.links[P.id] = (a_lo, a_hi, r0, (r1 - r0) / (a_hi - a_lo))
+                self.lanes.append(P)
+                road.pockets.append(P.id)
+                road.pocket_span[end] = (plen, POCKET_TAPER)
+                arm["ins"].append(P.id)
+                J.incoming.append(P.id)
+
     def _plan_scrambles(self):
         """Junctions that become scramble crossings (TownConfig.scramble), with the green of their phases: signalised
-        4-arm junctions of two-phase signals where 2+ arms are main roads. Own random stream (two draws per such
-        junction, whatever the chance)."""
+        4-arm junctions of two-phase signals on a main road. Own random stream (two draws per such junction,
+        whatever the chance)."""
         cfg = self.cfg
         if cfg.scramble <= 0.0 or cfg.signal_mode != "two_phase":
             return {}
@@ -822,7 +902,7 @@ class Town:
         out = {}
         for J in self.junctions:
             if not J.signalized or len(J.arms) != 4 or \
-                    sum(self.roads[a["road"]].spec.kind == "main" for a in J.arms) < 2:
+                    not any(self.roads[a["road"]].spec.kind == "main" for a in J.arms):
                 continue
             u, green = rng.random(), float(rng.uniform(*cfg.scramble_green))
             if u < cfg.scramble:
@@ -925,7 +1005,7 @@ class Town:
                     n_s = out[straight].lanes if straight is not None else 0
                     fit = min(m, max(2, n_s + 1) if turn_across else max(n_s, 1))
                     if fit < m:
-                        out[n] = RoadSpec("main", **ROAD_KINDS["main"], lanes=fit)
+                        out[n] = RoadSpec("main", **ROAD_KINDS["main"], lanes=fit, median=out[n].median)
                         changed = True
         return out
 
@@ -980,13 +1060,15 @@ class Town:
             b = offset_polyline(pts, off - width / 2)
             return np.concatenate([a, b[::-1]])
 
-        def stop_line(lane, s, rs):
+        def stop_line(lane, s, rs, pocket=False):
             """Stop line across incoming `lane` at arc length `s` (centre-line side to edge; one-way roads: edge to
-            edge), 0.45 m deep. `lane` is the kerb lane: the line runs on over the other lanes of its direction."""
+            edge), 0.45 m deep. `lane` is the kerb lane: the line runs on over the other lanes of its direction (and
+            its right-turn lane: pocket)."""
             p = lane.poly.interp(s)
             h = float(lane.poly.heading(s))
             u, n = unit(h), unit(h + math.pi / 2)
-            inner = -side * (rs.lane_width / 2.0 + (lane.nlanes - 1) * rs.lane_width)   # towards road centre
+            inner = -side * (rs.lane_width / 2.0 + (lane.nlanes - 1) * rs.lane_width   # towards road centre
+                             + (rs.median if pocket else 0.0))
             if rs.edge == "classic":
                 outer = side * (rs.lane_width / 2.0 + rs.shoulder - 0.35)
             else:                                    # up to the edge line
@@ -1049,8 +1131,11 @@ class Town:
                     for run in np.split(np.arange(len(c)), np.nonzero(np.diff(keep.astype(int)))[0] + 1):
                         if keep[run[0]] and len(run) >= 2:
                             self.markings.append(strip(c[run], off, mw))
-            # centre line: solid near junctions, dashed elsewhere (main roads: solid yellow, no overtaking)
-            if rs.center == "yellow":
+            # centre line: solid near junctions, dashed elsewhere (main roads: solid yellow, no overtaking; with a
+            # centre strip: _median_markings)
+            if rs.center == "yellow" and rs.median > 0.0:
+                self._median_markings(road, strip, mw)
+            elif rs.center == "yellow":
                 self.markings_yellow.append(strip(c, 0.0, mw))
             sig_a = self.junctions[road.a].signalized
             sig_b = self.junctions[road.b].signalized
@@ -1086,7 +1171,7 @@ class Town:
                         for s0, s1 in seg:
                             m = (s >= s0) & (s <= s1)
                             if m.sum() >= 2:
-                                self.markings.append(strip(c[m], sgn * k * rs.lane_width, mw))
+                                self.markings.append(strip(c[m], sgn * (rs.median / 2.0 + k * rs.lane_width), mw))
             # stop lines and crosswalks at signalised ends; a stop line only at the minor road's 止まれ
             # (one-way roads: no lane arrives at their start, so no stop line there; the crosswalk stays)
             for end, J in (("a", self.junctions[road.a]), ("b", self.junctions[road.b])):
@@ -1104,7 +1189,7 @@ class Town:
                         self.markings.extend(tomare_text(lane, lane.stop_sign_s, rs.lane_width))
                     continue
                 if lane is not None:
-                    self.markings.append(stop_line(lane, lane.stop_s, rs))
+                    self.markings.append(stop_line(lane, lane.stop_s, rs, end in road.pocket_span))
                 # crosswalk (zebra) between stop line and junction
                 cs0 = s_end - direction * 4.2
                 cs1 = s_end - direction * 0.8
@@ -1120,6 +1205,44 @@ class Town:
 
         for rp in self.ramps:
             self._ramp_markings(rp, strip, mw)
+
+    def _median_markings(self, road, strip, mw):
+        """Paint of a road's centre strip (RoadSpec.median, + = left of a -> b): yellow lines along both its edges,
+        white diagonal stripes between them (導流帯), and at each right-turn lane (Town.pocket_span) the yellow line on
+        the far edge only, the white line into it on the near edge (dashed where cars change into it, solid over
+        the last POCKET_SOLID m before the stop line; none along the taper), and no stripes."""
+        rs, c, s, L = road.spec, road.center, road.poly.s, road.length
+        half = rs.median / 2.0
+        span_a = sum(road.pocket_span["a"]) if "a" in road.pocket_span else 0.0
+        span_b = sum(road.pocket_span["b"]) if "b" in road.pocket_span else 0.0
+
+        def line(s0, s1, off, yellow=False):
+            m = (s >= s0) & (s <= s1)
+            if m.sum() >= 2:
+                (self.markings_yellow if yellow else self.markings).append(strip(c[m], off, mw))
+
+        line(0.0, L - span_b, half, yellow=True)               # the edge towards a -> b's lanes
+        line(span_a, L, -half, yellow=True)                    # towards b -> a's
+        for end, off in (("b", half), ("a", -half)):           # the white line into each right-turn lane
+            if end not in road.pocket_span:
+                continue
+            plen, _ = road.pocket_span[end]
+            solid = self.cfg.stop_line_setback + POCKET_SOLID          # u: m from the junction end
+            dashes = [(u, min(u + 3.0, plen)) for u in np.arange(solid + 3.0, plen, 6.0)]
+            for u0, u1 in dashes + [(0.0, solid)]:
+                line(*((L - u1, L - u0) if end == "b" else (u0, u1)), off)
+        # 導流帯: diagonal stripes between the yellow edges where no right-turn lane is
+        h0, h1 = max(span_a, 1.0), L - max(span_b, 1.0)
+        o0, o1 = -half + 0.25, half - 0.25
+        n = normals_of(c)
+        dx = o1 - o0
+        for t in np.arange(h0, h1 - dx - 0.6, 3.0):
+            corners = [(t, o0), (t + 0.6, o0), (t + dx + 0.6, o1), (t + dx, o1)]
+            poly = []
+            for ss, oo in corners:
+                i = int(np.clip(np.searchsorted(s, ss), 0, len(s) - 1))
+                poly.append(c[i] + n[i] * oo)
+            self.markings.append(np.array(poly))
 
     def _ramp_markings(self, rp, strip, mw):
         """A ramp's paint: the wide dashed line between it and the lane beside it (車線境界線 of a deceleration /
@@ -1643,7 +1766,7 @@ class Town:
                                            "pts": (p0, p1), "dir": d, "width": width,
                                            "ww": (ends[0][0], ends[1][0]), "ww_s": (ends[0][1], ends[1][1]),
                                            "away": (-towards_end, -towards_end)})
-                for lid in list(road.lanes_ab) + list(road.lanes_ba):
+                for lid in list(road.lanes_ab) + list(road.lanes_ba) + list(road.pockets):
                     lane = self.lanes[lid]
                     sx, _ = lane.poly.project(c)
                     q = np.array(lane.poly.interp1(sx))
