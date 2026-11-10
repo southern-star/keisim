@@ -36,7 +36,7 @@ from keisim.expert import LABEL_VERSION  # noqa: E402
 from keisim.realworld import OSM_BOXES  # real towns: name -> box (south, west, north, east)  # noqa: E402
 
 REASONS = {"cruise": 0, "curve": 1, "vehicle": 2, "pedestrian": 3, "red_light": 4, "junction_blocked": 5, "yield": 6,
-           "crossing": 7, "stop_sign": 8, "crosswalk": 9}
+           "crossing": 7, "stop_sign": 8, "crosswalk": 9, "bicycle": 10}
 WEATHERS = {"noon": 0, "cloudy": 1, "sunset": 2, "fog": 3}
 
 
@@ -320,6 +320,7 @@ def worker(wid, args, quota, out_dir, counter):
     cfg.traffic.crosswalks = args.crosswalks
     if args.crosswalk_spawn is not None:
         cfg.traffic.crosswalk_spawn = args.crosswalk_spawn
+    cfg.traffic.bicycles = args.bicycles
     if args.mode == "dagger":
         cfg.blocked_timeout = 40.0
     env = KeiEnv(cfg)
@@ -575,6 +576,8 @@ def parse_args(argv=None):
                     help="with --focus_yield < 1, frames are also in focus while the zebra at the exit of a junction "
                          "the route goes through, within this many m ahead, has someone on it or setting off who gets "
                          "to the ego's stretch of it within CW_FOCUS_REACH s (crosswalk_near)")
+    ap.add_argument("--bicycles", type=float, default=0.0,
+                    help="bicycles per km of road (TrafficConfig.bicycles; 0: none)")
     ap.add_argument("--renderer", default="keisim", choices=["keisim", "keiview"], help="camera renderer")
     ap.add_argument("--keiview_roads", default="plain", choices=["plain", "detail"],
                     help="KeiView road surface: plain (every KeiView dataset so far) or detail (markings, signs, ...)")
@@ -633,6 +636,7 @@ def main():
                **({"crosswalks": args.crosswalks} if args.crosswalks > 0 else {}),
                **({"crosswalk_spawn": args.crosswalk_spawn} if args.crosswalk_spawn is not None else {}),
                **({"focus_crosswalk": args.focus_crosswalk} if args.focus_crosswalk > 0 else {}),
+               **({"bicycles": args.bicycles} if args.bicycles > 0 else {}),
                **({"freeze_reasons": args.freeze_reasons} if args.freeze_takeover > 0 else {}),
                **({"stand_pert": args.stand_pert, "stand_hold": args.stand_hold} if args.stand_pert > 0 else {}),
                **({"via_ramp": args.via_ramp} if args.via_ramp > 0 else {}),

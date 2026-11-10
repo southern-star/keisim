@@ -5,6 +5,7 @@ import math
 
 import numpy as np
 
+from .bicycles import BIKE_LEN, BIKE_W
 from .config import EnvConfig
 from .geometry import box_corners, obb_overlap
 from .route import link_map
@@ -35,6 +36,19 @@ class World:
         if route is not None and tc.crosswalks > 0:     # the zebras at the exits of the route's turns
             focus = [ci for ci, kind, turn in route.zebras(town) if kind == "exit" and turn != "straight"]
         self.peds = Pedestrians(town, tc, rng, n_ped, focus_cw=focus)
+        self.bikes = None
+        if tc.bicycles > 0:     # bicycles (keisim/bicycles.py); no random draw without them
+            from .bicycles import Bicycles
+            n_bk = int(min(tc.max_bikes, round(tc.bicycles * sum(r.length for r in town.roads) / 1000.0)))
+            cxy, cr, _ = self.traffic.circles()
+            ahead = None
+            if route is not None and rng.random() < 0.6:        # one ahead of the ego on its first road
+                first = town.lanes[route.lanes[0]]
+                s0 = route.s_start
+                if first.kind == "road" and first.lane_index == 0 and first.length - s0 > 30:
+                    ahead = (first.id, s0 + 14.0, min(first.length - 3.0, s0 + 50.0))
+            self.bikes = Bicycles(town, tc, rng, n_bk, avoid_xy=ego_xy, avoid_r=10.0, car_xy=cxy, car_r=cr, ahead=ahead)
+            self.traffic.bikes = self.bikes
         self.route = route
         self.ego_s = None                  # the ego's arc length along its route (set by KeiEnv after each step)
         self.ego_stood = 0.0               # s the ego has stood still (TrafficConfig.ego_patience_s)
@@ -64,8 +78,12 @@ class World:
             color = np.vstack([color, [[40, 200, 60]]])
             kind = np.append(kind, 0)
             brake = np.append(brake, e.control[2] > 0.05)
-        return SceneState(xy, yaw, dims, color, kind, brake, pd.xy, pd.yaw, pd.height, pd.colors, pd.phase,
-                          self.lamp_states())
+        st = SceneState(xy, yaw, dims, color, kind, brake, pd.xy, pd.yaw, pd.height, pd.colors, pd.phase,
+                        self.lamp_states())
+        if self.bikes is not None and self.bikes.n:
+            (st.bike_xy, st.bike_yaw, st.bike_pose, st.bike_kind, st.bike_height,
+             st.bike_colors) = self.bikes.scene()
+        return st
 
     # ------------------------------------------------------------------ step
     def step(self, control, dt):
@@ -99,6 +117,13 @@ class World:
         veh_xy = np.vstack([tr.xy, e.xy[None]])
         veh_v = np.append(tr.v, e.v)
         veh_yaw = np.append(tr.yaw, e.yaw)
+        bk = self.bikes
+        if bk is not None and bk.n:
+            bk.step(dt, self.t, tr, pd, e.xy, e.v, e.yaw, (exy, er), ego_info, self._ego_turning())
+            mv = bk.v > 0.8                 # the people on foot watch out for the moving ones as for cars
+            veh_xy = np.vstack([veh_xy, bk.xy[mv]])
+            veh_v = np.append(veh_v, bk.v[mv])
+            veh_yaw = np.append(veh_yaw, bk.yaw[mv])
         trigger = None
         if pd.n:
             d = pd.xy - e.xy
@@ -109,6 +134,25 @@ class World:
             trigger = near & (self.rng.random(pd.n) < self.cfg.traffic.ego_cross_rate * dt)
         pd.step(dt, veh_xy, veh_v, veh_yaw, trigger, t=self.t)
         self.t += dt
+
+    def _ego_turning(self):
+        """Where the ego will be in 0.6, 1.2 and 1.8 s along its route while it turns at a junction or is within
+        12 m of the turn, moving (for the bicycles beside it: Bicycles.step), else None."""
+        r, s, e = self.route, self.ego_s, self.ego
+        if r is None or s is None or e.v < 0.5:
+            return None
+        k = r.lane_index_at(s)
+        lanes = self.town.lanes
+        cur = lanes[r.lanes[k]]
+        if cur.kind == "conn":
+            turn = cur.turn != "straight"
+        else:
+            nxt = lanes[r.lanes[k + 1]] if k + 1 < len(r.lanes) else None
+            turn = nxt is not None and nxt.kind == "conn" and nxt.turn != "straight" \
+                and cur.length - r.local_s(s, k) < 12.0
+        if not turn:
+            return None
+        return r.poly.interp(np.minimum(s + e.v * np.array([0.6, 1.2, 1.8]), r.poly.length))
 
     def _ego_lc_wait(self):
         """(target lane, s along it, length) while the ego waits at the end of a lane change window (route.py): the
@@ -145,6 +189,15 @@ class World:
                 bc = box_corners(pd.xy[idx, 0], pd.xy[idx, 1], pd.yaw[idx], np.full(len(idx), 0.45), np.full(len(idx), 0.5))
                 for i in idx[obb_overlap(ec, bc)]:
                     hits.append(("pedestrian", int(i)))
+        bk = self.bikes
+        if bk is not None and bk.n:
+            d = np.hypot(*(bk.xy - e.xy).T)
+            idx = np.nonzero(d < 5.0)[0]
+            if len(idx):
+                bc = box_corners(bk.xy[idx, 0], bk.xy[idx, 1], bk.yaw[idx], np.full(len(idx), BIKE_LEN),
+                                 np.full(len(idx), BIKE_W))
+                for i in idx[obb_overlap(ec, bc)]:
+                    hits.append(("bicycle", int(i)))
         sb = self.town.static_boxes
         if len(sb):
             r = 0.5 * np.hypot(sb[:, 3], sb[:, 4])

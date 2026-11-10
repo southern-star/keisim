@@ -166,6 +166,12 @@ class TrafficConfig:
     crosswalks: float = 0.0
     crosswalk_spawn: float = 1.0
     ped_flash: float = 4.0
+    # Bicycles (keisim/bicycles.py): bicycles per km of road, riding along the left edge of the road surface (the
+    # 路側帯 where there is one) with the cars' lights, 止まれ and right of way; cars and the expert pass them with
+    # room to spare or follow them (Traffic._bike_gaps, 道路交通法 18 条 3 項). 0: none (every town and evaluation up
+    # to here; no random draw is made for them, so the old episodes stay as they were). max_bikes caps the number.
+    bicycles: float = 0.0
+    max_bikes: int = 40
 
 
 @dataclass

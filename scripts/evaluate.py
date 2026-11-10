@@ -125,6 +125,7 @@ def run_route(job):
     cfg.traffic.ego_patience_s = float(args.get("ego_patience", 0.0))
     cfg.traffic.light_past_line = bool(args.get("npc_past_line", False))
     cfg.traffic.crosswalks = float(args.get("crosswalks", 0.0))
+    cfg.traffic.bicycles = float(args.get("bicycles", 0.0))
     if args.get("dense"):
         cfg.traffic.vehicle_spacing = (20.0, 28.0)
         cfg.traffic.ped_spacing = (14.0, 20.0)
@@ -382,6 +383,9 @@ def main():
                     help="crosswalks at signals: the chance that a person at a two-phase signal's road end crosses on "
                          "the zebra with the pedestrian light; turning cars give way (TrafficConfig.crosswalks; "
                          "default: the suite's, 0 for the existing ones); suffix _cw<P> when it differs")
+    ap.add_argument("--bicycles", type=float, default=0.0,
+                    help="bicycles per km of road (TrafficConfig.bicycles; 0: none, as in every evaluation before "
+                         "them); suffix _bk<N>")
     ap.add_argument("--only", nargs="+", default=None, metavar="TOWN:EP",
                     help="only these routes of the suite (e.g. 1018:9400), for checks on picked routes; give --out")
     args = ap.parse_args()
@@ -435,7 +439,8 @@ def main():
         ("" if int(args.jam_fixes) == suite_fixes else ("_jamfix" if args.jam_fixes else "_nojamfix")) + \
         ("" if args.blocked_timeout == suite_timeout else f"_wait{args.blocked_timeout:.0f}") + \
         (f"_pat{args.ego_patience:g}" if args.ego_patience else "") + ("_npcline" if args.npc_past_line else "") + \
-        ("" if args.crosswalks == suite_cw else f"_cw{args.crosswalks:g}")
+        ("" if args.crosswalks == suite_cw else f"_cw{args.crosswalks:g}") + \
+        (f"_bk{args.bicycles:g}" if args.bicycles else "")
     if args.osm_town:
         suffix = suffix.replace("_twophase", "")
         fail_dir = os.path.join("runs", "failures", args.osm_town, f"{tag}{suffix}")
@@ -449,7 +454,7 @@ def main():
          "red_hold": args.red_hold, "town_style": args.town_style, "jam_fixes": bool(args.jam_fixes),
          "blocked_timeout": args.blocked_timeout, "osm_bbox": args.osm_bbox, "yield_visible": bool(args.yield_visible),
          "rig": args.rig, "ego_patience": args.ego_patience, "via_ramp": bool(args.via_ramp),
-         "npc_past_line": args.npc_past_line, "crosswalks": args.crosswalks}
+         "npc_past_line": args.npc_past_line, "crosswalks": args.crosswalks, "bicycles": args.bicycles}
     t0 = time.time()
     ctx = mp.get_context("spawn")
     with ctx.Pool(args.workers) as pool:

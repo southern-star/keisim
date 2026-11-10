@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 
 from ..config import TL_GREEN, TL_RED, TL_YELLOW
+from ..bicycles import BIKE_LEN, BIKE_W
 from ..geometry import box_corners
 
 TL_BGR = {TL_RED: (40, 40, 240), TL_YELLOW: (0, 200, 255), TL_GREEN: (60, 220, 60)}
@@ -103,6 +104,14 @@ class BEVRenderer:
                 if 0 <= q[i, 0] < self.W and 0 <= q[i, 1] < self.H:
                     cv2.circle(img, (int(q[i, 0] * 4), int(q[i, 1] * 4)), 10, (40, 60, 240) if pd.mode[i] else (40, 140, 255),
                                -1, cv2.LINE_AA, shift=2)
+        bk = getattr(world, "bikes", None)
+        if bk is not None and bk.n:
+            c = box_corners(bk.xy[:, 0], bk.xy[:, 1], bk.yaw, np.full(bk.n, BIKE_LEN), np.full(bk.n, BIKE_W))
+            for i in range(bk.n):
+                q = self.world_to_px(c[i], pose)
+                if q[:, 0].max() < 0 or q[:, 0].min() > self.W or q[:, 1].max() < 0 or q[:, 1].min() > self.H:
+                    continue
+                cv2.fillPoly(img, [np.round(q * 4).astype(np.int32)], (60, 220, 240), cv2.LINE_AA, shift=2)
         # ego
         c = box_corners(e.x, e.y, e.yaw, e.LENGTH, e.WIDTH)
         q = self.world_to_px(c, pose)

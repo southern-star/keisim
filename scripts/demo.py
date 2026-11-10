@@ -47,6 +47,8 @@ def main():
                     help="model: the YieldHold safety layer (keipilot.agent.YieldHold: on margin v stand [brake [none_p after_m]]); default: KeiPilot Mc's for camera-rig models, none for one camera")
     ap.add_argument("--crosswalks", type=float, default=0.0,
                     help="crosswalks at signals (TrafficConfig.crosswalks; evaluate.py --crosswalks)")
+    ap.add_argument("--bicycles", type=float, default=0.0,
+                    help="bicycles per km of road (TrafficConfig.bicycles; evaluate.py --bicycles)")
     ap.add_argument("--town_style", default="classic", choices=list(TOWN_STYLES),
                     help="twophase: Japan's two-phase signals, right turns wait for gaps in the oncoming traffic; "
                          "roadtypes: twophase with main roads, residential roads without sidewalks and alleys")
@@ -85,6 +87,7 @@ def main():
     if args.osm_town or args.town_style != "classic":       # the long2 / long3 traffic rules (box rule, hidden jam release)
         cfg.traffic.box_rule = cfg.traffic.release_hidden = True
     cfg.traffic.crosswalks = args.crosswalks
+    cfg.traffic.bicycles = args.bicycles
     env = KeiEnv(cfg)
     obs = env.reset(town_seed=town, episode_seed=args.episode, route_length=args.route, weather=args.weather)
     agent = None
