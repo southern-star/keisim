@@ -5,6 +5,8 @@
 // among themselves).
 //   node tools/pilot_check.mjs [--town 1000] [--sec 60] [--every 2] [--ep webgpu|wasm] [--gl hw|soft] [--shot out.png]
 //                              [--traffic 0] [--cars 20]   (no other cars / their number)
+//                              [--bikes 8]   (?bikes=8: bicycles, riders per road km; the report then ends with their
+//                              number / contacts with the ego / contacts with other cars / metres to the nearest one)
 //                              [--model models/keipilot_v24.onnx]   (another ONNX under web/; default models/keipilot.onnx)
 //                              [--tdir .towns]   (a town exported there by scripts/import_osm.py, not one under towns/)
 //                              [--url https://southern-star.github.io/keisim/]   (a deployed copy instead of web/)
@@ -17,6 +19,8 @@
 //                              [--realtime SEC]   (first let the page drive in real time for SEC s and print its speed:
 //                              frames per second, model calls per second, inference and model-frame times, town time
 //                              per second)
+//                              [--eval "JS"]   (after every report: evaluate this expression in the page and print it
+//                              as JSON unless it is null, e.g. a look at window.__pilot.traffic when the car stands)
 //                              [--pace S]   (?pace=S: how long a model call may take before the town waits; 0: never)
 //                              [--only ground,roads,signals,actors]   (build only these modules: fast without a GPU)
 //                              [--infer main]   (the model on the page's main thread, as before src/infer_worker.js)
@@ -53,6 +57,7 @@ try {
   page.on('pageerror', (e) => console.log(`[pageerror] ${e.message}`));
   const q = new URLSearchParams({ pilot: args.pilot || '1', town, ...(args.ep ? { ep: args.ep } : {}), ...(args.tdir ? { tdir: args.tdir } : {}),
     ...(args.traffic ? { traffic: args.traffic } : {}), ...(args.cars ? { cars: args.cars } : {}),
+    ...(args.bikes ? { bikes: args.bikes } : {}),
     ...(args.model ? { model: args.model } : {}), ...(args.ort ? { ort: args.ort } : {}), ...(args.ramp ? { ramp: args.ramp } : {}),
     ...(args.only ? { only: args.only } : {}), ...(args.infer ? { infer: args.infer } : {}),
     ...(args.readback ? { readback: args.readback } : {}), ...(args.hz ? { hz: args.hz } : {}),
@@ -83,7 +88,8 @@ try {
       `inference ${mean(infer).toFixed(1)} ms (median ${med(infer).toFixed(1)}), model frame ${mean(cap).toFixed(1)} ms (median ${med(cap).toFixed(1)})` +
       (mean(read) > 0 ? `, read back after ${mean(read).toFixed(1)} ms` : '') + `, town time x${((b.t - a.t) / wall).toFixed(2)}`);
   }
-  console.log('   t     s  km/h  target  light  next turn       dev  restarts  infer  frame   cars/ego/npc contacts');
+  console.log('   t     s  km/h  target  light  next turn       dev  restarts  infer  frame   cars/ego/npc contacts' +
+    (args.bikes ? '   bicycles/ego/car contacts, nearest' : ''));
   const names = ['red', 'yellow', 'green', 'none'];
   for (let t = every; t <= sec + 1e-6; t += every) {
     const s = await page.evaluate((d) => window.__pilotRun(d).then((r) => ({
@@ -102,7 +108,9 @@ try {
     if (args.frames) { fs.mkdirSync(args.frames, { recursive: true }); await page.screenshot({ path: `${args.frames}/f${String(Math.round(t / every)).padStart(4, '0')}.png` }); }
     const k = s.tl ? s.tl.indexOf(Math.max(...s.tl)) : 3;
     console.log(`${t.toFixed(0).padStart(4)} ${s.s.toFixed(0).padStart(5)} ${(s.v * 3.6).toFixed(0).padStart(5)} ${s.target === null ? '     -' : (s.target * 3.6).toFixed(0).padStart(6)}` +
-      `  ${names[k].padEnd(6)} ${s.turn.padEnd(8)} ${s.dist === null ? '' : `${s.dist.toFixed(0)} m`.padStart(6)} ${s.dev.toFixed(2).padStart(6)} ${String(s.resets).padStart(6)} ${s.ms.toFixed(0).padStart(6)} ms ${s.cap.toFixed(0).padStart(4)} ms${s.hold ? ' hold' : ''}   ${s.traffic ? `${s.traffic.n}/${s.traffic.contacts}/${s.traffic.npcContacts}${s.traffic.stopSignStops ? ` 止まれ ${s.traffic.stopSignStops}` : ''}${s.traffic.laneChanges !== undefined ? `  lane changes ${s.traffic.laneChanges} ramps ${s.traffic.rampPassages}` : ''}` : '-'}${s.stand === null ? '' : `   stood ${s.stand.toFixed(1)} m ago`}`);
+      `  ${names[k].padEnd(6)} ${s.turn.padEnd(8)} ${s.dist === null ? '' : `${s.dist.toFixed(0)} m`.padStart(6)} ${s.dev.toFixed(2).padStart(6)} ${String(s.resets).padStart(6)} ${s.ms.toFixed(0).padStart(6)} ms ${s.cap.toFixed(0).padStart(4)} ms${s.hold ? ' hold' : ''}   ${s.traffic ? `${s.traffic.n}/${s.traffic.contacts}/${s.traffic.npcContacts}${s.traffic.stopSignStops ? ` 止まれ ${s.traffic.stopSignStops}` : ''}${s.traffic.laneChanges !== undefined ? `  lane changes ${s.traffic.laneChanges} ramps ${s.traffic.rampPassages}` : ''}` : '-'}${s.stand === null ? '' : `   stood ${s.stand.toFixed(1)} m ago`}` +
+      (s.traffic && s.traffic.bikes ? `   bikes ${s.traffic.bikes.n}/${s.traffic.bikes.contacts}/${s.traffic.bikes.carContacts} ${s.traffic.bikes.near.toFixed(0)} m` : ''));
+    if (args.eval) { const r = await page.evaluate(args.eval); if (r !== null && r !== undefined) console.log(JSON.stringify(r)); }
   }
   if (args.shot) { await page.screenshot({ path: args.shot }); console.log(`screenshot: ${args.shot}`); }
 } finally {
