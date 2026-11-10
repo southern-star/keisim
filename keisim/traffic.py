@@ -75,9 +75,9 @@ def _lookahead_changes(town, lanes, idx, s, dist, step, change_at):
         if sib:
             if lane.id in change_at:
                 a0, lc = change_at[lane.id]
-            else:
-                win = change_window(lane, 0.0, town.lanes[lanes[k + 1]])
-                a0, lc = (win[0], win[2]) if win is not None else (max(0.0, lane.length / 2 - 12.5), 25.0)
+            else:           # (from where the change before ends: back-to-back changes, e.g. into a right-turn lane)
+                win = change_window(lane, lo, town.lanes[lanes[k + 1]])
+                a0, lc = (win[0], win[2]) if win is not None else (max(lo, lane.length / 2 - 12.5), 25.0)
             hi = max(lo, a0)
         if hi > lo + 1e-9 or not (pts_l or sib):
             inner = np.nonzero((lane.s > lo + 1e-6) & (lane.s < hi - 1e-6))[0][::step]
@@ -95,16 +95,17 @@ def _lookahead_changes(town, lanes, idx, s, dist, step, change_at):
         if sib:
             B = town.lanes[lanes[k + 1]]
             u0 = min(1.0, max(0.0, (lo - a0) / lc))
-            m = max(2, int(math.ceil((1.0 - u0) * lc / (0.5 * step))))
-            u = np.linspace(u0, 1.0, m + 1)
-            sa = a0 + u * lc
-            w = blend_weight(u)[:, None]
-            seg = (1.0 - w) * lane.poly.interp(sa) + w * B.poly.interp(link_map(lane, B, sa))
-            cv = curvature_of(seg)
-            d = np.hypot(*np.diff(seg, axis=0).T)
-            pts_l.append(seg[1:] if pts_l else seg)          # (from mid-change: the blend is the start)
-            curv_l.append(cv[1:] if len(curv_l) else cv)
-            base += float(d.sum())
+            if u0 < 1.0 - 1e-6:                              # (else the change is already over: no blend)
+                m = max(2, int(math.ceil((1.0 - u0) * lc / (0.5 * step))))
+                u = np.linspace(u0, 1.0, m + 1)
+                sa = a0 + u * lc
+                w = blend_weight(u)[:, None]
+                seg = (1.0 - w) * lane.poly.interp(sa) + w * B.poly.interp(link_map(lane, B, sa))
+                cv = curvature_of(seg)
+                d = np.hypot(*np.diff(seg, axis=0).T)
+                pts_l.append(seg[1:] if pts_l else seg)      # (from mid-change: the blend is the start)
+                curv_l.append(cv[1:] if len(curv_l) else cv)
+                base += float(d.sum())
             lo = link_map(lane, B, a0 + lc)
         else:
             lo = 0.0
