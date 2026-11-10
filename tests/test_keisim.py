@@ -1,4 +1,5 @@
 """Basic invariants of the simulator (run: python -m pytest tests -q)."""
+import math
 import os
 import sys
 
@@ -1576,6 +1577,58 @@ def test_scramble_crossings():
         env.step([0.0, 0.0, 1.0])
         seen += int(((pd.mode == pd.CROSS) & np.isin(pd.cw, list(on_diag))).sum())
     assert seen > 0
+
+
+def test_unique_turns():
+    """roadnet.unique_turns: the exits of one approach never share a turn; turn_of where it already tells them apart,
+    else by their order (the arm across a 4-arm junction is straight even when it bends)."""
+    from keisim.roadnet import unique_turns
+    r = math.radians
+    assert unique_turns([r(-90), r(0), r(90)]) == ["right", "straight", "left"]
+    assert unique_turns([r(-80), r(29), r(110)]) == ["right", "straight", "left"]          # the arm across bends left
+    assert unique_turns([r(73), r(-108), r(-37)]) == ["left", "right", "straight"]          # ... or right
+    assert unique_turns([r(-113), r(-41)]) == ["right", "straight"]                          # a Y: the nearer one
+    assert unique_turns([r(41), r(108)]) == ["straight", "left"]
+    assert unique_turns([r(-20), r(15)]) == ["right", "left"]                                # a fork, both ahead
+    assert unique_turns([r(-90), r(90)]) == ["right", "left"]                                # a T from its stem
+    assert unique_turns([r(10)]) == ["straight"] and unique_turns([r(80)]) == ["left"]       # a bend
+
+
+def test_unique_turns_town():
+    """TownConfig.unique_turns (on in the bigjunction towns): no approach of a junction has two exits of one turn,
+    so the route command names one way out; off (the other styles), skewed junctions can have two. Town 3009
+    junction 8: the arm across bends 29 deg to the left, beside a 110 deg left turn."""
+    import dataclasses
+
+    from keisim.config import town_config
+    cfg = town_config("bigjunction")
+    assert cfg.unique_turns
+
+    def shared(town):
+        n = 0
+        for J in town.junctions:
+            for arm in J.arms:
+                roads = {}
+                for lid in arm["ins"]:
+                    for c in town.lanes[lid].succ:
+                        roads.setdefault(town.lanes[c].turn, set()).add(town.lanes[town.lanes[c].succ[0]].road)
+                n += any(len(v) > 1 for v in roads.values())
+        return n
+
+    t = Town(3009, cfg)
+    assert shared(t) == 0
+    assert shared(Town(3009, dataclasses.replace(cfg, unique_turns=False))) > 0
+    J = t.junctions[8]
+    for arm in J.arms:
+        if not arm["ins"]:
+            continue
+        h = t.lanes[arm["ins"][0]].heading[-1]
+        turns = {round(math.degrees(d)): tt for _, d, tt in t._exit_turns(J, arm, h)}
+        if 29 in turns:
+            assert turns == {-80: "right", 29: "straight", 110: "left"}
+            break
+    else:
+        raise AssertionError("town 3009 junction 8 changed")
 
 
 def test_bigjunction_town():

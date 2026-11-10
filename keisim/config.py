@@ -93,6 +93,10 @@ class TownConfig:
     # 25 s over a diagonal): own random stream, so the rest of the town is that of scramble 0.
     scramble: float = 0.0
     scramble_green: tuple = (24.0, 32.0)
+    # turns told apart (roadnet.unique_turns): no two exits of one approach get the same turn - the route command
+    # (left / straight / right) names one way out. Off: each exit's turn from its own heading change (0.5 rad), so at
+    # a skewed junction two exits can both be "left" (e.g. the arm across bending left, and the side road).
+    unique_turns: bool = False
     building_prob: float = 0.85
     tree_prob: float = 0.55
     tex_res: float = 0.1              # metres per texel of the ground texture
@@ -228,7 +232,7 @@ TOWN_STYLES = {
     # junctions on a main road scramble crossings (スクランブル交差点)
     "bigjunction": {"block_mode": "varied", "spacing_min": 100.0, "spacing_max": 220.0, "signal_mode": "two_phase",
                     "road_types": "mixed", "road_mix": (0.45, 0.45, 0.1), "main_lanes": 2, "main_roads": 3,
-                    "main_median": 3.0, "scramble": 0.6, "edge_drop": 0.08},
+                    "main_median": 3.0, "scramble": 0.6, "edge_drop": 0.08, "unique_turns": True},
     # suburban with at-grade left-turn ramps at the main roads' junctions (分流・合流)
     "ramps": {"block_mode": "varied", "spacing_min": 100.0, "spacing_max": 220.0, "signal_mode": "two_phase",
               "road_types": "mixed", "road_mix": (0.45, 0.45, 0.1), "main_lanes": 2, "ramps": 0.8},
@@ -237,7 +241,7 @@ TOWN_STYLES = {
 # TownConfig fields added after town_tag() was introduced: part of the tag only when they differ from the
 # default, so the tags (and exported town names) of the existing styles stay the same.
 _TAG_LATER = ("road_types", "main_roads", "road_mix", "main_lanes", "ramps", "scramble", "scramble_green",
-              "main_median")
+              "main_median", "unique_turns")
 
 
 def town_config(style="classic"):

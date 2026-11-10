@@ -197,6 +197,41 @@ GUARDRAIL_OFFSET = 0.3   # m: a guardrail's beam stands this far outside the roa
 GUARDRAIL_DS = 2.0       # m: its collision boxes / beam panels
 
 
+TURN_STRAIGHT = 0.5      # rad: a move into an exit within this of straight ahead is "straight", else left / right
+
+
+def turn_of(dh):
+    """The turn of a move whose heading changes by dh (rad, + = to the left)."""
+    return "left" if dh > TURN_STRAIGHT else ("right" if dh < -TURN_STRAIGHT else "straight")
+
+
+def unique_turns(dhs):
+    """Turns of the exits of one approach (heading changes dhs), none two alike (TownConfig.unique_turns): by
+    turn_of where that already tells them apart; else by their order. Three exits (a 4-arm junction): right,
+    straight and left from the right, so the arm across is straight even when it bends. Two exits with one turn:
+    the one nearer straight ahead is straight (both straight: a fork, its two sides). More exits: the nearest to
+    straight ahead is straight and the rest left / right of it."""
+    turns = [turn_of(d) for d in dhs]
+    if len(set(turns)) == len(turns):
+        return turns
+    order = sorted(range(len(dhs)), key=lambda i: dhs[i])          # from the rightmost exit to the leftmost
+    if len(dhs) == 3:
+        for i, t in zip(order, ("right", "straight", "left")):
+            turns[i] = t
+    elif len(dhs) == 2:
+        r, l = order
+        if turns[r] == "left":
+            turns[r] = "straight"
+        elif turns[r] == "right":
+            turns[l] = "straight"
+        else:
+            turns[r], turns[l] = "right", "left"
+    else:
+        i0 = min(range(len(dhs)), key=lambda i: abs(dhs[i]))
+        turns = ["straight" if i == i0 else ("left" if dhs[i] > dhs[i0] else "right") for i in range(len(dhs))]
+    return turns
+
+
 def _two_phase_groups(angles):
     """Signal group of each arm (angles sorted counter-clockwise): opposite arms share a green.
     4 arms: 0+2 and 1+3. 3 arms: the most nearly opposite pair (the main road), then the stem."""
@@ -667,14 +702,19 @@ class Town:
                 # rest as an approach without one
                 n_road = sum(self.lanes[x].kind != "pocket" for x in arm_in["ins"])
                 pocket = n_road < len(arm_in["ins"])
+                # TownConfig.unique_turns: one turn per exit arm for the whole approach, none two alike
+                labels = None if not (cfg.unique_turns and arm_in["ins"]) else \
+                    {id(o): t for o, _, t in self._exit_turns(J, arm_in, self.lanes[arm_in["ins"][0]].heading[-1])}
                 for k, lid_in in enumerate(arm_in["ins"]):
                     lin = self.lanes[lid_in]
                     moves = []                                 # (out arm, turn) of this approach
                     for ib, arm_out in enumerate(J.arms):
                         if ia == ib or not arm_out["outs"]:
                             continue
-                        dh = float(wrap(self.lanes[arm_out["outs"][0]].heading[0] - lin.heading[-1]))
-                        turn = "left" if dh > 0.5 else ("right" if dh < -0.5 else "straight")
+                        if labels is None:
+                            turn = turn_of(float(wrap(self.lanes[arm_out["outs"][0]].heading[0] - lin.heading[-1])))
+                        else:
+                            turn = labels[id(arm_out)]
                         moves.append((arm_out, turn))
                         kerb_turn = turn if cfg.left_hand_traffic else {"left": "right", "right": "left"}.get(turn, turn)
                         if lin.kind == "pocket":
@@ -780,6 +820,14 @@ class Town:
         pts = np.concatenate([taper_in, dec, curve[1:-1], acc, taper_out])
         return pts, (dec[0], dec[-1], acc[0], acc[-1]), (t0, a_lo, a_hi), (c_lo, c_hi, c_end), curve
 
+    def _exit_turns(self, J, arm_in, h_in):
+        """[(arm, dh, turn)]: the arms of J an approach (its lanes ending with heading h_in) drives into, the heading
+        change into each and its turn (turn_of; unique_turns of them all with TownConfig.unique_turns)."""
+        ex = [(o, float(wrap(self.lanes[o["outs"][0]].heading[0] - h_in))) for o in J.arms
+              if o is not arm_in and o["outs"]]
+        turns = unique_turns([d for _, d in ex]) if self.cfg.unique_turns else [turn_of(d) for _, d in ex]
+        return [(o, d, t) for (o, d), t in zip(ex, turns)]
+
     def _plan_ramps(self):
         """Corners of signalised junctions that get an at-grade left-turn ramp (TownConfig.ramps, own random stream):
         where the kerb lane A of a 2-lane main road's approach turns left (60-120 deg) into the kerb lane C of a main
@@ -810,6 +858,12 @@ class Town:
                         straight = arm_out
                     elif math.radians(60) <= kerb <= math.radians(120):
                         left = arm_out
+                if self.cfg.unique_turns:       # the arm across by its turn, the left by its turn too
+                    ex = self._exit_turns(J, arm_in, A.heading[-1])
+                    kt = "left" if self.cfg.left_hand_traffic else "right"
+                    straight = next((o for o, _, t in ex if t == "straight"), None)
+                    left = next((o for o, d, t in ex if t == kt and
+                                 math.radians(60) <= (d if kt == "left" else -d) <= math.radians(120)), None)
                 if straight is None or left is None:
                     continue
                 C = self.lanes[left["outs"][0]]
@@ -862,10 +916,16 @@ class Town:
                 if not J.signalized or arm is None or not arm["ins"]:
                     continue
                 h_in = self.lanes[arm["ins"][0]].heading[-1]
-                dh = [(o, float(wrap(self.lanes[o["outs"][0]].heading[0] - h_in))) for o in J.arms
-                      if o is not arm and o["outs"]]
-                straight = next((o for o, d in dh if abs(d) <= 0.5), None)
-                if not any(d < -0.5 for _, d in dh) or straight is None or len(straight["outs"]) < len(arm["ins"]):
+                if self.cfg.unique_turns:
+                    ex = self._exit_turns(J, arm, h_in)
+                    straight = next((o for o, _, t in ex if t == "straight"), None)
+                    right = any(t == "right" for _, _, t in ex)
+                else:
+                    dh = [(o, float(wrap(self.lanes[o["outs"][0]].heading[0] - h_in))) for o in J.arms
+                          if o is not arm and o["outs"]]
+                    straight = next((o for o, d in dh if abs(d) <= 0.5), None)
+                    right = any(d < -0.5 for _, d in dh)
+                if not right or straight is None or len(straight["outs"]) < len(arm["ins"]):
                     continue        # no right turn here, or a lane that cannot go straight on (it turns right itself)
                 u = L - s if end == "b" else s                 # distance to this end
                 m = u <= plen + POCKET_TAPER
