@@ -949,7 +949,31 @@ data/                    収集データ (リポジトリ外, 約 3 GB。scripts
     - **エキスパート** (`runs/eval/expert_bigjunction.json`): 20/20 完走、違反 0、50.1 km、平均 11.3 km/h、信号 245、車線変更 63。
       - 通ったスクランブル交差点は 35、信号での右折は 79 回で、そのうち 16 回が右折専用車線からでした。
       - 横断歩道で譲ったのは 15 本のルートで計 122 秒です (`crosswalks_sub` は 17 本で 112 秒)。
-    - (KeiPilot Mc は評価中)
+    - **KeiPilot Mc (v0.11、大きな交差点の街を学習していない)**: `crosswalks` と同じく 600 m にして、エキスパートと並べました
+      (`--route_length 600 --max_steps 4000`、`runs/eval/*_bigjunction_600m.json`)。
+
+      | 600 m × 20 本 | 完走 | 違反 (本) | DS |
+      |---|---|---|---|
+      | エキスパート | 20/20 | 0 | 1.000 |
+      | KeiPilot Mc | 16/20 | 横断歩道 4、赤信号 1、車 1 | 0.851 |
+      | 参考: KeiPilot Mc の `crosswalks` 600 m | 17/20 | 横断歩道 3 (うち歩行者に当たった 2) | 0.888 |
+
+      - **横断歩道** (4 本): どれも 3 叉の信号交差点で曲がるとき (右折 2、左折 2) に、渡っている人の前で止まらずに横断歩道へ入りました。`crosswalks` スイートと同じ弱点です。
+      - **赤信号** (街 3005、エピソード 9800): 3 叉の信号の手前で止まっていたのに、赤を青と読み違えて出ました。
+      - **車** (街 3000、エピソード 9800): 幹線どうしのスクランブル交差点を直進しているとき、交差点の中の斜めの横断歩道の上で向きが左へずれました。
+        そのまま、左の車線を並んで直進していた NPC に横から当たりました (エキスパートの経路は、ルートどおりもっと右でした)。
+
+        ![斜めの横断歩道の上で左へずれる KeiPilot Mc (マゼンタ、緑はエキスパート)](docs/bigjunction_mc_scramble_drift.jpg)
+
+      - **ルートを外れた** (街 3009、エピソード 9801): 曲がった道から斜めに入る 4 叉の交差点です。ルートは緩い左 (向かいの道) でしたが、モデルは急な左 (幹線) へ曲がりました。
+        この交差点では、どちらの出口も指示が「左」になります (下の「指示のあいまいさ」)。
+      - **動けない** (街 3003、エピソード 9800): 3 叉の交差点で右折中、前の NPC が交差点の中で止まりました。その先の道が詰まっていて、エキスパートも止まる渋滞です。
+      - **時間切れ** (街 3006、エピソード 9801): 600 m のうち 584 m。最後の信号の手前の長い列で、何周期も待ちました。
+      - 右折専用車線から右折したのは 4 回、車線変更は 11 回で、どちらも失敗はありませんでした。
+    - **指示のあいまいさ** (前からあるもの): 交差点での曲がり方 (`Lane.turn`) は、向きの変わり方だけで決めています (0.5 rad より左なら「左」)。
+      そのため斜めの交差点では、1 つの入口から 2 つの出口が同じ「左」(または「右」) になることがあります。
+      bigjunction の 20 の街では 720 の入口のうち 22、suburban では 556 のうち 6、twophase では 494 のうち 10 です。
+      決め方を変えると、今までの学習データの指示も変わるので、新しい街だけで切り替えられる形で別に直す予定です。
   - ブラウザ版 (web/) の車は、まだ右折専用車線とスクランブル交差点を使いません。KeiView の描画 (Python から動かすもの) には、帯・右折専用車線・斜めの横断歩道が出ます。
 * **レンダラ**: 地面は 1 枚の上面テクスチャを **厳密なホモグラフィ** で透視投影する（距離帯ごとにミップレベルを選択）。
   物体は低ポリゴンの凸パーツを、背面カリング + 近平面クリップ + ランバート陰影 + 距離フォグで描画する。
@@ -1069,6 +1093,7 @@ uv run scripts/evaluate.py --agent model --ckpt runs/keipilot.pt --suite long3 -
 uv run scripts/evaluate.py --agent model --ckpt runs/keipilot.pt --suite long3b --dense --brake_hold --red_hold # 同じ街の別のルートと交通
 uv run scripts/evaluate.py --agent expert --suite crosswalks          # 横断歩道を渡る人 (--crosswalks 0.7 が既定)。片側 2 車線の街は --suite crosswalks_sub
 uv run scripts/evaluate.py --agent expert --suite bigjunction         # 大きな交差点の街 (右折専用車線、スクランブル交差点、横断歩道を渡る人)
+uv run scripts/evaluate.py --agent model --ckpt runs/keipilot_mc.pt --suite bigjunction --route_length 600 --max_steps 4000 --brake_hold --red_hold --yield_hold 4 1 3.5 4 0.5 0.5 10
 uv run scripts/evaluate.py --agent model --ckpt runs/keipilot_mc.pt --suite crosswalks --brake_hold --red_hold --yield_hold 4 1 3.5 4 0.5 0.5 10
 #   GPU なしで何本も並べるときは OMP_NUM_THREADS=1 を付ける (付けないと、ワーカーごとに全部のコアを使おうとして遅くなる)
 uv run scripts/summarize.py
