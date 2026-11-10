@@ -82,6 +82,13 @@ class TownConfig:
     # 2-lane main road's approach turns left gets one (a deceleration lane, a ramp around the corner, an acceleration
     # lane into the road turned into; the junction's own left turn from that approach goes)
     ramps: float = 0.0
+    # scramble crossings (スクランブル交差点, 歩車分離): the chance that a signalised 4-arm junction of two-phase signals
+    # with 2+ main roads gets a third phase in which every car light is red and people cross on all four zebras
+    # and on the two diagonals across the junction (Town.ped_crossings, TrafficConfig.crosswalks). Their zebras are
+    # red in the cars' phases. Every phase of such a junction is green for scramble_green s (people need about
+    # 25 s over a diagonal): own random stream, so the rest of the town is that of scramble 0.
+    scramble: float = 0.0
+    scramble_green: tuple = (24.0, 32.0)
     building_prob: float = 0.85
     tree_prob: float = 0.55
     tex_res: float = 0.1              # metres per texel of the ground texture
@@ -219,7 +226,7 @@ TOWN_STYLES = {
 
 # TownConfig fields added after town_tag() was introduced: part of the tag only when they differ from the
 # default, so the tags (and exported town names) of the existing styles stay the same.
-_TAG_LATER = ("road_types", "main_roads", "road_mix", "main_lanes", "ramps")
+_TAG_LATER = ("road_types", "main_roads", "road_mix", "main_lanes", "ramps", "scramble", "scramble_green")
 
 
 def town_config(style="classic"):

@@ -222,6 +222,7 @@ class Junction:
         self.allred = 1.5
         self.offset = 0.0
         self.groups = None              # signal phase of each arm (signalised junctions)
+        self.scramble = False           # TownConfig.scramble: a third phase for the people only (all cars red)
 
     @property
     def cycle(self):
@@ -633,6 +634,7 @@ class Town:
             J.outgoing = [lid for a in J.arms for lid in a["outs"]]
 
         ramp_skip = self._plan_ramps()               # (approach lane, exit lane) of the left turns ramps take over
+        scramble = self._plan_scrambles()            # junction -> green of its phases (TownConfig.scramble)
 
         # ---- junction connectors + polygons + signals
         def connect(J, lin, lout, turn):
@@ -683,6 +685,8 @@ class Town:
                     J.green = float(rng.uniform(*cfg.two_phase_green))
                     J.yellow = cfg.two_phase_yellow
                     J.allred = cfg.two_phase_allred
+                    if J.id in scramble:            # phase 2: the people's (no car has it: all red)
+                        J.scramble, J.phases, J.green = True, 3, scramble[J.id]
                 else:
                     group = list(range(len(J.arms)))
                     J.phases = len(J.arms)
@@ -806,6 +810,24 @@ class Town:
                 used.setdefault(C.id, []).append((0.0, c_span[2]))
                 self._ramp_plans.append((J.id, A.id, C.id))
         return {(a, c) for _, a, c in self._ramp_plans}
+
+    def _plan_scrambles(self):
+        """Junctions that become scramble crossings (TownConfig.scramble), with the green of their phases: signalised
+        4-arm junctions of two-phase signals where 2+ arms are main roads. Own random stream (two draws per such
+        junction, whatever the chance)."""
+        cfg = self.cfg
+        if cfg.scramble <= 0.0 or cfg.signal_mode != "two_phase":
+            return {}
+        rng = np.random.default_rng([self.seed, 0x7363726D])
+        out = {}
+        for J in self.junctions:
+            if not J.signalized or len(J.arms) != 4 or \
+                    sum(self.roads[a["road"]].spec.kind == "main" for a in J.arms) < 2:
+                continue
+            u, green = rng.random(), float(rng.uniform(*cfg.scramble_green))
+            if u < cfg.scramble:
+                out[J.id] = green
+        return out
 
     def _make_ramps(self):
         """The planned ramps (_plan_ramps): a 'ramp' lane each (no predecessor or successor: cars change into it from
@@ -1577,7 +1599,7 @@ class Town:
             rs = road.spec
             for end, jid in (("a", road.a), ("b", road.b)):
                 J = self.junctions[jid]
-                if not J.signalized or J.phases != 2 or J.groups is None:
+                if not J.signalized or J.groups is None or J.phases != (3 if J.scramble else 2):
                     continue
                 k = next((k for k, a in enumerate(J.arms) if a["road"] == road.id and a["end"] == end), None)
                 if k is None:
@@ -1617,7 +1639,8 @@ class Town:
                 ci = len(self.ped_crossings)
                 towards_end = 1.0 if end == "b" else -1.0
                 self.ped_crossings.append({"junction": J.id, "road": road.id, "end": end, "arm": k,
-                                           "phase": 1 - J.groups[k], "pts": (p0, p1), "dir": d, "width": width,
+                                           "phase": 2 if J.scramble else 1 - J.groups[k],
+                                           "pts": (p0, p1), "dir": d, "width": width,
                                            "ww": (ends[0][0], ends[1][0]), "ww_s": (ends[0][1], ends[1][1]),
                                            "away": (-towards_end, -towards_end)})
                 for lid in list(road.lanes_ab) + list(road.lanes_ba):
@@ -1628,6 +1651,42 @@ class Town:
                     half = lane.width / 2 + 0.3
                     self.lane_crossings.setdefault(lid, []).append(
                         (ci, float(sx - ZEBRA_HALF), float(sx + ZEBRA_HALF), u - half, u + half))
+        for J in self.junctions:
+            if J.scramble:
+                self._make_diagonals(J)
+
+    def _make_diagonals(self, J):
+        """The two diagonal zebras of scramble junction J (with all four of its zebras): from the corner between arms
+        k and k + 1 (arm k's kerb point there) to the opposite corner (arm k + 2's), k = 0, 1. Like the others in
+        Town.ped_crossings (diagonal: True, no road or lane stretches: cars are all red while people may cross them;
+        someone still on one when a car's green comes is in its corridor). Painted with stripes across the way over
+        where it runs inside the junction circle (Town.crosswalks)."""
+        zs = {c["arm"]: ci for ci, c in enumerate(self.ped_crossings)
+              if c["junction"] == J.id and not c.get("diagonal")}
+        if len(zs) != 4:
+            return
+        corners = []
+        for k in range(4):
+            a, b = self.ped_crossings[zs[k]], self.ped_crossings[zs[(k + 1) % 4]]
+            sa, _ = min(((i, j) for i in (0, 1) for j in (0, 1)),
+                        key=lambda p: float(np.hypot(*(a["pts"][p[0]] - b["pts"][p[1]]))))
+            corners.append((zs[k], sa))
+        for k in (0, 1):
+            (ia, sa), (ic, sc) = corners[k], corners[k + 2]
+            A, C = self.ped_crossings[ia], self.ped_crossings[ic]
+            p0, p1 = A["pts"][sa], C["pts"][sc]
+            width = float(np.hypot(*(p1 - p0)))
+            d = (p1 - p0) / width
+            self.ped_crossings.append({"junction": J.id, "road": None, "end": None, "arm": None, "diagonal": True,
+                                       "phase": 2, "pts": (p0, p1), "dir": d, "width": width,
+                                       "ww": (A["ww"][sa], C["ww"][sc]), "ww_s": (A["ww_s"][sa], C["ww_s"][sc]),
+                                       "away": (A["away"][sa], C["away"][sc])})
+            e = np.array([-d[1], d[0]])
+            for t in np.arange(0.45, width, 0.9):
+                m = p0 + d * t
+                if np.hypot(*(m - J.pos)) < J.radius - 0.5:
+                    self.crosswalks.append(np.array([m + e * ZEBRA_HALF - d * 0.225, m + e * ZEBRA_HALF + d * 0.225,
+                                                     m - e * ZEBRA_HALF + d * 0.225, m - e * ZEBRA_HALF - d * 0.225]))
 
     def _walkways_round_ramps(self):
         """The sidewalk paths beside a ramp move out to its far side (the ramp's own sidewalk). Where a path would

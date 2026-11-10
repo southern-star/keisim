@@ -1533,3 +1533,46 @@ def test_crosswalk_step_back():
     for _ in range(100):
         pd.step(0.05, car[None], np.zeros(1), np.zeros(1), t=t)
     assert pd.mode[0] == pd.WAIT and pd.cw[0] == 0 and pd.cw_from[0] == 0 and np.hypot(*(pd.xy[0] - start)) < 0.2
+
+
+def test_scramble_crossings():
+    """TownConfig.scramble: a third phase with every car light red, in which people cross on the four zebras and the
+    two diagonals (Town.ped_crossings, painted inside the junction); the zebras are red in the cars' phases. With
+    scramble 0 the towns are as before (two phases everywhere)."""
+    from keisim.config import TL_GREEN, town_config
+    from keisim.roadnet import PED_RED
+    cfg = town_config("suburban")
+    cfg.main_roads, cfg.scramble = 3, 1.0
+    town = Town(3000, cfg)
+    plain = Town(3000, town_config("suburban"))
+    assert not any(J.scramble for J in plain.junctions) and all(J.phases in (0, 2) for J in plain.junctions)
+    sc = [J for J in town.junctions if J.scramble]
+    assert sc and all(J.phases == 3 and cfg.scramble_green[0] <= J.green <= cfg.scramble_green[1] for J in sc)
+    diag = [c for c in town.ped_crossings if c.get("diagonal")]
+    assert len(diag) >= 2 and len(town.crosswalks) > len(plain.crosswalks)
+    for J in sc:
+        zs = [c for c in town.ped_crossings if c["junction"] == J.id]
+        assert zs and all(c["phase"] == 2 for c in zs)
+        for t in np.arange(0.0, J.cycle, 0.5):
+            cars_green = any(J.signal_state(p, t) == TL_GREEN for p in (0, 1))
+            people = J.ped_signal(2, t, 4.0)[0] != PED_RED
+            assert not (cars_green and people)
+            if people:
+                assert all(J.signal_state(p, t) != TL_GREEN for p in (0, 1))
+    for c in diag:
+        assert c["width"] > 20.0 and abs(float(np.hypot(*(c["pts"][1] - c["pts"][0]))) - c["width"]) < 1e-6
+    # people walk over the diagonals
+    ecfg = EnvConfig()
+    ecfg.town = cfg
+    ecfg.traffic.crosswalks, ecfg.traffic.crosswalk_spawn = 0.7, 2.0
+    ecfg.traffic.box_rule = ecfg.traffic.release_hidden = True
+    ecfg.render_rgb = ecfg.render_seg = False
+    env = KeiEnv(ecfg)
+    env.reset(3000, 5, route_length=300, render=False)
+    pd = env.world.peds
+    on_diag = set(i for i, c in enumerate(town.ped_crossings) if c.get("diagonal"))
+    seen = 0
+    for _ in range(1500):
+        env.step([0.0, 0.0, 1.0])
+        seen += int(((pd.mode == pd.CROSS) & np.isin(pd.cw, list(on_diag))).sum())
+    assert seen > 0
