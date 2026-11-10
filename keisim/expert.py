@@ -12,9 +12,12 @@ import math
 import numpy as np
 
 from .config import TL_GREEN, TL_NONE, TL_RED, TL_YELLOW
-from .geometry import world_to_local
+from .bicycles import BIKE_LEN, BIKE_R, NCB
+from .geometry import world_to_local, wrap
 from .route import LC_CHECK, LC_PUSH, LC_PUSH_TO, change_room, link_map
-from .traffic import CW_MARGIN, CW_REACH, PASS_SPEED, YIELD_GAP, Traffic, corridor_gaps, vehicle_circles
+from .traffic import (BIKE_END, BIKE_FREE, BIKE_IN, BIKE_KEEP, BIKE_LEFT, BIKE_LEFT_WAIT, BIKE_MIN, BIKE_OUT,
+                      BIKE_PASS_DV, BIKE_PASS_V, CW_MARGIN, CW_REACH, PASS_SPEED, YIELD_GAP, Traffic, corridor_gaps,
+                      vehicle_circles)
 
 PATH_S = np.arange(1, 11) * 2.0          # label waypoints every 2 m up to 20 m
 LABEL_VERSION = 7                        # 3: yellow per traffic law; 4: at yellow, stop whenever the ego still can;
@@ -40,6 +43,15 @@ CROSSING_B = 1.6                         # m/s^2: ... slowing down towards it (t
 STOP_SIGN_MARGIN = 1.0                   # m: 止まれ: the front bumper stops this far before the stop line (still in view)
 STOP_SIGN_ZONE = 1.5                     # m: ... and the stop counts when the ego stands within this much more of it
 STOP_SIGN_V = 0.05                       # m/s: standing (a full stop: 一時停止)
+BIKE_GAP0 = 3.5                          # m: bicycles (TrafficConfig.bicycles): the standstill gap behind one
+BIKE_SIDE = 2.6                          # m beyond the ego's side: a bicycle riding this close to the left of the
+                                         # route's line is "beside the route" (the ego passes it or stays behind it)
+BIKE_START = 8.0                         # m into a road: the ego's move over for a bicycle grows from none to all of it
+BIKE_END_LEFT = (25.0, 35.0)             # m before the end of a lane the route leaves to the left: no passing a
+                                         # bicycle that would be closer to the turn than this when the ego is past it
+                                         # (traffic.BIKE_END elsewhere)
+BIKE_LEFT_MARGIN = 1.0                   # s: 巻き込み確認: the ego turns left ahead of a bicycle only if it has cleared
+                                         # the bicycle's line this long before the bicycle gets there
 STOP_SIGN_OVER = 1.5                     # m: a car that rolled this far past the line without stopping stops there;
                                          # further in, the junction's own rules take over
 
@@ -123,10 +135,159 @@ class Expert:
     def __init__(self, env):
         self.env = env
         self._ss_route, self._ss_done = None, set()    # 止まれ lines (route s) the ego has stopped at on this route
+        self._bk_wait = 0.0                            # s waited before a left turn for a bicycle standing beside
 
-    def path_local(self, route, s, pose):
-        pts = route.poly.interp(np.minimum(s + PATH_S, route.poly.length))
+    def path_local(self, route, s, pose, bikes=None):
+        """The label waypoints in the frame of `pose`. With bicycles about (bike_scan; computed here when `bikes` is
+        not given) the path moves over to the right inside the lane round the ones the ego passes."""
+        sw = np.minimum(s + PATH_S, route.poly.length)
+        pts = route.poly.interp(sw)
+        w = self.env.world
+        if bikes is None and getattr(w, "bikes", None) is not None and w.bikes.n:
+            bikes = self.bike_scan(route, s, pose, w.ego.v)
+        if bikes is not None and bikes["want"].any():
+            reach = w.ego.LENGTH / 2 + BIKE_LEN / 2
+            off = np.zeros(len(sw))
+            for j in np.nonzero(bikes["want"] > 0.0)[0]:
+                ahead = bikes["s"][j] - sw - reach          # the ego's front bumper to the bicycle's rear wheel
+                behind = -ahead - 2 * reach                 # its rear bumper to the bicycle's front wheel
+                f = np.where(ahead > 0.0, (BIKE_IN[0] - ahead) / (BIKE_IN[0] - BIKE_IN[1]),
+                             np.where(behind > 0.0, (BIKE_OUT[1] - behind) / (BIKE_OUT[1] - BIKE_OUT[0]), 1.0))
+                # ... and only on the bicycle's own road, from BIKE_START into it: none of it in the junction before
+                g = np.clip((sw - bikes["s0"][j]) / BIKE_START, 0.0, 1.0)
+                off = np.maximum(off, np.minimum(bikes["want"][j] * np.clip(f, 0.0, 1.0), bikes["cap"][j] * g))
+            h = route.poly.heading(sw)
+            pts = pts + np.stack([np.sin(h), -np.cos(h)], -1) * off[:, None]
         return world_to_local(pts, *pose)
+
+    def bike_scan(self, route, s, pose, v):
+        """Bicycles (TrafficConfig.bicycles) riding beside the route, for a car at `pose` (route position `s`, speed
+        `v`) -> {"along": riding along the route within BIKE_SIDE of the car's side, on its left; "s": their route
+        positions; "d": how far left of the route's line; "room": how far the ego may move over to the right for each
+        (as the NPCs: inside its lane, BIKE_KEEP from the lane's edge, nothing on connectors, during lane changes
+        and where the pass would end within BIKE_END of the lane's end, BIKE_END_LEFT before a left turn, and
+        growing over the first BIKE_START of a road; beside a bicycle the ego stays as far over as it is); "cap",
+        "s0": that room without the last rule, and where the bicycle's road begins on the route (path_local);
+        "want": how far it does move over (BIKE_FREE beside the bicycle, if there is that much room); "beside": alongside the ego with its rear wheel not yet past the front
+        bumper, and clear of its side (nothing to stop for: the ego keeps its line)}. No state: the path of a
+        displaced camera (collect.py) uses it too."""
+        env = self.env
+        w = env.world
+        bk, town, ego = w.bikes, w.town, w.ego
+        hl, hw, hb = ego.LENGTH / 2, ego.WIDTH / 2, BIKE_LEN / 2
+        n = bk.n
+        out = {"along": np.zeros(n, bool), "beside": np.zeros(n, bool), "s": np.zeros(n), "d": np.zeros(n),
+               "room": np.zeros(n), "want": np.zeros(n), "cap": np.zeros(n), "s0": np.zeros(n)}
+        lat = route.poly.project(np.array([pose[0], pose[1]], float), s - 8.0, s + 8.0)[1]
+        p0 = route.poly.interp(s)
+        for j in np.nonzero(np.hypot(*(bk.xy - p0).T) < 60.0)[0]:
+            s_j, d_j = route.poly.project(bk.xy[j], s - 15.0, s + 55.0)
+            if not 0.2 < d_j < hw + BIKE_SIDE:
+                continue
+            if abs(math.hypot(*(bk.xy[j] - route.poly.interp(s_j))) - d_j) > 0.3:
+                continue                                    # beyond the ends of that stretch
+            if abs(wrap(bk.yaw[j] - float(route.poly.heading(s_j)))) > 0.7:
+                continue                                    # crossing the route: an obstacle like any other
+            out["along"][j], out["s"][j], out["d"][j] = True, s_j, d_j
+            k = route.lane_index_at(s_j)
+            lane = town.lanes[route.lanes[k]]
+            vb = float(bk.v[j])
+            c = cap = 0.0
+            s0 = s_j - route.local_s(s_j, k)                # where the bicycle's lane begins on the route
+            if lane.kind == "road" and not any(ch["s_a"] - 30.0 < s_j < ch["s_b"] + 10.0 for ch in route.changes):
+                # where the bicycle will be when the ego is past it: no passing into the junction
+                behind = s - s_j - hl - hb
+                s_done = route.local_s(s_j, k)
+                if behind < BIKE_OUT[0]:
+                    s_done += vb * (BIKE_OUT[0] - behind) / max(max(v, vb + BIKE_PASS_DV) - vb, 1.0)
+                nxt = town.lanes[route.lanes[k + 1]] if k + 1 < len(route.lanes) else None
+                e0, e1 = BIKE_END_LEFT if nxt is not None and nxt.kind == "conn" and nxt.turn == "left" else BIKE_END
+                cap = max(0.0, lane.width / 2 - hw - BIKE_KEEP) * min(max((lane.length - s_done - e0) / (e1 - e0), 0.0), 1.0)
+                # the move over begins on the bicycle's road (path_local): less of it beside one that has just
+                # entered. A path moved over for a bicycle on the road after a right turn ran through the junction
+                # 0.5 m to the right, and the ego waiting there for oncoming cars stood in their way (long3c
+                # 1012/9400: the oncoming car and the ego blocked each other for good)
+                c = cap * min(max((s_j - s0) / BIKE_START, 0.0), 1.0)
+            ds = s_j - s
+            if -(hl + hb + BIKE_OUT[0]) < ds < hl + hb + 2.0:
+                hold = min(max(-lat, 0.0), 0.8)
+                if hold > c:
+                    c = cap = hold
+                    s0 = -1e9
+                out["beside"][j] = ds < hl + hb + 0.3 and d_j - lat - BIKE_R > hw + 0.1
+            out["room"][j], out["cap"][j], out["s0"][j] = c, cap, s0
+            out["want"][j] = min(max(hw + 0.3 + BIKE_FREE + 0.05 - d_j, 0.0), c)
+        return out
+
+    def bike_rules(self, route, s, v, bikes, pts, cum, real):
+        """The speed rules for bicycles -> target speed (inf: none binds). Behind one the ego cannot pass (less
+        than BIKE_MIN beside it on the path bike_scan allows) it follows, BIKE_GAP0 behind at a stand. Passing
+        with less than BIKE_FREE beside one: at BIKE_PASS_V, or BIKE_PASS_DV faster than the bicycle. Bicycles
+        crossing the route are obstacles with BIKE_MIN beside them, and so is where they will be within 2.4 s.
+        巻き込み確認: before a left turn (the front bumper within BIKE_LEFT of the lane's end and not past it) the ego
+        stops at its stop line (or the lane's end) while a bicycle beside or behind it would reach the turn before
+        the ego has cleared it plus BIKE_LEFT_MARGIN; one standing beside goes first (for BIKE_LEFT_WAIT s at most).
+        The riders behind are outside a camera looking ahead: a privileged check (the mirrors)."""
+        w = self.env.world
+        bk, town, ego = w.bikes, w.town, w.ego
+        hl, hw, hb = ego.LENGTH / 2, ego.WIDTH / 2, BIKE_LEN / 2
+        target = math.inf
+        cxy, cr, own, csp, cyw = bk.circles(predict=True)
+        keep = (np.arange(len(own)) < bk.n * NCB) | ~bikes["along"][own]     # no predictions for the ones alongside
+        one = np.ones((1, len(pts)), bool)
+        org, hd = np.array([[ego.x, ego.y]]), np.array([ego.yaw])
+        for free in (False, True):
+            m = keep if free else keep & ~bikes["beside"][own]
+            if not m.any():
+                continue
+            mg = (BIKE_FREE if free else BIKE_MIN) - bikes["room"][own[m]]
+            g, vl, _ = corridor_gaps(pts[None], cum[None], one, org, hd, np.array([hl]), np.array([hw]), cxy[m],
+                                     cr[m], own[m], csp[m], cyw[m], np.array([-1]), mg[None, :])
+            if not np.isfinite(g[0]):
+                continue
+            if free:
+                v_p = max(BIKE_PASS_V, float(vl[0]) + BIKE_PASS_DV)
+                target = min(target, math.sqrt(v_p ** 2 + 2 * 1.6 * max(float(g[0]), 0.0)))
+            else:
+                target = min(target, stop_profile(float(g[0]) - BIKE_GAP0, self.B_COMF))
+        # 巻き込み確認
+        s_front = s + hl
+        stand = False                   # a rider standing beside the ego before its left turn
+        for jn in route.junctions:
+            if jn["s_in"] - s_front > BIKE_LEFT:
+                break
+            conn = town.lanes[jn["lane"]]
+            if jn["s_in"] < s_front - 0.5 or conn.kind != "conn" or conn.turn != "left":
+                continue
+            lin = town.lanes[conn.pred[0]]
+            d = jn["s_in"] - s_front - (lin.length - lin.stop_s if lin.stop_s is not None else 0.0)
+            if d <= -0.5:
+                break
+            t_clear = clear_time(jn["s_in"] + 1.0 - s_front, min(v, 5.0), ego.LENGTH) + BIKE_LEFT_MARGIN
+            for j in np.nonzero(bikes["along"])[0]:
+                ds, vb = bikes["s"][j] - s, float(bk.v[j])
+                if ds >= hl + hb + 1.0:
+                    continue                                # ahead of the ego: the corridor check
+                if vb < 0.3:
+                    if ds < -(hl + hb):
+                        continue                            # standing behind the ego
+                    stand = True
+                    if self._bk_wait > BIKE_LEFT_WAIT:
+                        continue                            # standing there for good: the ego goes first
+                    t_b = 0.0
+                else:
+                    t_b = Traffic._reach(max(jn["s_in"] + 1.0 - bikes["s"][j] - hb, 0.0), vb, float(bk.cruise[j]), 1.0)
+                if t_b < t_clear:
+                    target = min(target, stop_profile(max(d - 0.6, 0.0), self.B_COMF))
+            break
+        if real:
+            # the wait lasts until the ego is past its stop line (or the rider rides on): were it to end with the
+            # rule, the ego would set off for one step every BIKE_LEFT_WAIT s, and stand beside the rider for good
+            if not stand:
+                self._bk_wait = 0.0
+            elif v < 0.3:
+                self._bk_wait += self.env.cfg.dt * self.env.cfg.action_repeat
+        return target
 
     def lane_change_gap(self, route, s, v):
         """The next lane change of the route if it has not started and starts within LC_CHECK m of the ego (route
@@ -169,7 +330,8 @@ class Expert:
             ch = route.changes[lc_i]
             if ch["s_a"] - s < LC_PUSH and ch["a0"] < ch["a_max"]:
                 route.retime_change(lc_i, route.local_s(s, ch["k"] - 1) + LC_PUSH_TO)
-        path = self.path_local(route, s, pose)
+        bikes = self.bike_scan(route, s, pose, v) if w.bikes is not None and w.bikes.n else None
+        path = self.path_local(route, s, pose, bikes)
         reason = "cruise"
         if w.town.speed_varies:          # road types: the route's own limits
             v_lim = route.speed_limit_ahead(s + hl)
@@ -240,6 +402,11 @@ class Expert:
                     if v_pass < target:
                         target, reason = v_pass, "pedestrian"
 
+        if bikes is not None:
+            v_bk = self.bike_rules(route, s, v, bikes, pts, cum, real)
+            if v_bk < target:
+                target, reason = v_bk, "bicycle"
+
         if tr.lcp:          # an NPC that has begun to change into the ego's lane ahead of it: follow it from then on
             k_l = route.lane_index_at(s)
             lane_id = route.lanes[k_l]
@@ -292,7 +459,10 @@ class Expert:
                 c = env.cfg.camera
                 x, y, yaw = float(pose[0]), float(pose[1]), float(pose[2])
                 cam = (x + c.x * math.cos(yaw) - c.y * math.sin(yaw), y + c.x * math.sin(yaw) + c.y * math.cos(yaw))
-                return tr.yield_tables(visible=tr.visible_from(cam, yaw, math.radians(c.fov_deg) / 2, c.max_dist, w.town))
+                half = math.radians(c.fov_deg) / 2
+                return tr.yield_tables(visible=tr.visible_from(cam, yaw, half, c.max_dist, w.town),
+                                       bikes_visible=None if w.bikes is None else
+                                       w.bikes.visible_from(cam, yaw, half, c.max_dist, w.town))
             for jn in route.junctions:
                 if jn["s_out"] < s_front:
                     continue

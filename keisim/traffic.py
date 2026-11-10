@@ -172,6 +172,21 @@ CW_REACT = (0.3, 3.0)       # s: someone waiting steps off this long into the gr
 CW_CORNER_WALK = (3.0, 45.0)   # m: a corner person walks this far on from the zebra before coming back to it
 CW_HELD = (1.5, 1.8, 1.0)   # someone waiting at a zebra does not step off while a car moving faster than [2] m/s comes
 #                             within [1] m of their way over it within [0] s (or is there): it could not stop for them
+BIKE_MIN = 0.5              # m: bicycles (TrafficConfig.bicycles): the least room beside one a car passes it with
+#                             (with less it follows the bicycle)
+BIKE_FREE = 0.95            # m: with this much room (道路交通法 18 条 3 項: about 1 m) it passes at its own speed ...
+BIKE_PASS_V = 20.0 / 3.6    # m/s: ... with less, no faster than this
+BIKE_PASS_DV = 2.5          # m/s: ... or this much faster than the bicycle
+BIKE_KEEP = 0.25            # m: a car moving over to the right for a bicycle keeps this far inside its own lane
+BIKE_IN = (22.0, 9.0)       # m: the move over begins / is complete with the bicycle this far ahead of the bumper
+BIKE_OUT = (2.0, 8.0)       # m: ... and the move back with it this far behind the rear bumper
+BIKE_RATE = 0.8             # m/s sideways (at most 0.15 of the speed, and none while it crawls)
+BIKE_ACC = 1.2              # m/s^2 sideways
+BIKE_BACK = 0.15            # m sideways per metre driven: back towards the lane's centre
+BIKE_END = (3.0, 13.0)      # m before the end of the lane: no moving over from here / the full move up to here
+BIKE_LEFT = 25.0            # m before a left turn: 巻き込み確認, the car lets a bicycle beside or just behind it go first
+BIKE_LEFT_T = 2.5           # s: "just behind": the bicycle would be beside the car within this time
+BIKE_LEFT_WAIT = 6.0        # s: a bicycle that keeps standing beside the car is not waited for longer than this
 CW_STALL = 3.0              # s: someone on a zebra held up this long by a car standing in front of them walks back to
 #                             their kerb (and waits there again): a car stuck on the zebra and the people it waits for
 #                             would otherwise stand for ever
@@ -308,6 +323,11 @@ class Traffic:
         self.has_yields = any(getattr(l, "yields", None) for l in town.lanes)
         self.has_lc = any(getattr(l, "links", None) for l in town.lanes)    # multi-lane roads, ramps: lane changes
         self.lcp = {}           # car -> its coming lane change {from, to, a0, lc, a_min, a_max} (A-local, route.py)
+        self.bikes = None       # the Bicycles (World, TrafficConfig.bicycles > 0)
+        self.shift = np.zeros(0)        # m: how far each car has moved over to the right for a bicycle (_bike_gaps)
+        self.shift_v = np.zeros(0)      # m/s: ... and how fast it is moving sideways
+        self.shift_tgt = np.zeros(0)    # m: where the shift was heading at the last step (the corridor follows it)
+        self._left_wait = {}            # car -> s it has waited before a left turn for a standing bicycle
 
     # --------------------------------------------------------------- spawning
     def _sample_dims(self):
@@ -432,6 +452,8 @@ class Traffic:
             others = np.delete(self.xy, i, 0)
             if len(others) and np.min(np.hypot(*(others - p).T)) < 12.0:
                 continue
+            if self.bikes is not None and self.bikes.n and np.min(np.hypot(*(self.bikes.xy - p).T)) < 8.0:
+                continue
             self.route[i] = [lid]
             self.ri[i] = 0
             self.s[i] = s
@@ -441,6 +463,10 @@ class Traffic:
             self.stuck[i] = 0.0
             self.ss_done.pop(i, None)
             self.lcp.pop(i, None)
+            if len(self.shift) == self.n:
+                self.shift[i] = self.shift_v[i] = 0.0
+            if len(self.shift_tgt) == self.n:
+                self.shift_tgt[i] = 0.0
             return
 
     # ------------------------------------------------------------------- step
@@ -693,11 +719,12 @@ class Traffic:
         return False
 
     # ------------------------------------------------------------------- yielding (two-phase signals)
-    def yield_tables(self, ego_info=None, visible=None):
+    def yield_tables(self, ego_info=None, visible=None, bikes_visible=None):
         """Who is where, for must_yield: lane -> [(s, v, length, is_ego, next lane, the lane after it, waits)], front
         first. ego_info = (lane, s on lane, next lane, v, length[, the lane after the next[, waits]]) adds the ego;
         waits: it has stood still for TrafficConfig.ego_patience_s (World.step), see min_arrival.
-        visible: (n,) bool, only these NPCs are listed (see visible_from)."""
+        visible: (n,) bool, only these NPCs are listed (see visible_from).
+        With bicycles: ("bike", lane) -> their rows (Bicycles.add_to_tables; bikes_visible: only these of them)."""
         on_lane = {}
         for j in range(self.n):
             if visible is not None and not visible[j]:
@@ -710,6 +737,8 @@ class Traffic:
             lid, s, nxt, v, L, *more = ego_info
             on_lane.setdefault(lid, []).append((s, v, L, True, nxt, more[0] if more else None,
                                                 len(more) > 1 and bool(more[1])))
+        if self.bikes is not None:
+            self.bikes.add_to_tables(on_lane, bikes_visible)
         for lst in on_lane.values():
             lst.sort(key=lambda e: -e[0])
         return on_lane
@@ -767,6 +796,8 @@ class Traffic:
                 if s - L / 2 > s2 + 1.5 or (moving_only and v < 0.5):
                     continue                                    # its rear is past the crossing (or it waits)
                 best = min(best, 0.0 if d < 3.0 else self._arrival(d, v, vmax, ego))
+            if self.bikes is not None:
+                best = min(best, self._bike_arrival(b, s2, t, on_lane, moving_only))
             pred = lanes[b].pred[0]
             # a car standing at the entry of one of pred's other connectors blocks the whole approach lane
             if any(e[1] < 0.5 and e[0] < 4.0 for c in lanes[pred].succ if c != b for e in on_lane.get(c, ())):
@@ -796,6 +827,33 @@ class Traffic:
                         best = min(best, self._arrival(lanes[c].length - front + lanes[pred].length + s2, v, vmax,
                                                        ego))
                         break                                   # the cars behind it on c arrive later
+        return best
+
+    def _bike_arrival(self, b, s2, t, on_lane, moving_only):
+        """min_arrival for the bicycles riding beside lane `b` (they have the right of way of the cars on it) and
+        for the ones on the lane before it that go on along b: they ride past a queue of cars, so nothing ahead of
+        them on the lane holds them up; one that will stop at its red or yellow light does not count."""
+        lanes = self.town.lanes
+        best = math.inf
+        for s, v, L, cruise, _ in on_lane.get(("bike", b), ()):
+            if s - L / 2 > s2 + 2.5 or (moving_only and v < 0.5):
+                continue                                        # past the crossing (or it waits)
+            d = s2 - (s + L / 2)
+            best = min(best, 0.0 if d < 3.0 else self._reach(d, v, cruise, 1.0))
+        pred = lanes[b].pred[0]
+        on = on_lane.get(("bike", pred))
+        if on:
+            stop_s = lanes[pred].stop_s
+            st = self.town.signal_state_for_lane(pred, t)
+            for s, v, L, cruise, nxt in on:
+                if nxt != b or (moving_only and v < 0.5):
+                    continue
+                front = s + L / 2
+                if st != TL_GREEN and stop_s is not None and stop_s - front > -0.5 and \
+                        (st == TL_RED or stop_s - front > v * v / 5.0 + 0.5):
+                    continue                                    # it stops at its light (Bicycles.step)
+                best = min(best, (0.0 if v >= 0.2 else 0.8) + self._reach(lanes[pred].length - front + s2, v, cruise,
+                                                                           1.0))
         return best
 
     @staticmethod
@@ -1010,10 +1068,16 @@ class Traffic:
             self._yield_gaps(stop_gap, t, ego_info, hl)
         if peds is not None and peds.cw_on:      # crosswalks at signals: give way to the people on them
             self._crosswalk_gaps(stop_gap, hl, peds, t)
+        bike_pair = ()
+        if self.bikes is not None and self.bikes.n:     # bicycles: pass them with room to spare, or follow them
+            g_b, v_b, vmax = self._bike_gaps(stop_gap, paths, relc, valid, hl, vmax, dt)
+            bike_pair = ((g_b, v_b),)
         lc_pair = ()
         if self.has_lc:              # multi-lane roads: room for lane changes
             ego = None if ego_yaw is None else (ego_xy, ego_v, ego_yaw, ego_len)
             lc_pair = (self._lane_change_gaps(stop_gap, ego, ego_wait, dt),)
+        if self.bikes is not None and len(self.shift) == n and (self.shift > 1e-3).any():
+            paths = self._shifted_paths(paths, relc)        # where the cars that moved over for a bicycle will drive
         # obstacles: other NPCs + external
         cxy, cr, cow = self.circles()
         csp = self.v[cow]
@@ -1041,7 +1105,7 @@ class Traffic:
         a_max, b, T, s0 = cfg.idm_a, cfg.idm_b, cfg.idm_T, cfg.idm_s0
         v0 = np.maximum(vmax, 0.5)
         acc = a_max * (1.0 - (v / v0) ** 4)
-        for g, vl in ((gap, lead_v), (stop_gap, np.zeros(n))) + lc_pair:
+        for g, vl in ((gap, lead_v), (stop_gap, np.zeros(n))) + lc_pair + bike_pair:
             m = np.isfinite(g)
             if m.any():
                 gg = np.maximum(g[m], 0.05)
@@ -1088,8 +1152,144 @@ class Traffic:
                 poly = lanes[r[k]].poly
                 self.xy[i, 0], self.xy[i, 1] = poly.interp1(si)
                 self.yaw[i] = poly.heading1(si)
+        if self.bikes is not None and len(self.shift) == n and (self.shift > 1e-4).any():
+            # the cars that have moved over to the right for a bicycle
+            # (the heading turns about the rear axle, 0.3 of the length behind the centre: the tail does not swing
+            # out towards the bicycle)
+            dyaw = np.arctan2(self.shift_v, np.maximum(self.v, 2.0))
+            side = self.shift + 0.3 * self.dims[:, 0] * np.sin(dyaw)
+            self.xy[:, 0] += np.sin(self.yaw) * side
+            self.xy[:, 1] -= np.cos(self.yaw) * side
+            self.yaw = self.yaw - dyaw
         self.stuck = np.where(self.v < 0.1, self.stuck + dt, 0.0)
         self.release_stuck(ego_xy, ego_yaw)
+
+    def _bike_gaps(self, stop_gap, paths, relc, valid, hl, vmax, dt):
+        """Bicycles (TrafficConfig.bicycles) -> (gap, the bicycle's speed) to follow, and vmax with the passing speed.
+        A bicycle rides beside the kerb lane, a car's width or less from the lane's centre line. A car coming up
+        behind one on its lane moves over to the right inside its lane (it keeps BIKE_KEEP from the lane's edge:
+        NPCs do not cross the centre line), by as much as it takes to leave BIKE_FREE beside the bicycle, from
+        BIKE_IN ahead of it to BIKE_OUT past it. With BIKE_FREE of room it passes at its own speed; with less, at
+        BIKE_PASS_V (or BIKE_PASS_DV faster than the bicycle); with less than BIKE_MIN it stays behind the bicycle
+        (narrow lanes, wide cars, a bicycle that has moved out round someone walking, and just before a junction,
+        where it does not move over). Bicycles elsewhere (crossing, in a junction) are obstacles like cars, with
+        BIKE_MIN beside them, and so is where a moving one will be within 2.4 s (Bicycles.circles).
+        Left turns (巻き込み確認): within BIKE_LEFT of its turn a car stops at the end of its lane while a bicycle on
+        that lane is beside it or would be within BIKE_LEFT_T s, and lets it go first.
+        stop_gap is updated in place; self.shift is what World applies to the cars' positions."""
+        bk = self.bikes
+        n, nb = self.n, bk.n
+        lanes = self.town.lanes
+        if len(self.shift) != n:
+            self.shift, self.shift_v = np.zeros(n), np.zeros(n)
+        hw = self.dims[:, 1] / 2
+        bxy, br, bow, bsp, byw = bk.circles(predict=True)
+        by_lane = {}
+        for j in range(nb):
+            by_lane.setdefault(int(bk.lane[j]), []).append(j)
+        room = np.zeros((n, nb))            # how far car i can move over where bicycle j is
+        target = np.zeros(n)
+        half_b = 0.9                        # half a bicycle's length
+        hl = np.asarray(hl, float)
+        for i in range(n):
+            r, k = self.route[i], self.ri[i]
+            js = by_lane.get(r[k])
+            if not js:
+                self._left_wait.pop(i, None)
+                continue
+            lane = lanes[r[k]]
+            if lane.kind != "road":
+                continue
+            si = float(self.s[i])
+            changing = self.has_lc and i in self.lcp
+            cap = 0.0 if changing else max(0.0, lane.width / 2 - hw[i] - BIKE_KEEP)
+            for j in js:
+                sj, vb = float(bk.lane_s[j]), float(bk.v[j])
+                ahead = sj - si - hl[i] - half_b            # the car's front bumper to the bicycle's rear wheel
+                behind = si - sj - hl[i] - half_b           # its rear bumper to the bicycle's front wheel
+                # where the bicycle will be when the car is past it: no passing into the junction
+                s_done = sj
+                if behind < BIKE_OUT[0]:
+                    s_done += vb * (BIKE_OUT[0] - behind) / max(max(self.v[i], vb + BIKE_PASS_DV) - vb, 1.0)
+                c = cap * min(max((lane.length - s_done - BIKE_END[0]) / (BIKE_END[1] - BIKE_END[0]), 0.0), 1.0)
+                room[i, j] = c
+                want = min(max(hw[i] + 0.3 + BIKE_FREE + 0.05 - bk.side[j], 0.0), c)
+                if ahead > 0.0:
+                    f = (BIKE_IN[0] - ahead) / (BIKE_IN[0] - BIKE_IN[1])
+                elif behind > 0.0:
+                    f = (BIKE_OUT[1] - behind) / (BIKE_OUT[1] - BIKE_OUT[0])
+                else:
+                    f = 1.0
+                target[i] = max(target[i], want * min(max(f, 0.0), 1.0))
+            # 巻き込み確認 before a left turn
+            held = False
+            if k + 1 < len(r) and lanes[r[k + 1]].kind == "conn" and lanes[r[k + 1]].turn == "left" \
+                    and lane.length - si < BIKE_LEFT + hl[i]:
+                d = (lane.stop_s if lane.stop_s is not None else lane.length) - si - hl[i]
+                if d > -0.5:
+                    for j in js:
+                        ds, vb = float(bk.lane_s[j]) - si, float(bk.v[j])
+                        if not -(hl[i] + half_b + BIKE_LEFT_T * vb + 1.0) < ds < hl[i] + half_b + 1.0:
+                            continue
+                        if vb < 0.3 and (ds < -(hl[i] + half_b) or self._left_wait.get(i, 0.0) > BIKE_LEFT_WAIT):
+                            continue                        # standing behind the car (or it stands there for good)
+                        if vb < 0.3 and self.v[i] < 0.3:
+                            self._left_wait[i] = self._left_wait.get(i, 0.0) + dt
+                        stop_gap[i] = min(stop_gap[i], d - 0.6)
+                        held = True
+                        break
+            if not held and self.v[i] > 1.0:
+                self._left_wait.pop(i, None)
+        # beside a bicycle (whichever lane it is on by now, e.g. in the junction): the car stays where it is
+        if self.shift.any():
+            u = np.stack([np.cos(self.yaw), np.sin(self.yaw)], -1)
+            rel = bk.xy[None] - self.xy[:, None]
+            lon = rel[..., 0] * u[:, None, 0] + rel[..., 1] * u[:, None, 1]
+            lat = rel[..., 1] * u[:, None, 0] - rel[..., 0] * u[:, None, 1]
+            reach = (hl + half_b)[:, None]
+            near = (lon > -(reach + BIKE_OUT[0])) & (lon < reach + 2.0) & (lat > 0.0) & (lat < hw[:, None] + 2.2)
+            room = np.where(near, np.maximum(room, self.shift[:, None]), room)
+            target = np.where(near.any(1), np.maximum(target, self.shift), target)
+        # sideways: towards the target at BIKE_RATE at most, gently (BIKE_ACC); back to the lane's centre from the
+        # first metre (a car that stood moved over steers back as it starts: BIKE_BACK per metre driven)
+        rate = np.minimum(BIKE_RATE, 0.15 * np.maximum(self.v - 0.5, 0.0))
+        back = np.minimum(BIKE_RATE, BIKE_BACK * self.v)
+        v_t = np.clip((target - self.shift) * 1.6, -back, rate)
+        self.shift_tgt = target
+        self.shift_v = self.shift_v + np.clip(v_t - self.shift_v, -BIKE_ACC * dt, BIKE_ACC * dt)
+        self.shift_v = np.where((self.v < 0.3) | ((target <= 0.0) & (self.shift < 0.01)), 0.0, self.shift_v)
+        self.shift = np.maximum(self.shift + self.shift_v * dt, 0.0)
+        me = np.full(n, -1)
+        less = room[:, bow]
+        hwid = self.dims[:, 1] / 2
+        gap, lead_v, _ = corridor_gaps(paths, relc, valid, self.xy, self.yaw, hl, hwid, bxy, br, bow, bsp, byw, me,
+                                       BIKE_MIN - less)
+        g_free, v_free, _ = corridor_gaps(paths, relc, valid, self.xy, self.yaw, hl, hwid, bxy, br, bow, bsp, byw, me,
+                                          BIKE_FREE - less)
+        m = np.isfinite(g_free)
+        if m.any():
+            v_pass = np.maximum(BIKE_PASS_V, v_free[m] + BIKE_PASS_DV)
+            vmax = vmax.copy()
+            vmax[m] = np.minimum(vmax[m], np.sqrt(v_pass ** 2 + 3.0 * np.maximum(g_free[m], 0.0)))
+        return gap, lead_v, vmax
+
+    def _shifted_paths(self, paths, relc):
+        """The paths (N,P,2) of step(), moved to the right by where each car's shift (_bike_gaps) will be at each
+        point: all of it while the car is moving over or held beside a bicycle; else what is left of it on the way
+        back to the lane's centre (a little less than BIKE_BACK per metre, and no faster than the 1.6 /s it steers
+        back with). The lane's own line would hide what a car that has moved over is about to drive into, e.g. the
+        car waiting to turn right in the middle of the junction."""
+        sh = self.shift[:, None]
+        tg = self.shift_tgt[:, None] if len(self.shift_tgt) == self.n else np.zeros_like(sh)
+        d = np.maximum(relc, 0.0)
+        left = np.maximum(sh - (BIKE_BACK - 0.05) * d, sh * np.exp(-1.6 * d / np.maximum(self.v, 1.0)[:, None]))
+        o = np.where(tg >= sh - 1e-3, np.maximum(sh, tg), np.maximum(left, tg))
+        dp = np.gradient(paths, axis=1)
+        ln = np.hypot(dp[..., 0], dp[..., 1])
+        ok = ln > 1e-6
+        ux = np.where(ok, dp[..., 0] / np.maximum(ln, 1e-6), np.cos(self.yaw)[:, None])
+        uy = np.where(ok, dp[..., 1] / np.maximum(ln, 1e-6), np.sin(self.yaw)[:, None])
+        return paths + np.stack([uy, -ux], -1) * o[..., None]
 
     def _speed_limits(self):
         """Speed limit of each NPC's lane, eased down at 1.5 m/s^2 toward lower limits up to 40 m ahead (front

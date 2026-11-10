@@ -36,7 +36,7 @@ from keisim.expert import LABEL_VERSION  # noqa: E402
 from keisim.realworld import OSM_BOXES  # real towns: name -> box (south, west, north, east)  # noqa: E402
 
 REASONS = {"cruise": 0, "curve": 1, "vehicle": 2, "pedestrian": 3, "red_light": 4, "junction_blocked": 5, "yield": 6,
-           "crossing": 7, "stop_sign": 8, "crosswalk": 9}
+           "crossing": 7, "stop_sign": 8, "crosswalk": 9, "bicycle": 10}
 WEATHERS = {"noon": 0, "cloudy": 1, "sunset": 2, "fog": 3}
 
 
@@ -293,6 +293,7 @@ def worker(wid, args, quota, out_dir, counter):
     cfg.traffic.ego_patience_s = args.ego_patience
     cfg.traffic.light_past_line = bool(args.npc_past_line)
     cfg.traffic.crosswalks = args.crosswalks
+    cfg.traffic.bicycles = args.bicycles
     if args.mode == "dagger":
         cfg.blocked_timeout = 40.0
     env = KeiEnv(cfg)
@@ -536,6 +537,8 @@ def parse_args(argv=None):
     ap.add_argument("--crosswalks", type=float, default=0.0,
                     help="crosswalks at signals (TrafficConfig.crosswalks): the chance that a person at a two-phase "
                          "signal's road end crosses on the zebra with the pedestrian light; turning cars give way")
+    ap.add_argument("--bicycles", type=float, default=0.0,
+                    help="bicycles per km of road (TrafficConfig.bicycles; 0: none)")
     ap.add_argument("--renderer", default="keisim", choices=["keisim", "keiview"], help="camera renderer")
     ap.add_argument("--keiview_roads", default="plain", choices=["plain", "detail"],
                     help="KeiView road surface: plain (every KeiView dataset so far) or detail (markings, signs, ...)")
@@ -592,6 +595,7 @@ def main():
                **({"ego_patience": args.ego_patience} if args.ego_patience else {}),
                **({"npc_past_line": 1} if args.npc_past_line else {}),
                **({"crosswalks": args.crosswalks} if args.crosswalks > 0 else {}),
+               **({"bicycles": args.bicycles} if args.bicycles > 0 else {}),
                **({"freeze_reasons": args.freeze_reasons} if args.freeze_takeover > 0 else {}),
                **({"stand_pert": args.stand_pert, "stand_hold": args.stand_hold} if args.stand_pert > 0 else {}),
                **({"via_ramp": args.via_ramp} if args.via_ramp > 0 else {}),
