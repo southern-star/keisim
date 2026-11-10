@@ -82,6 +82,17 @@ class TownConfig:
     # 2-lane main road's approach turns left gets one (a deceleration lane, a ramp around the corner, an acceleration
     # lane into the road turned into; the junction's own left turn from that approach goes)
     ramps: float = 0.0
+    # a centre strip of this width (m) on the main roads (RoadSpec.median): hatched (導流帯) along the road, and a
+    # right-turn lane (右折専用車線) next to the inner lane before the signalised junctions where the road's cars may
+    # turn right (Town._make_pockets; left-hand traffic). 0: the main roads' two directions meet at the centre line.
+    main_median: float = 0.0
+    # scramble crossings (スクランブル交差点, 歩車分離): the chance that a signalised 4-arm junction of two-phase signals
+    # on a main road gets a third phase in which every car light is red and people cross on all four zebras
+    # and on the two diagonals across the junction (Town.ped_crossings, TrafficConfig.crosswalks). Their zebras are
+    # red in the cars' phases. Every phase of such a junction is green for scramble_green s (people need about
+    # 25 s over a diagonal): own random stream, so the rest of the town is that of scramble 0.
+    scramble: float = 0.0
+    scramble_green: tuple = (24.0, 32.0)
     building_prob: float = 0.85
     tree_prob: float = 0.55
     tex_res: float = 0.1              # metres per texel of the ground texture
@@ -212,6 +223,12 @@ TOWN_STYLES = {
     # roadtypes with longer blocks, fewer alleys and 片側2車線 main roads (two lanes each way, yellow centre line)
     "suburban": {"block_mode": "varied", "spacing_min": 100.0, "spacing_max": 220.0, "signal_mode": "two_phase",
                  "road_types": "mixed", "road_mix": (0.45, 0.45, 0.1), "main_lanes": 2},
+    # big junctions: suburban with 3 main roads that have a centre strip (導流帯) and right-turn lanes (右折専用車線)
+    # before their signals, fewer grid edges dropped (more 4-arm junctions), and 6 in 10 of the signalised 4-arm
+    # junctions on a main road scramble crossings (スクランブル交差点)
+    "bigjunction": {"block_mode": "varied", "spacing_min": 100.0, "spacing_max": 220.0, "signal_mode": "two_phase",
+                    "road_types": "mixed", "road_mix": (0.45, 0.45, 0.1), "main_lanes": 2, "main_roads": 3,
+                    "main_median": 3.0, "scramble": 0.6, "edge_drop": 0.08},
     # suburban with at-grade left-turn ramps at the main roads' junctions (分流・合流)
     "ramps": {"block_mode": "varied", "spacing_min": 100.0, "spacing_max": 220.0, "signal_mode": "two_phase",
               "road_types": "mixed", "road_mix": (0.45, 0.45, 0.1), "main_lanes": 2, "ramps": 0.8},
@@ -219,7 +236,8 @@ TOWN_STYLES = {
 
 # TownConfig fields added after town_tag() was introduced: part of the tag only when they differ from the
 # default, so the tags (and exported town names) of the existing styles stay the same.
-_TAG_LATER = ("road_types", "main_roads", "road_mix", "main_lanes", "ramps")
+_TAG_LATER = ("road_types", "main_roads", "road_mix", "main_lanes", "ramps", "scramble", "scramble_green",
+              "main_median")
 
 
 def town_config(style="classic"):

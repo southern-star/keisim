@@ -211,8 +211,10 @@ class Expert:
             cow = np.concatenate([cow, np.tile(-2 - np.arange(peds.n), m)])
             csp = np.concatenate([csp, np.zeros(len(pxy))])
             cyw = np.concatenate([cyw, np.zeros(len(pxy))])
-            if w.town.in_road_walkways:      # people walking in a 路側帯: passed closely (slowly, see below)
-                cmg = np.concatenate([cmg, np.tile(np.where(peds.walking_in_road(), 0.25, 1.0), m)])
+            if w.town.in_road_walkways or peds.cw_on:   # people walking in a 路側帯: passed closely (slowly, see
+                # below); people waiting at a zebra's kerb: closely too
+                close = peds.walking_in_road() | peds.waiting_at_kerb()
+                cmg = np.concatenate([cmg, np.tile(np.where(close, 0.25, 1.0), m)])
             else:
                 cmg = np.concatenate([cmg, np.full(len(pxy), 1.0)])
         gap, lead_v, lead_o = corridor_gaps(pts[None], cum[None], np.ones((1, len(pts)), bool),

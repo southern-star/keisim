@@ -87,9 +87,9 @@ class World:
             ego_info = (lanes[k], self.route.local_s(self.ego_s, k), lanes[k + 1] if k + 1 < len(lanes) else None,
                         e.v, e.LENGTH, lanes[k + 2] if k + 2 < len(lanes) else None, 0.0 < patience <= self.ego_stood)
         ped_margin = pass_xy = None
-        if self.town.in_road_walkways and pd.n:     # people walking in a 路側帯 are passed closely, but slowly
-            walk = pd.walking_in_road()
-            ped_margin = np.where(walk, 0.2, 0.9)
+        if (self.town.in_road_walkways or pd.cw_on) and pd.n:   # people walking in a 路側帯 are passed closely,
+            walk = pd.walking_in_road()                          # but slowly; people waiting at a zebra's kerb closely
+            ped_margin = np.where(walk | pd.waiting_at_kerb(), 0.2, 0.9)
             pass_xy = pd.xy[walk]
         self.traffic.step(dt, self.t, ext_xy, ext_r, ext_o, ext_v, ext_yaw, e.xy, e.v, e.yaw, ego_info,
                           ped_margin=ped_margin, pass_xy=pass_xy, ego_len=e.LENGTH, ego_wait=self._ego_lc_wait(),

@@ -75,9 +75,9 @@ def _lookahead_changes(town, lanes, idx, s, dist, step, change_at):
         if sib:
             if lane.id in change_at:
                 a0, lc = change_at[lane.id]
-            else:
-                win = change_window(lane, 0.0, town.lanes[lanes[k + 1]])
-                a0, lc = (win[0], win[2]) if win is not None else (max(0.0, lane.length / 2 - 12.5), 25.0)
+            else:           # (from where the change before ends: back-to-back changes, e.g. into a right-turn lane)
+                win = change_window(lane, lo, town.lanes[lanes[k + 1]])
+                a0, lc = (win[0], win[2]) if win is not None else (max(lo, lane.length / 2 - 12.5), 25.0)
             hi = max(lo, a0)
         if hi > lo + 1e-9 or not (pts_l or sib):
             inner = np.nonzero((lane.s > lo + 1e-6) & (lane.s < hi - 1e-6))[0][::step]
@@ -95,16 +95,17 @@ def _lookahead_changes(town, lanes, idx, s, dist, step, change_at):
         if sib:
             B = town.lanes[lanes[k + 1]]
             u0 = min(1.0, max(0.0, (lo - a0) / lc))
-            m = max(2, int(math.ceil((1.0 - u0) * lc / (0.5 * step))))
-            u = np.linspace(u0, 1.0, m + 1)
-            sa = a0 + u * lc
-            w = blend_weight(u)[:, None]
-            seg = (1.0 - w) * lane.poly.interp(sa) + w * B.poly.interp(link_map(lane, B, sa))
-            cv = curvature_of(seg)
-            d = np.hypot(*np.diff(seg, axis=0).T)
-            pts_l.append(seg[1:] if pts_l else seg)          # (from mid-change: the blend is the start)
-            curv_l.append(cv[1:] if len(curv_l) else cv)
-            base += float(d.sum())
+            if u0 < 1.0 - 1e-6:                              # (else the change is already over: no blend)
+                m = max(2, int(math.ceil((1.0 - u0) * lc / (0.5 * step))))
+                u = np.linspace(u0, 1.0, m + 1)
+                sa = a0 + u * lc
+                w = blend_weight(u)[:, None]
+                seg = (1.0 - w) * lane.poly.interp(sa) + w * B.poly.interp(link_map(lane, B, sa))
+                cv = curvature_of(seg)
+                d = np.hypot(*np.diff(seg, axis=0).T)
+                pts_l.append(seg[1:] if pts_l else seg)      # (from mid-change: the blend is the start)
+                curv_l.append(cv[1:] if len(curv_l) else cv)
+                base += float(d.sum())
             lo = link_map(lane, B, a0 + lc)
         else:
             lo = 0.0
@@ -171,7 +172,9 @@ CW_FOCUS = 2.0              # the zebras at the exits of the ego's turns get 1 +
 CW_REACT = (0.3, 3.0)       # s: someone waiting steps off this long into the green (each their own)
 CW_CORNER_WALK = (3.0, 45.0)   # m: a corner person walks this far on from the zebra before coming back to it
 CW_HELD = (1.5, 1.8, 1.0)   # someone waiting at a zebra does not step off while a car moving faster than [2] m/s comes
-#                             within [1] m of their way over it within [0] s (or is there): it could not stop for them
+#                             within [1] m of their way over it within [0] s (or is there): it could not stop for them.
+CW_HELD_REACH = 4.5         # m: ... a car inside the zebra's junction circle or up to this far out of it (on the zebra):
+#                             not the cars braking for their red light on the way to it
 CW_STALL = 3.0              # s: someone on a zebra held up this long by a car standing in front of them walks back to
 #                             their kerb (and waits there again): a car stuck on the zebra and the people it waits for
 #                             would otherwise stand for ever
@@ -1395,8 +1398,9 @@ class Pedestrians:
         self._update_pose()
 
     def _update_held(self, veh_xy, veh_v, veh_yaw):
-        """cw_held of the people waiting at a zebra: a car faster than CW_HELD[2] m/s whose straight-line position
-        within CW_HELD[0] s comes within CW_HELD[1] m of their way over the zebra (kerb to kerb)."""
+        """cw_held of the people waiting at a zebra: a car faster than CW_HELD[2] m/s, in the zebra's junction or on the
+        zebra (CW_HELD_REACH), whose straight-line position within CW_HELD[0] s comes within CW_HELD[1] m of their way
+        over the zebra (kerb to kerb)."""
         self.cw_held[:] = False
         wait = np.nonzero((self.mode == self.WAIT) & (self.cw >= 0))[0]
         if not len(wait) or not len(veh_xy):
@@ -1405,15 +1409,21 @@ class Pedestrians:
         fast = veh_v > V
         if not fast.any():
             return
+        fxy = veh_xy[fast]
         u = np.stack([np.cos(veh_yaw[fast]), np.sin(veh_yaw[fast])], -1) * veh_v[fast, None]
         taus = np.linspace(0.0, T, 4)
-        pts = (veh_xy[fast, None, :] + u[:, None, :] * taus[None, :, None]).reshape(-1, 2)
+        pts = (fxy[:, None, :] + u[:, None, :] * taus[None, :, None])           # (cars, taus, 2)
         for i in wait:
             c = self.town.ped_crossings[self.cw[i]]
+            J = self.town.junctions[c["junction"]]
+            inside = np.hypot(*(fxy - J.pos).T) < J.radius + CW_HELD_REACH
+            if not inside.any():
+                continue
+            p = pts[inside].reshape(-1, 2)
             a, b = c["pts"][0], c["pts"][1]
             ab = b - a
-            q = np.clip(((pts - a) @ ab) / (ab @ ab), 0.0, 1.0)
-            dist = np.hypot(*(pts - (a + q[:, None] * ab)).T)
+            q = np.clip(((p - a) @ ab) / (ab @ ab), 0.0, 1.0)
+            dist = np.hypot(*(p - (a + q[:, None] * ab)).T)
             self.cw_held[i] = bool((dist < R).any())
 
     def _retreat(self, i):
@@ -1439,13 +1449,14 @@ class Pedestrians:
         """A walker heading for a junction end of their walkway just passed its zebra: with TrafficConfig.crosswalks
         chance they stop to wait there (True)."""
         s = float(self.s[i])
-        for ci, side, s_c in self.ww_cw[self.w[i]]:
-            c = self.town.ped_crossings[ci]
-            if self.dir[i] != -c["away"][side] or (s_prev - s_c) * (s - s_c) > 0.0:
-                continue
-            if self.corner[i] or self.rng.random() < self.cfg.crosswalks:
-                self._start_wait(i, ci, side)
-                return True
+        here = [(ci, side) for ci, side, s_c in self.ww_cw[self.w[i]]
+                if self.dir[i] == -self.town.ped_crossings[ci]["away"][side] and (s_prev - s_c) * (s - s_c) <= 0.0]
+        if not here:
+            return False
+        if self.corner[i] or self.rng.random() < self.cfg.crosswalks:
+            ci, side = here[int(self.rng.integers(len(here)))] if len(here) > 1 else here[0]
+            self._start_wait(i, ci, side)       # (a scramble's corner: the zebra or the diagonal)
+            return True
         return False
 
     def _set_off_speed(self, i, c, t, flash, react=False):
@@ -1503,6 +1514,12 @@ class Pedestrians:
 
     def velocity_vectors(self):
         return np.stack([np.cos(self.yaw), np.sin(self.yaw)], -1) * self.vel[:, None]
+
+    def waiting_at_kerb(self):
+        """People standing at a zebra's kerb for their light (TrafficConfig.crosswalks): off the carriageway, beside the
+        cars turning in and out of the road; when they set off, the crosswalk rule takes over (crosswalk_blocked).
+        Passed as closely as the people walking in a 路側帯."""
+        return self.mode == self.WAIT
 
     def walking_in_road(self):
         """Pedestrians walking along a 路側帯 (on the road surface, beside the lane; not crossing), away from the ends of

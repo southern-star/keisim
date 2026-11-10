@@ -422,7 +422,7 @@ def lane_graph(town: Town):
     trucks may use (Town.truck_lanes). Ids are positions in these lists. None for other towns."""
     if not (town.ramps or any(rd.spec.lanes > 1 for rd in town.roads)):
         return None
-    own = [l for l in town.lanes if l.kind in ("road", "ramp")]
+    own = [l for l in town.lanes if l.kind in ("road", "ramp", "pocket")]
     conns = [l for l in town.lanes if l.kind == "conn"]
     lid = {l.id: i for i, l in enumerate(own)}
     cid = {l.id: i for i, l in enumerate(conns)}
