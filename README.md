@@ -789,7 +789,7 @@ data/                    収集データ (リポジトリ外, 約 3 GB。scripts
   long2 では、さらに「交差点の中に別の方向の車がいたら入らない」と、カメラに映らない所で詰まった車の移動が加わります。
   `--crosswalks` では、右左折のときに横断歩道を渡る人に譲ります (下の「横断歩道を渡る人と歩行者用の信号」)。
   前方コリドーの探索は格子で近くの車だけに絞るので、NPC 500 台の街でも実時間の 2.4 倍で動きます。
-* **街のタイプ**: classic (区画 70〜100 m、今までのすべてのスイート)、varied (区画 70〜200 m を混ぜる、long2)、twophase (varied + 2 現示の信号と右折待ち、long3)、roadtypes (twophase + 道路の種類、下)。
+* **街のタイプ**: classic (区画 70〜100 m、今までのすべてのスイート)、varied (区画 70〜200 m を混ぜる、long2)、twophase (varied + 2 現示の信号と右折待ち、long3)、roadtypes (twophase + 道路の種類、下)、suburban / ramps (片側 2 車線、下)、bigjunction (大きな交差点、下)。
   KeiView には `town_<seed>-<設定のハッシュ>.json` として別々に書き出します。
   歩行者は歩道を歩き、安全を確認してから乱横断する (自車の前方でも横断イベントが起きる)。密度はエピソードごとにランダム。
 * **道路の種類** (roadtypes の街、`TownConfig.road_types = "mixed"`): 道路ごとに幅・歩道・制限速度・白線が違います (`config.ROAD_KINDS`)。
@@ -913,8 +913,68 @@ data/                    収集データ (リポジトリ外, 約 3 GB。scripts
 
       - 3 本とも、横断歩道を渡っている人の前で止まらずに横断歩道へ入りました。そのうち 2 本は、そのまま人に当たりました。
       - 残りの 1 本 (街 1012、エピソード 9801) は、混んだ道での時間切れです。エキスパートもこのルートに 400 秒のうち 377 秒かかっていて、横断歩道とは関係がありません。
-      - 普段のスイートの Mc は歩行者とほとんど当たらないので、横断歩道の人に譲ることは、まだ学習していない弱点です。次は、ここを学習する事例を集めます。
+      - 普段のスイートの Mc は歩行者とほとんど当たらないので、横断歩道の人に譲ることは、まだ学習していない弱点です。
+  - **学習の事例** (`collect.py`): 横断歩道で譲る場面はフレームの 0.2 % しかないので、次の 2 つで集めます。
+    - `--crosswalk_spawn N`: 横断歩道ごとの角の人の数 (既定 1)。
+    - `--focus_crosswalk M`: `--focus_yield` で間引くとき、ルートが通る交差点の出口の横断歩道が M m 以内にあり、渡っている人か渡り始める人が 8 秒以内に自分の車線に来るフレームを残します。
+      譲って止まる前後 (減速、待つ、また出る) が残ります。交差点の手前の横断歩道は、自車が赤で止まっている間に渡られることが多いので数えません。
+    - 2 現示の街で `--crosswalk_spawn 3 --focus_yield 0.15 --focus_reasons yield junction_blocked crosswalk --focus_crosswalk 30` にすると、
+      エキスパートが横断歩道で譲るフレームが 2.2 %、出口の横断歩道に渡る人がいるフレームが 19 % になりました (KeiSim、3000 フレーム)。
+    - `train.py` は、横断歩道で譲るフレーム (reason 9) を、歩行者のフレームと同じく 3 倍に重み付けします。
+    - 手元の GPU で集めて学習し、評価する手順は [docs/multicam/rounds/round12.sh](docs/multicam/rounds/round12.sh) です (mc12 → mc13。まだ走らせていません)。
   - ブラウザ版 (web/) の人は、まだ横断歩道を渡りません。
+* **大きな交差点の街** (bigjunction、`--town_style bigjunction`): 郊外の街 (suburban) をもとに、大きな交差点を増やした街です。
+  渋谷のスクランブル交差点のような、大きくて人の多い交差点を学ぶための最初の街です。
+
+  ![大きな交差点の街のスクランブル交差点 (KeiSim の地面、街 3007)](docs/bigjunction_scramble.jpg)
+
+  - **中央の帯と右折専用車線** (`TownConfig.main_median`、`RoadSpec.median`、`Town._make_pockets`):
+    - 幹線道路 (3 本) の上下線の間に 3 m の帯があり、導流帯 (黄の縁と白い斜線) を描きます。
+    - 信号交差点の手前では、その帯が右折専用車線 (レーンの種類 `pocket`) になります。内側の車線から 15 m かけて分かれ、交差点まで 40 m です (短い道では短く、最短 25 m)。
+    - 右折するのは右折専用車線だけで、内側の車線は直進です。右折専用車線へは、内側の車線から車線変更 (25 m) で入ります。ルートと NPC も同じです (`route.lane_moves`)。
+    - 右折専用車線への白線は、車線変更できる所は破線、停止線の手前 8 m は実線です。反対側の縁は黄の線です。
+    - 右折専用車線は、手前の車線がどれも直進できる所にだけ作ります。そうでない所では、内側の車線がすでに右折車線です。
+    - 外側の車線から内側の車線へ移ってすぐに右折専用車線へ入る NPC は、2 つ目の車線変更を 1 つ目が終わった所から始めます (先読みの経路)。
+    - 帯の分だけ道路が広いので、幹線どうしの交差点は半径 17〜21 m と大きくなります。
+  - **スクランブル交差点** (`TownConfig.scramble`):
+    - 幹線にかかる信号の十字路の 6 割で、車の 2 つの現示のあとに、車がすべて赤になる人だけの現示を足します (歩車分離)。
+    - その間、人は 4 本の横断歩道と、角から向かいの角への 2 本の斜めの横断歩道を渡ります。斜めの横断歩道は交差点の中に描きます。
+    - 斜めは 33〜54 m あるので、こうした交差点の現示は 24〜32 秒です (1 周 90〜110 秒)。
+    - 車の現示の間は、この交差点の横断歩道はすべて赤です。曲がる車が人に譲るのは、渡り遅れた人だけです。
+  - **街の形**: 幹線は 3 本です。格子の辺を減らす割合を 0.22 から 0.08 に下げて、十字路を増やしました。
+    20 の街 (3000〜3019) で、スクランブル交差点が 32、右折専用車線が 243 あります。
+  - **交差点の角で待つ人**: 横断歩道の端で青を待つ人は、路側帯を歩く人と同じ近さで追い越します。
+    歩道のない細い道の角で待つ人の横で、エキスパートが止まり続けたためです。
+  - **評価スイート** `bigjunction` (街 3000〜3009、2.5 km × 20 本、横断歩道を渡る人 `--crosswalks 0.7`): 下の結果。
+    - **エキスパート** (`runs/eval/expert_bigjunction.json`): 20/20 完走、違反 0、50.1 km、平均 11.3 km/h、信号 245、車線変更 63。
+      - 通ったスクランブル交差点は 35、信号での右折は 79 回で、そのうち 16 回が右折専用車線からでした。
+      - 横断歩道で譲ったのは 15 本のルートで計 122 秒です (`crosswalks_sub` は 17 本で 112 秒)。
+    - **KeiPilot Mc (v0.11、大きな交差点の街を学習していない)**: `crosswalks` と同じく 600 m にして、エキスパートと並べました
+      (`--route_length 600 --max_steps 4000`、`runs/eval/*_bigjunction_600m.json`)。
+
+      | 600 m × 20 本 | 完走 | 違反 (本) | DS |
+      |---|---|---|---|
+      | エキスパート | 20/20 | 0 | 1.000 |
+      | KeiPilot Mc | 16/20 | 横断歩道 4、赤信号 1、車 1 | 0.851 |
+      | 参考: KeiPilot Mc の `crosswalks` 600 m | 17/20 | 横断歩道 3 (うち歩行者に当たった 2) | 0.888 |
+
+      - **横断歩道** (4 本): どれも 3 叉の信号交差点で曲がるとき (右折 2、左折 2) に、渡っている人の前で止まらずに横断歩道へ入りました。`crosswalks` スイートと同じ弱点です。
+      - **赤信号** (街 3005、エピソード 9800): 3 叉の信号の手前で止まっていたのに、赤を青と読み違えて出ました。
+      - **車** (街 3000、エピソード 9800): 幹線どうしのスクランブル交差点を直進しているとき、交差点の中の斜めの横断歩道の上で向きが左へずれました。
+        そのまま、左の車線を並んで直進していた NPC に横から当たりました (エキスパートの経路は、ルートどおりもっと右でした)。
+
+        ![斜めの横断歩道の上で左へずれる KeiPilot Mc (マゼンタ、緑はエキスパート)](docs/bigjunction_mc_scramble_drift.jpg)
+
+      - **ルートを外れた** (街 3009、エピソード 9801): 曲がった道から斜めに入る 4 叉の交差点です。ルートは緩い左 (向かいの道) でしたが、モデルは急な左 (幹線) へ曲がりました。
+        この交差点では、どちらの出口も指示が「左」になります (下の「指示のあいまいさ」)。
+      - **動けない** (街 3003、エピソード 9800): 3 叉の交差点で右折中、前の NPC が交差点の中で止まりました。その先の道が詰まっていて、エキスパートも止まる渋滞です。
+      - **時間切れ** (街 3006、エピソード 9801): 600 m のうち 584 m。最後の信号の手前の長い列で、何周期も待ちました。
+      - 右折専用車線から右折したのは 4 回、車線変更は 11 回で、どちらも失敗はありませんでした。
+    - **指示のあいまいさ** (前からあるもの): 交差点での曲がり方 (`Lane.turn`) は、向きの変わり方だけで決めています (0.5 rad より左なら「左」)。
+      そのため斜めの交差点では、1 つの入口から 2 つの出口が同じ「左」(または「右」) になることがあります。
+      bigjunction の 20 の街では 720 の入口のうち 22、suburban では 556 のうち 6、twophase では 494 のうち 10 です。
+      決め方を変えると、今までの学習データの指示も変わるので、新しい街だけで切り替えられる形で別に直す予定です。
+  - ブラウザ版 (web/) の車は、まだ右折専用車線とスクランブル交差点を使いません。KeiView の描画 (Python から動かすもの) には、帯・右折専用車線・斜めの横断歩道が出ます。
 * **自転車** (`--bicycles N`、`TrafficConfig.bicycles`: 道路 1 km あたりの台数、`keisim/bicycles.py`): 道路の左端を自転車が走ります。
   既定は 0 で、そのときは乱数も引かないので、今までの街とエピソードは 1 歩も変わりません (テストとハッシュで確認)。
 
@@ -1081,6 +1141,7 @@ uv run scripts/demo.py --agent expert --town 1000 --episode 3 --out runs/demo_ex
 uv run scripts/demo.py --agent model --ckpt runs/keipilot.pt --town_style twophase --town 1012 --episode 9200 --show   # 右折待ちのある街
 uv run scripts/demo.py --agent expert --town_style roadtypes --town 1105 --episode 55 --show   # 幹線道路・生活道路・路地のある街
 uv run scripts/demo.py --agent expert --town_style twophase --crosswalks 0.7 --town 1011 --episode 9005 --route 400 --show   # 横断歩道を渡る人に譲る
+uv run scripts/demo.py --agent expert --town_style bigjunction --crosswalks 0.7 --town 3007 --episode 9001 --show   # 大きな交差点の街
 
 # ベンチマーク (v0.5 の数字は安全層つき: --brake_hold --red_hold)
 uv run scripts/evaluate.py --agent model --ckpt runs/keipilot.pt --suite test --brake_hold --red_hold --videos 3
@@ -1092,6 +1153,8 @@ uv run scripts/evaluate.py --agent model --ckpt runs/keipilot.pt --suite long2 -
 uv run scripts/evaluate.py --agent model --ckpt runs/keipilot.pt --suite long3 --dense --brake_hold --red_hold  # 2 現示の信号と右折待ち
 uv run scripts/evaluate.py --agent model --ckpt runs/keipilot.pt --suite long3b --dense --brake_hold --red_hold # 同じ街の別のルートと交通
 uv run scripts/evaluate.py --agent expert --suite crosswalks          # 横断歩道を渡る人 (--crosswalks 0.7 が既定)。片側 2 車線の街は --suite crosswalks_sub
+uv run scripts/evaluate.py --agent expert --suite bigjunction         # 大きな交差点の街 (右折専用車線、スクランブル交差点、横断歩道を渡る人)
+uv run scripts/evaluate.py --agent model --ckpt runs/keipilot_mc.pt --suite bigjunction --route_length 600 --max_steps 4000 --brake_hold --red_hold --yield_hold 4 1 3.5 4 0.5 0.5 10
 uv run scripts/evaluate.py --agent model --ckpt runs/keipilot_mc.pt --suite crosswalks --brake_hold --red_hold --yield_hold 4 1 3.5 4 0.5 0.5 10
 #   GPU なしで何本も並べるときは OMP_NUM_THREADS=1 を付ける (付けないと、ワーカーごとに全部のコアを使おうとして遅くなる)
 uv run scripts/summarize.py
