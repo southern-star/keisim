@@ -573,6 +573,63 @@ def test_load_shards_fills_buffers_in_place(tmp_path):
     assert np.array_equal(no_prev["jpg"], data["jpg"]) and np.array_equal(no_prev["jpg_off"], data["jpg_off"])
 
 
+def test_load_shards_mmap_same_batches(tmp_path):
+    """load_shards(mmap=True) leaves the image bytes in the shard files (ShardBytes over np.memmap): the same labels,
+    offsets and bytes as reading them into memory, so a seeded sampler gives the same batches (images, labels and
+    sample weights), in the main process, in DataLoader workers and after pickling (spawn / forkserver)."""
+    import pickle
+
+    import pytest
+    import torch
+    from keipilot.data import LABEL_KEYS, DrivingDataset, ShardBytes, ShardWriter, load_shards
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
+    from train import sample_weights
+
+    rng = np.random.default_rng(0)
+    lab = lambda i: {k: (rng.normal(size=2).astype(np.float32) if k == "tp" else
+                         rng.normal(size=(10, 2)).astype(np.float32) if k == "path" else
+                         np.float32(rng.uniform(0, 10)) if k in ("speed", "v") else int(rng.integers(0, 11)) if k == "reason"
+                         else i) for k in LABEL_KEYS}
+    for d, with_prev, rig in (("a", True, False), ("b", False, False), ("r", False, True), ("s", True, True)):
+        w = ShardWriter(str(tmp_path / d), "dagger" if d == "b" else "expert", frames_per_shard=4)
+        for i in range(9):
+            rgb = rng.integers(0, 255, (16, 32, 3), dtype=np.uint8)
+            seg = rng.integers(0, 9, (16, 32), dtype=np.uint8)
+            prev = rng.integers(0, 255, (16, 32, 3), dtype=np.uint8) if with_prev and i % 3 else None
+            extra = [(rng.integers(0, 255, (16, 32, 3), dtype=np.uint8), seg)] if rig else ()
+            w.add(rgb, seg, prev=prev, extra=extra, **lab(i))
+        w.flush()
+    for dirs in (["a", "b"], ["r", "s"]):
+        dirs = [str(tmp_path / d) for d in dirs]
+        for with_prev in (True, False):
+            mem, files = load_shards(dirs, with_prev=with_prev)
+            disk, files_d = load_shards(dirs, with_prev=with_prev, mmap=True)
+            assert files == files_d and set(mem) == set(disk)
+            for k, v in mem.items():
+                if isinstance(disk[k], ShardBytes):
+                    assert len(disk[k]) == len(v) and np.array_equal(np.asarray(disk[k]), v), k
+                else:
+                    assert np.array_equal(disk[k], v, equal_nan=v.dtype.kind == "f") if isinstance(v, np.ndarray) \
+                        else disk[k] == v, k
+            assert np.array_equal(sample_weights(mem, 2.0, 2.0), sample_weights(disk, 2.0, 2.0))
+            n = len(mem["cmd"])
+            batches = []
+            for d_, workers in ((mem, 0), (disk, 0), (disk, 2), (pickle.loads(pickle.dumps(disk)), 0)):
+                sampler = torch.utils.data.WeightedRandomSampler(torch.from_numpy(sample_weights(d_)), num_samples=24,
+                                                                 generator=torch.Generator().manual_seed(5))
+                dl = torch.utils.data.DataLoader(DrivingDataset(d_, np.arange(n), train=False), batch_size=6,
+                                                 sampler=sampler, num_workers=workers)
+                batches.append(list(dl))
+            for other in batches[1:]:
+                for b0, b1 in zip(batches[0], other, strict=True):
+                    for k in b0:
+                        x, y = b0[k].numpy(), b1[k].numpy()
+                        assert np.array_equal(x, y, equal_nan=x.dtype.kind == "f"), k
+            assert DrivingDataset(disk, np.arange(n), train=True)[n - 1]["img"].shape == batches[0][0]["img"][0].shape
+    with pytest.raises(IndexError):          # a slice across two shards is not a frame
+        disk["jpg"][int(disk["jpg_off"][3]):int(disk["jpg_off"][5])]
+
+
 def test_late_yield_after_overshoot():
     """A right turn past its wait point (a driving model came in too fast) still stops short of the oncoming lane
     when a moving car with priority would arrive before it clears the crossing; closer than LATE_COMMIT to the
