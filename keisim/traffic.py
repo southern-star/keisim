@@ -877,7 +877,10 @@ class Traffic:
         t1 = max(0.0, (vmax - v) / a)
         d1 = v * t1 + 0.5 * a * t1 * t1
         if d1 >= d:
-            return (-v + math.sqrt(v * v + 2.0 * a * d)) / a
+            q = v * v + 2.0 * a * d
+            if q < 0.0:        # d < 0 (a rider past the end of its lane, _bike_arrival): already there
+                return 0.0
+            return (-v + math.sqrt(q)) / a
         return t1 + (d - d1) / max(vmax, 0.1)
 
     @staticmethod
