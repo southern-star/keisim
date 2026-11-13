@@ -772,6 +772,7 @@ web/                     KeiView: 同じ街をアニメ調 (セル調) で歩け
                          ?pilot=mc (KeiPilot Mc) / ?pilot=1 (v0.10) で KeiPilot がブラウザの中で運転する (6 章)
 docs/                    ギャラリー画像, 上面図, ハイライト動画, 結果ページ (docs/report/index.html)
                          multicam.md: KeiPilot Mc の説明、multicam/rounds/: その学習の各回のスクリプト
+                         roadmap.md: 今後の方針と残タスク
 runs/eval/               評価結果 JSON (README の数値の出所)。学習済みモデルは GitHub Releases の
                          keipilot_mc.pt / keipilot_mc.onnx (v0.11.0、KeiPilot Mc) と keipilot.pt / keipilot.onnx (v0.10.0)
 data/                    収集データ (リポジトリ外, 約 3 GB。scripts/collect.py で再生成できる)
