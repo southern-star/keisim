@@ -98,7 +98,8 @@ SUITE_DEFAULTS["crosswalks"] = {**SUITE_DEFAULTS["long3"], "crosswalks": 0.7}
 SUITE_DEFAULTS["crosswalks_sub"] = {**SUITE_DEFAULTS["long3"], "town_style": "suburban", "crosswalks": 0.7}
 SUITE_DEFAULTS["bigjunction"] = {**SUITE_DEFAULTS["long3"], "town_style": "bigjunction", "crosswalks": 0.7}
 for _k in ("crosswalks", "crosswalks_sub", "bigjunction"):
-    SUITE_DEFAULTS[f"{_k}_bk8"] = {**SUITE_DEFAULTS[_k], "bicycles": 8.0, "bike_visible": 1}
+    SUITE_DEFAULTS[f"{_k}_bk8"] = {**SUITE_DEFAULTS[_k], "bicycles": 8.0, "bike_visible": 1, "npc_past_line": 1,
+                                     "bike_sweep": 1}
 
 
 _ENV = None
@@ -130,6 +131,7 @@ def run_route(job):
     cfg.keiview_roads = args.get("keiview_roads", "plain")
     cfg.expert_yield_visible = bool(args.get("yield_visible", False))
     cfg.expert_bike_visible = bool(args.get("bike_visible", False))
+    cfg.expert_bike_sweep = bool(args.get("bike_sweep", False))
     cfg.traffic.ego_patience_s = float(args.get("ego_patience", 0.0))
     cfg.traffic.light_past_line = bool(args.get("npc_past_line", False))
     cfg.traffic.crosswalks = float(args.get("crosswalks", 0.0))
@@ -384,7 +386,7 @@ def main():
     ap.add_argument("--ego_patience", type=float, default=0.0,
                     help="s the ego may stand before the NPCs that give way to it stop waiting for it "
                          "(TrafficConfig.ego_patience_s; 0: they wait for ever); suffix _pat<S>")
-    ap.add_argument("--npc_past_line", action="store_true",
+    ap.add_argument("--npc_past_line", type=int, nargs="?", const=1, default=None, choices=[0, 1],
                     help="NPCs standing a little past their stop line still obey its light "
                          "(TrafficConfig.light_past_line); suffix _npcline")
     ap.add_argument("--crosswalks", type=float, default=None,
@@ -397,6 +399,9 @@ def main():
     ap.add_argument("--bike_visible", type=int, default=None, choices=[0, 1],
                     help="the expert counts only the riders the camera sees for its 巻き込み確認 and give-way "
                          "(EnvConfig.expert_bike_visible); suffix _bv")
+    ap.add_argument("--bike_sweep", type=int, default=None, choices=[0, 1],
+                    help="the expert's room beside a rider ahead counts its front corner off the path "
+                         "(EnvConfig.expert_bike_sweep; default 0, the _bk8 suites 1); suffix _bs / _nobs")
     ap.add_argument("--only", nargs="+", default=None, metavar="TOWN:EP",
                     help="only these routes of the suite (e.g. 1018:9400), for checks on picked routes; give --out")
     args = ap.parse_args()
@@ -412,9 +417,10 @@ def main():
         SUITE_DEFAULTS["osm"] = {"town_style": "twophase", "jam_fixes": True, "blocked_timeout": 180.0}
         args.suite = "osm"
     dflt = {"route_length": 600.0, "max_steps": 4000, "town_style": "classic", "jam_fixes": 0, "blocked_timeout": 90.0,
-            "via_ramp": 0, "crosswalks": 0.0, "bicycles": 0.0, "bike_visible": 0, **SUITE_DEFAULTS.get(args.suite, {})}
+            "via_ramp": 0, "crosswalks": 0.0, "bicycles": 0.0, "bike_visible": 0, "npc_past_line": 0, "bike_sweep": 0, **SUITE_DEFAULTS.get(args.suite, {})}
     suite_style, suite_fixes, suite_timeout = dflt["town_style"], int(dflt["jam_fixes"]), dflt["blocked_timeout"]
     suite_cw, suite_bk, suite_bv = float(dflt["crosswalks"]), float(dflt["bicycles"]), int(dflt["bike_visible"])
+    suite_npc, suite_bs = int(dflt["npc_past_line"]), int(dflt["bike_sweep"])
     for k, v in dflt.items():
         if getattr(args, k) is None:
             setattr(args, k, v)
@@ -449,10 +455,12 @@ def main():
         ("" if args.town_style == suite_style else f"_{args.town_style}") + \
         ("" if int(args.jam_fixes) == suite_fixes else ("_jamfix" if args.jam_fixes else "_nojamfix")) + \
         ("" if args.blocked_timeout == suite_timeout else f"_wait{args.blocked_timeout:.0f}") + \
-        (f"_pat{args.ego_patience:g}" if args.ego_patience else "") + ("_npcline" if args.npc_past_line else "") + \
+        (f"_pat{args.ego_patience:g}" if args.ego_patience else "") + \
+        ("" if int(args.npc_past_line) == suite_npc else ("_npcline" if args.npc_past_line else "_nonpcline")) + \
         ("" if args.crosswalks == suite_cw else f"_cw{args.crosswalks:g}") + \
         ("" if args.bicycles == suite_bk else f"_bk{args.bicycles:g}") + \
-        ("" if int(args.bike_visible) == suite_bv else ("_bv" if args.bike_visible else "_nobv"))
+        ("" if int(args.bike_visible) == suite_bv else ("_bv" if args.bike_visible else "_nobv")) + \
+        ("" if int(args.bike_sweep) == suite_bs else ("_bs" if args.bike_sweep else "_nobs"))
     if args.osm_town:
         suffix = suffix.replace("_twophase", "")
         fail_dir = os.path.join("runs", "failures", args.osm_town, f"{tag}{suffix}")
@@ -466,8 +474,8 @@ def main():
          "red_hold": args.red_hold, "town_style": args.town_style, "jam_fixes": bool(args.jam_fixes),
          "blocked_timeout": args.blocked_timeout, "osm_bbox": args.osm_bbox, "yield_visible": bool(args.yield_visible),
          "rig": args.rig, "ego_patience": args.ego_patience, "via_ramp": bool(args.via_ramp),
-         "npc_past_line": args.npc_past_line, "crosswalks": args.crosswalks, "bicycles": args.bicycles,
-         "bike_visible": bool(args.bike_visible)}
+         "npc_past_line": bool(args.npc_past_line), "crosswalks": args.crosswalks, "bicycles": args.bicycles,
+         "bike_visible": bool(args.bike_visible), "bike_sweep": bool(args.bike_sweep)}
     t0 = time.time()
     ctx = mp.get_context("spawn")
     with ctx.Pool(args.workers) as pool:

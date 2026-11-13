@@ -312,6 +312,12 @@ class EnvConfig:
     # (Expert.bike_scan). Riders the ego is passing (slower than it: it saw them ahead) keep their room, and the
     # corridor rules ahead (follow, pass slowly) keep every rider, as for the cars. Off: every rider counts.
     expert_bike_visible: bool = False
+    # Bicycles: the expert's room beside a rider ahead (Expert.bike_rules) counts how far its front corner sticks out
+    # of the path when the car points off it (half its length x sin(heading - path heading), e.g. coming out of a
+    # turn before it has turned all the way), as the path alone did not: coming out of a right turn the front left
+    # corner hit a rider standing at the start of the exit road with 0.53 m beside the path (bigjunction 3004/9801).
+    # Off: as before (the bicycle evaluations of PR #35).
+    expert_bike_sweep: bool = False
 
     @property
     def cameras(self):

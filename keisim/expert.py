@@ -254,11 +254,14 @@ class Expert:
         keep &= ~bikes["behind_unseen"][own]             # (expert_bike_visible: nor any circle of these)
         one = np.ones((1, len(pts)), bool)
         org, hd = np.array([[ego.x, ego.y]]), np.array([ego.yaw])
+        sweep = 0.0                     # EnvConfig.expert_bike_sweep: the front corner off the path
+        if self.env.cfg.expert_bike_sweep:
+            sweep = hl * abs(math.sin(float(wrap(ego.yaw - float(route.poly.heading(s))))))
         for free in (False, True):
             m = keep if free else keep & ~bikes["beside"][own]
             if not m.any():
                 continue
-            mg = (BIKE_FREE if free else BIKE_MIN) - bikes["room"][own[m]]
+            mg = (BIKE_FREE if free else BIKE_MIN) - bikes["room"][own[m]] + sweep
             g, vl, _ = corridor_gaps(pts[None], cum[None], one, org, hd, np.array([hl]), np.array([hw]), cxy[m],
                                      cr[m], own[m], csp[m], cyw[m], np.array([-1]), mg[None, :])
             if not np.isfinite(g[0]):

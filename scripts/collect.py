@@ -330,6 +330,7 @@ def worker(wid, args, quota, out_dir, counter):
     cfg.keiview_roads = args.keiview_roads
     cfg.expert_yield_visible = bool(args.yield_visible)
     cfg.expert_bike_visible = bool(args.bike_visible)
+    cfg.expert_bike_sweep = bool(args.bike_sweep)
     if args.ego_cross_rate is not None:
         cfg.traffic.ego_cross_rate = args.ego_cross_rate
     if args.ped_spacing is not None:
@@ -610,6 +611,9 @@ def parse_args(argv=None):
     ap.add_argument("--bike_visible", type=int, default=0, choices=[0, 1],
                     help="the expert's 巻き込み確認 and give-way counts only the riders the camera sees, and riders "
                          "coming unseen from behind do not move its path (EnvConfig.expert_bike_visible)")
+    ap.add_argument("--bike_sweep", type=int, default=0, choices=[0, 1],
+                    help="the expert's room beside a rider ahead counts its front corner off the path when it points "
+                         "off it (EnvConfig.expert_bike_sweep)")
     ap.add_argument("--focus_bicycle", type=float, default=0.0,
                     help="with --focus_yield < 1, frames are also in focus where the expert's reason is bicycle or a "
                          "rider the camera sees rides along the route within this many m ahead (bicycle_near)")
@@ -673,6 +677,7 @@ def main():
                **({"focus_crosswalk": args.focus_crosswalk} if args.focus_crosswalk > 0 else {}),
                **({"bicycles": args.bicycles} if args.bicycles > 0 else {}),
                **({"bike_visible": 1} if args.bike_visible else {}),
+               **({"bike_sweep": 1} if args.bike_sweep else {}),
                **({"focus_bicycle": args.focus_bicycle} if args.focus_bicycle > 0 else {}),
                **({"freeze_reasons": args.freeze_reasons} if args.freeze_takeover > 0 else {}),
                **({"stand_pert": args.stand_pert, "stand_hold": args.stand_hold} if args.stand_pert > 0 else {}),
