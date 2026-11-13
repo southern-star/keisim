@@ -197,6 +197,26 @@ GUARDRAIL_OFFSET = 0.3   # m: a guardrail's beam stands this far outside the roa
 GUARDRAIL_DS = 2.0       # m: its collision boxes / beam panels
 
 
+TURN_ORDERED_MAX = 1.0    # rad: TownConfig.turn_rule "ordered" makes an exit "straight" only under this turn
+
+
+def turn_labels(dhs, rule="heading"):
+    """The turn ("left" / "straight" / "right") of each exit of one junction approach from its change of heading
+    `dhs` (rad, left positive). rule "heading": by the heading alone (+-0.5 rad). "ordered" (TownConfig.turn_rule):
+    where that gives two exits the same side and no exit is straight, the one of them closest to straight ahead
+    becomes "straight" if it turns by less than TURN_ORDERED_MAX; the other exits keep their side."""
+    out = ["left" if dh > 0.5 else ("right" if dh < -0.5 else "straight") for dh in dhs]
+    if rule == "ordered" and "straight" not in out:
+        dup = [i for i, t in enumerate(out) if out.count(t) > 1]
+        if dup:
+            i = min(dup, key=lambda j: abs(dhs[j]))
+            if abs(dhs[i]) < TURN_ORDERED_MAX:
+                out[i] = "straight"
+    elif rule not in ("heading", "ordered"):
+        raise ValueError(f"turn_rule {rule!r}")
+    return out
+
+
 def _two_phase_groups(angles):
     """Signal group of each arm (angles sorted counter-clockwise): opposite arms share a green.
     4 arms: 0+2 and 1+3. 3 arms: the most nearly opposite pair (the main road), then the stem."""
@@ -670,11 +690,10 @@ class Town:
                 for k, lid_in in enumerate(arm_in["ins"]):
                     lin = self.lanes[lid_in]
                     moves = []                                 # (out arm, turn) of this approach
-                    for ib, arm_out in enumerate(J.arms):
-                        if ia == ib or not arm_out["outs"]:
-                            continue
-                        dh = float(wrap(self.lanes[arm_out["outs"][0]].heading[0] - lin.heading[-1]))
-                        turn = "left" if dh > 0.5 else ("right" if dh < -0.5 else "straight")
+                    arms_out = [arm_out for ib, arm_out in enumerate(J.arms) if ib != ia and arm_out["outs"]]
+                    turns = turn_labels([float(wrap(self.lanes[arm_out["outs"][0]].heading[0] - lin.heading[-1]))
+                                         for arm_out in arms_out], cfg.turn_rule)
+                    for arm_out, turn in zip(arms_out, turns):
                         moves.append((arm_out, turn))
                         kerb_turn = turn if cfg.left_hand_traffic else {"left": "right", "right": "left"}.get(turn, turn)
                         if lin.kind == "pocket":
@@ -862,10 +881,11 @@ class Town:
                 if not J.signalized or arm is None or not arm["ins"]:
                     continue
                 h_in = self.lanes[arm["ins"][0]].heading[-1]
-                dh = [(o, float(wrap(self.lanes[o["outs"][0]].heading[0] - h_in))) for o in J.arms
-                      if o is not arm and o["outs"]]
-                straight = next((o for o, d in dh if abs(d) <= 0.5), None)
-                if not any(d < -0.5 for _, d in dh) or straight is None or len(straight["outs"]) < len(arm["ins"]):
+                outs = [o for o in J.arms if o is not arm and o["outs"]]
+                turns = turn_labels([float(wrap(self.lanes[o["outs"][0]].heading[0] - h_in)) for o in outs],
+                                    cfg.turn_rule)
+                straight = next((o for o, t in zip(outs, turns) if t == "straight"), None)
+                if "right" not in turns or straight is None or len(straight["outs"]) < len(arm["ins"]):
                     continue        # no right turn here, or a lane that cannot go straight on (it turns right itself)
                 u = L - s if end == "b" else s                 # distance to this end
                 m = u <= plen + POCKET_TAPER
