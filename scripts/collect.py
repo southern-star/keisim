@@ -338,7 +338,8 @@ def worker(wid, args, quota, out_dir, counter):
     if args.vehicle_spacing is not None:
         cfg.traffic.vehicle_spacing = tuple(args.vehicle_spacing)
     cfg.traffic.ego_patience_s = args.ego_patience
-    cfg.traffic.light_past_line = bool(args.npc_past_line)
+    cfg.traffic.light_past_line = args.npc_past_line >= 1
+    cfg.traffic.past_line_light_only = args.npc_past_line >= 2
     cfg.traffic.crosswalks = args.crosswalks
     if args.crosswalk_spawn is not None:
         cfg.traffic.crosswalk_spawn = args.crosswalk_spawn
@@ -594,9 +595,9 @@ def parse_args(argv=None):
     ap.add_argument("--ego_patience", type=float, default=0.0,
                     help="s the ego may stand before the NPCs that give way to it stop waiting for it "
                          "(TrafficConfig.ego_patience_s; 0: they wait for ever)")
-    ap.add_argument("--npc_past_line", type=int, default=0, choices=[0, 1],
+    ap.add_argument("--npc_past_line", type=int, default=0, choices=[0, 1, 2],
                     help="1: NPCs standing a little past their stop line still obey its light "
-                         "(TrafficConfig.light_past_line)")
+                         "(TrafficConfig.light_past_line); 2: and only its light (past_line_light_only)")
     ap.add_argument("--crosswalks", type=float, default=0.0,
                     help="crosswalks at signals (TrafficConfig.crosswalks): the chance that a person at a two-phase "
                          "signal's road end crosses on the zebra with the pedestrian light; turning cars give way")
@@ -671,7 +672,7 @@ def main():
                **({"keiview_roads": args.keiview_roads} if args.keiview_roads != "plain" else {}),
                **({"yield_visible": 1} if args.yield_visible else {}),
                **({"ego_patience": args.ego_patience} if args.ego_patience else {}),
-               **({"npc_past_line": 1} if args.npc_past_line else {}),
+               **({"npc_past_line": args.npc_past_line} if args.npc_past_line else {}),
                **({"crosswalks": args.crosswalks} if args.crosswalks > 0 else {}),
                **({"crosswalk_spawn": args.crosswalk_spawn} if args.crosswalk_spawn is not None else {}),
                **({"focus_crosswalk": args.focus_crosswalk} if args.focus_crosswalk > 0 else {}),

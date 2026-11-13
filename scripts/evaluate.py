@@ -98,7 +98,7 @@ SUITE_DEFAULTS["crosswalks"] = {**SUITE_DEFAULTS["long3"], "crosswalks": 0.7}
 SUITE_DEFAULTS["crosswalks_sub"] = {**SUITE_DEFAULTS["long3"], "town_style": "suburban", "crosswalks": 0.7}
 SUITE_DEFAULTS["bigjunction"] = {**SUITE_DEFAULTS["long3"], "town_style": "bigjunction", "crosswalks": 0.7}
 for _k in ("crosswalks", "crosswalks_sub", "bigjunction"):
-    SUITE_DEFAULTS[f"{_k}_bk8"] = {**SUITE_DEFAULTS[_k], "bicycles": 8.0, "bike_visible": 1, "npc_past_line": 1,
+    SUITE_DEFAULTS[f"{_k}_bk8"] = {**SUITE_DEFAULTS[_k], "bicycles": 8.0, "bike_visible": 1, "npc_past_line": 2,
                                      "bike_sweep": 1}
 
 
@@ -133,7 +133,8 @@ def run_route(job):
     cfg.expert_bike_visible = bool(args.get("bike_visible", False))
     cfg.expert_bike_sweep = bool(args.get("bike_sweep", False))
     cfg.traffic.ego_patience_s = float(args.get("ego_patience", 0.0))
-    cfg.traffic.light_past_line = bool(args.get("npc_past_line", False))
+    cfg.traffic.light_past_line = int(args.get("npc_past_line", 0)) >= 1
+    cfg.traffic.past_line_light_only = int(args.get("npc_past_line", 0)) >= 2
     cfg.traffic.crosswalks = float(args.get("crosswalks", 0.0))
     cfg.traffic.bicycles = float(args.get("bicycles", 0.0))
     if args.get("dense"):
@@ -386,9 +387,10 @@ def main():
     ap.add_argument("--ego_patience", type=float, default=0.0,
                     help="s the ego may stand before the NPCs that give way to it stop waiting for it "
                          "(TrafficConfig.ego_patience_s; 0: they wait for ever); suffix _pat<S>")
-    ap.add_argument("--npc_past_line", type=int, nargs="?", const=1, default=None, choices=[0, 1],
-                    help="NPCs standing a little past their stop line still obey its light "
-                         "(TrafficConfig.light_past_line); suffix _npcline")
+    ap.add_argument("--npc_past_line", type=int, nargs="?", const=1, default=None, choices=[0, 1, 2],
+                    help="1: NPCs standing a little past their stop line still obey its light "
+                         "(TrafficConfig.light_past_line); 2: and only its light (past_line_light_only; the _bk8 "
+                         "suites). Suffix _npcline / _npcline2 where it differs from the suite's")
     ap.add_argument("--crosswalks", type=float, default=None,
                     help="crosswalks at signals: the chance that a person at a two-phase signal's road end crosses on "
                          "the zebra with the pedestrian light; turning cars give way (TrafficConfig.crosswalks; "
@@ -456,7 +458,7 @@ def main():
         ("" if int(args.jam_fixes) == suite_fixes else ("_jamfix" if args.jam_fixes else "_nojamfix")) + \
         ("" if args.blocked_timeout == suite_timeout else f"_wait{args.blocked_timeout:.0f}") + \
         (f"_pat{args.ego_patience:g}" if args.ego_patience else "") + \
-        ("" if int(args.npc_past_line) == suite_npc else ("_npcline" if args.npc_past_line else "_nonpcline")) + \
+        ("" if int(args.npc_past_line) == suite_npc else ({0: "_nonpcline", 1: "_npcline", 2: "_npcline2"}[int(args.npc_past_line)])) + \
         ("" if args.crosswalks == suite_cw else f"_cw{args.crosswalks:g}") + \
         ("" if args.bicycles == suite_bk else f"_bk{args.bicycles:g}") + \
         ("" if int(args.bike_visible) == suite_bv else ("_bv" if args.bike_visible else "_nobv")) + \
@@ -474,7 +476,7 @@ def main():
          "red_hold": args.red_hold, "town_style": args.town_style, "jam_fixes": bool(args.jam_fixes),
          "blocked_timeout": args.blocked_timeout, "osm_bbox": args.osm_bbox, "yield_visible": bool(args.yield_visible),
          "rig": args.rig, "ego_patience": args.ego_patience, "via_ramp": bool(args.via_ramp),
-         "npc_past_line": bool(args.npc_past_line), "crosswalks": args.crosswalks, "bicycles": args.bicycles,
+         "npc_past_line": int(args.npc_past_line), "crosswalks": args.crosswalks, "bicycles": args.bicycles,
          "bike_visible": bool(args.bike_visible), "bike_sweep": bool(args.bike_sweep)}
     t0 = time.time()
     ctx = mp.get_context("spawn")

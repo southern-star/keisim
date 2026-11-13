@@ -818,7 +818,10 @@ class Traffic:
                 if (moving_only and v < 0.5) or waits:
                     break                                       # waits, and the cars behind queue behind it
                 front = s + L / 2
-                if not (st != TL_GREEN and stop_s is not None and self._will_stop(st, stop_s - front, v, ego)):
+                d_line = None if stop_s is None else stop_s - front
+                if not (st != TL_GREEN and stop_s is not None and (self._will_stop(st, d_line, v, ego) or (
+                        self.cfg.light_past_line and self.cfg.past_line_light_only and not ego and v < 1.0 and
+                        -NPC_OVER <= d_line))):
                     best = min(best, self._arrival(lanes[pred].length - front + s2, v, vmax, ego))
                 break                                           # the cars behind it arrive later
             if lookback and not seen and lanes[pred].length < LOOKBACK_LANE:
@@ -1051,8 +1054,8 @@ class Traffic:
             st = town.signal_state_for_lane(lid, t)
             if st == TL_RED or (st == TL_YELLOW and (d > v[i] * v[i] / (2 * 3.5) + 1.0 or d < -0.5)):
                 stop_gap[i] = d - 0.6
-            elif d < 12.0:
-                # don't block the box: only enter if the exit has room
+            elif d < 12.0 and not (cfg.past_line_light_only and d < -0.5):
+                # don't block the box: only enter if the exit has room (past_line_light_only: not once past the line)
                 r = self.route[i]
                 try:
                     k = r.index(lid, self.ri[i])

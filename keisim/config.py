@@ -162,6 +162,11 @@ class TrafficConfig:
     # braking for the box rule) counted as past the line and drove into the junction at red (grid long3d_dense
     # 1018/9500: into the ego setting off at its green). Off by default: the old evaluations stay reproducible.
     light_past_line: bool = False
+    # With light_past_line: such a car obeys only its light, not the box rule nor the exit check (it is already past
+    # the line), and the expert's give-way (Traffic.min_arrival) counts it as stopping at a red / yellow light, as it
+    # does. With light_past_line alone it held for the ego standing in the junction to turn right while the ego waited
+    # for it (twophase 1019/9800 with crosswalks: for good). Off: light_past_line as before (round 10's data).
+    past_line_light_only: bool = False
     # Crosswalks at signals (Town.ped_crossings: the zebras at the ends of the roads of two-phase signalised junctions).
     # crosswalks: the chance that a person walking up to such an end crosses there: they wait at the kerb for the
     # pedestrian green (the green of the cars crossing that road's flow, minus ped_flash s of flashing) and walk over
