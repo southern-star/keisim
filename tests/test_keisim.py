@@ -1870,3 +1870,46 @@ def test_expert_waits_only_so_long_for_a_bicycle_standing_beside_its_left_turn()
     bk.v[0] = 3.0                                               # the rider rides on: the next one is waited for again
     rule(0.0)
     assert ex._bk_wait == 0.0
+
+
+def test_expert_bike_visible():
+    """EnvConfig.expert_bike_visible (off by default): before a left turn the expert waits only for the riders the
+    rig's first camera (Mc: the 180 deg wide one) sees. A rider standing beside the rear door is out of its view: the
+    expert goes; one beside the front door is in view: it waits, as it does for both with the option off. A rider
+    coming up unseen from behind, faster than the ego, does not move the expert's path over."""
+    import math
+    from keisim.config import set_camera_rig
+    from keisim.expert import PATH_S
+    assert EnvConfig().expert_bike_visible is False
+    env = _bike_env(10.0, "twophase")
+    set_camera_rig(env.cfg, "wide_narrow")
+    env.reset(town_seed=1014, episode_seed=9201, route_length=600.0, render=False)
+    w, ex, route = env.world, env.expert, env.route
+    bk, ego, L = w.bikes, w.ego, w.town.lanes
+    jn = next(j for j in route.junctions if L[j["lane"]].kind == "conn" and L[j["lane"]].turn == "left")
+    lin = L[L[jn["lane"]].pred[0]]
+    s = jn["s_in"] - (lin.length - lin.stop_s if lin.stop_s is not None else 0.0) - ego.LENGTH / 2 - 0.3
+    p, h = route.poly.interp(s), float(route.poly.heading(s))
+    ego.x, ego.y, ego.yaw, ego.v = float(p[0]), float(p[1]), h, 0.0
+    left = np.array([-math.sin(h), math.cos(h)])
+    pose = (ego.x, ego.y, h)
+
+    def rule(ds, v_bike=0.0, v=0.0):
+        bk.xy[:] = 1e6
+        bk.xy[0] = route.poly.interp(s + ds) + 1.5 * left
+        bk.yaw[0], bk.v[0] = h, v_bike
+        ex._bk_wait = 0.0
+        scan = ex.bike_scan(route, s, pose, v)
+        pts = ex.path_local(route, s, pose, scan)
+        c, sn = math.cos(h), math.sin(h)
+        pts = np.stack([ego.x + c * pts[:, 0] - sn * pts[:, 1], ego.y + sn * pts[:, 0] + c * pts[:, 1]], -1)
+        return ex.bike_rules(route, s, v, scan, pts, np.asarray(PATH_S, float), False), scan
+
+    for on in (False, True):
+        env.cfg.expert_bike_visible = on
+        assert rule(1.5)[0] < 0.3                      # beside the front door: seen, waited for
+        rear, scan = rule(-1.0)                        # beside the rear door: out of the wide camera's view
+        assert scan["along"][0] and scan["visible"][0] == (not on)
+        assert (rear > 1.0) == on
+        fast = rule(-6.0, v_bike=4.0)[1]               # coming up from behind
+        assert fast["along"][0] != on and fast["behind_unseen"][0] == on
