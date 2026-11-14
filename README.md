@@ -946,11 +946,12 @@ data/                    収集データ (リポジトリ外, 約 3 GB。scripts
   - **交差点の角で待つ人**: 横断歩道の端で青を待つ人は、路側帯を歩く人と同じ近さで追い越します。
     歩道のない細い道の角で待つ人の横で、エキスパートが止まり続けたためです。
   - **評価スイート** `bigjunction` (街 3000〜3009、2.5 km × 20 本、横断歩道を渡る人 `--crosswalks 0.7`): 下の結果。
-    - **エキスパート** (`runs/eval/expert_bigjunction.json`): 20/20 完走、違反 0、50.1 km、平均 11.3 km/h、信号 245、車線変更 63。
+    - 下の 2 つの結果は、曲がる指示を直す前 (今までの決め方) のものです (`runs/eval/*_bigjunction*_heading.json`)。直したあとの結果は「指示のあいまいさ」にあり、ファイルは `_heading` のない名前です。
+    - **エキスパート** (`runs/eval/expert_bigjunction_heading.json`): 20/20 完走、違反 0、50.1 km、平均 11.3 km/h、信号 245、車線変更 63。
       - 通ったスクランブル交差点は 35、信号での右折は 79 回で、そのうち 16 回が右折専用車線からでした。
       - 横断歩道で譲ったのは 15 本のルートで計 122 秒です (`crosswalks_sub` は 17 本で 112 秒)。
     - **KeiPilot Mc (v0.11、大きな交差点の街を学習していない)**: `crosswalks` と同じく 600 m にして、エキスパートと並べました
-      (`--route_length 600 --max_steps 4000`、`runs/eval/*_bigjunction_600m.json`)。
+      (`--route_length 600 --max_steps 4000`、`runs/eval/*_bigjunction_600m_heading.json`)。
 
       | 600 m × 20 本 | 完走 | 違反 (本) | DS |
       |---|---|---|---|
@@ -989,7 +990,8 @@ data/                    収集データ (リポジトリ外, 約 3 GB。scripts
         bigjunction の別の 100 の街 (3020〜3119) でも 0 / 3540 です。あいまいな 22 の入口は、どれも近いほうの出口が 0.51〜0.82 rad、遠いほうが 1.04 rad 以上でした。
       - 変わった街は bigjunction の 20 のうち 7 (3005・3006・3008・3009・3016・3018・3019) で、評価のスイートでは 3009 の 2 本のルートの指示が変わります
         (エピソード 9801 の交差点 8 と 9 が「左」→「直進」、9800 の交差点 9 が「右」→「直進」)。
-      - 測り直し (新しい指示、`runs/eval/*_turnfix.json`):
+      - 測り直し (新しい指示、`runs/eval/expert_bigjunction.json`・`expert_bigjunction_600m.json`・`keipilot_mc_hold_red_yh_bigjunction_600m.json`。
+        前の指示の結果は `*_heading.json`。round 12 で Mc v0.11 と比べるときの基準は、新しい指示のほうです):
 
         | | 完走 | 違反 (本) | DS |
         |---|---|---|---|
