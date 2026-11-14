@@ -212,7 +212,8 @@ BK_FOCUS_BEHIND = 3.0         # --focus_bicycle: m a rider riding along may be b
 def bicycle_near(env, plan, ahead):
     """--focus_bicycle: the expert's reason is "bicycle" (following one, passing one slowly, the 巻き込み確認 before a
     left turn), or a rider rides along the route (Expert.bike_scan) from BK_FOCUS_BEHIND m behind the ego's rear to
-    `ahead` m ahead of its front, one the camera sees (expert_bike_visible: the riders the expert's rules count)."""
+    `ahead` m ahead of its front: with expert_bike_visible one the camera sees (the riders the expert's rules count),
+    without it any rider."""
     if plan["reason"] == "bicycle":
         return True
     bk = env.world.bikes
@@ -617,7 +618,8 @@ def parse_args(argv=None):
                          "off it (EnvConfig.expert_bike_sweep)")
     ap.add_argument("--focus_bicycle", type=float, default=0.0,
                     help="with --focus_yield < 1, frames are also in focus where the expert's reason is bicycle or a "
-                         "rider the camera sees rides along the route within this many m ahead (bicycle_near)")
+                         "rider rides along the route within this many m ahead (bicycle_near): with --bike_visible 1 "
+                         "only the riders the camera sees, without it every rider")
     ap.add_argument("--renderer", default="keisim", choices=["keisim", "keiview"], help="camera renderer")
     ap.add_argument("--keiview_roads", default="plain", choices=["plain", "detail"],
                     help="KeiView road surface: plain (every KeiView dataset so far) or detail (markings, signs, ...)")
