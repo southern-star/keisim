@@ -17,16 +17,23 @@
 #       the camera sees riding along within 15 m), with people on the zebras too. Two-phase and suburban towns. A
 #       cloud check (3000 frames, --focus_bicycle 20): 31 % of the frames with the reason bicycle, half with a rider
 #       about; 15 m keeps somewhat fewer
-#    b and c take the settings of the _bk8 suites (README, 3 章の「自転車」): --npc_past_line 2 (an NPC standing a little
+#    b and c take the settings of the _bk8 suites (PR #42; README, 3 章の「自転車」): --npc_past_line 2 (an NPC standing a little
 #    past its stop line obeys only its light: with the old NPCs one set off at red and locked with the crossing road's
 #    right turn in the junction, and with --npc_past_line 1 one held for the ego waiting in the junction while the ego
 #    waited for it), and for c --bike_sweep 1 (the expert's room beside a rider ahead counts its front corner off the
 #    path: coming out of a right turn it clipped a rider standing at the start of the exit road)
 # 2. mc13 = mc12 trained on mc12's sets (round 11) + the new ones, 4 x 200k samples. Weights (--dir_weight):
-#    crosswalk sets 2 (as before), big junction sets 2, bicycle sets 1 (train.py weights their reason-bicycle frames
-#    x3, about a quarter of them: on average ~1.5). Share of the samples, estimated as round12.sh did before (round 11's
-#    80k guardrail frames at weight 1 were 2.9 %): crosswalks 80k x 2 ~ 5.5 %, big junctions 48k x 2 ~ 3 %,
-#    bicycles 53k (~x 1.5) ~ 2.5 %; all new sets ~ 11 % (round 11: 2.9 %, the crosswalks alone: ~ 6 %).
+#    crosswalk sets 2 (as before), big junction sets 2, bicycle sets 1.
+#    Every weight of train.py (reason, DAgger, KeiView, yellow, setting off, turns) on cloud sets of 3000 KeiSim expert
+#    frames: a frame of a bicycle set weighs ~1.4 x one of an ordinary set (mean 2.0-2.06 against 1.44, the twophase
+#    expert without bicycles), about half of it from the reason-bicycle frames (x3; 22-31 % of the frames with
+#    --focus_bicycle 20). Share of the samples, from round 11's anchor (its 80k guardrail frames at weight 1 were
+#    2.9 %: the old sets ~2.68M frame-weights) and those per-frame weights (crosswalk sets ~1.1 x and big junction ~1 x, assumed, not measured):
+#    crosswalks 80k x 2 x 1.1 ~ 5.8 %, big junctions 48k x 2 ~ 3.2 %, bicycles 53k x 1 x 1.4 ~ 2.5 % (the
+#    reason-bicycle frames ~1.2 % of all), all new sets ~ 11 % (round 11: 2.9 %, the crosswalks alone: ~ 6 %). The
+#    bicycle sets keep weight 1 and the x3 stays: about 1 % of the samples on the reason-bicycle frames is not too much
+#    for a new kind of road user; the 巻き込み scenes the camera sees are rare in them (0.03 % of the steps in the
+#    two-phase towns, 0.3 % in the suburban ones, tools/bike_unseen.py --off)
 #    Memory: the new sets are ~181k frames (~4 GB). MMAP=1 (train.py --mmap, PR #38) leaves the shards' images on disk
 #    and keeps every old set whole; without it the old sets are halved until under 21.3 GB as before (round 11's
 #    order first), and more of them than before
