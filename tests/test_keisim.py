@@ -1634,6 +1634,42 @@ def test_bigjunction_town():
     assert info["status"] == "success" and not info["infractions"] and on_pocket > 0
 
 
+def test_turn_rule_ordered():
+    """TownConfig.turn_rule "ordered" (bigjunction towns): where two exits of a junction approach share "left" (or
+    "right") by the heading alone, the one closest to straight ahead becomes "straight", so every exit of an approach
+    has its own command; approaches without such a pair keep their turns. The other styles keep "heading"."""
+    from keisim.config import TOWN_STYLES, town_config
+    from keisim.roadnet import turn_labels
+    assert turn_labels([0.71, 1.89]) == ["left", "left"]
+    assert turn_labels([0.71, 1.89], "ordered") == ["straight", "left"]
+    assert turn_labels([-1.97, -0.71], "ordered") == ["right", "straight"]
+    assert turn_labels([-1.72, -0.51, 1.24], "ordered") == ["right", "straight", "left"]
+    assert turn_labels([-1.6, 0.7], "ordered") == ["right", "left"]          # no pair: as by the heading
+    assert turn_labels([0.2, 0.7, 1.5], "ordered") == ["straight", "left", "left"]   # a straight one already
+    assert turn_labels([1.1, 1.9], "ordered") == ["left", "left"]            # nothing close to straight ahead
+    assert [s for s, d in TOWN_STYLES.items() if d.get("turn_rule", "heading") != "heading"] == ["bigjunction"]
+
+    def approaches(T):
+        out = {}
+        for L in T.lanes:
+            for c in L.succ:
+                C = T.lanes[c]
+                if L.kind != "conn" and C.kind == "conn" and len(T.junctions[C.junction].arms) >= 3:
+                    out.setdefault((C.junction, L.road), set()).add((C.turn, T.lanes[C.succ[0]].road))
+        return out
+
+    def n_ambiguous(T):
+        return sum(len({t for t, _ in v}) < len({r for _, r in v}) for v in approaches(T).values())
+
+    old = town_config("bigjunction")
+    old.turn_rule = "heading"
+    for seed in (3005, 3009):                    # 2 and 4 ambiguous approaches by the heading alone
+        a, b = Town(seed, old), Town(seed, town_config("bigjunction"))
+        assert n_ambiguous(a) > 0 and n_ambiguous(b) == 0
+        same = sum(approaches(a)[k] == v for k, v in approaches(b).items())
+        assert same >= len(approaches(b)) - n_ambiguous(a)
+
+
 def _bike_env(density=10.0, style=None):
     from keisim.config import town_config
     cfg = EnvConfig()
