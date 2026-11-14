@@ -300,6 +300,12 @@ class EnvConfig:
     # horizontal field of view, not behind a building; Traffic.visible_from), so its labels follow from the image:
     # with all of them, a car outside the 100 deg view made the expert wait where the image looked clear.
     expert_yield_visible: bool = False
+    # Bicycles (TrafficConfig.bicycles) for the expert: only the riders the first camera (on the labelled pose) sees
+    # right now (Bicycles.visible_from) count for the 巻き込み確認 before a left turn and for the give-way tables;
+    # riders it does not see that come up from behind faster than the ego do not move its path over either
+    # (Expert.bike_scan). Riders the ego is passing (slower than it: it saw them ahead) keep their room, and the
+    # corridor rules ahead (follow, pass slowly) keep every rider, as for the cars. Off: every rider counts.
+    expert_bike_visible: bool = False
 
     @property
     def cameras(self):

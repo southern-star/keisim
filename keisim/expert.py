@@ -136,6 +136,7 @@ class Expert:
         self.env = env
         self._ss_route, self._ss_done = None, set()    # 止まれ lines (route s) the ego has stopped at on this route
         self._bk_wait = 0.0                            # s waited before a left turn for a bicycle standing beside
+        self.last_bikes = None                         # bike_scan of the ego's own last plan (collect.py)
 
     def path_local(self, route, s, pose, bikes=None):
         """The label waypoints in the frame of `pose`. With bicycles about (bike_scan; computed here when `bikes` is
@@ -169,7 +170,9 @@ class Expert:
         growing over the first BIKE_START of a road; beside a bicycle the ego stays as far over as it is); "cap",
         "s0": that room without the last rule, and where the bicycle's road begins on the route (path_local);
         "want": how far it does move over (BIKE_FREE beside the bicycle, if there is that much room); "beside": alongside the ego with its rear wheel not yet past the front
-        bumper, and clear of its side (nothing to stop for: the ego keeps its line)}. No state: the path of a
+        bumper, and clear of its side (nothing to stop for: the ego keeps its line); "visible": seen by the camera
+        (EnvConfig.expert_bike_visible; else all); "behind_unseen": not seen, behind the ego's front and faster than
+        it (left out of everything above and of bike_rules)}. No state: the path of a
         displaced camera (collect.py) uses it too."""
         env = self.env
         w = env.world
@@ -177,7 +180,9 @@ class Expert:
         hl, hw, hb = ego.LENGTH / 2, ego.WIDTH / 2, BIKE_LEN / 2
         n = bk.n
         out = {"along": np.zeros(n, bool), "beside": np.zeros(n, bool), "s": np.zeros(n), "d": np.zeros(n),
-               "room": np.zeros(n), "want": np.zeros(n), "cap": np.zeros(n), "s0": np.zeros(n)}
+               "room": np.zeros(n), "want": np.zeros(n), "cap": np.zeros(n), "s0": np.zeros(n),
+               "visible": self.bikes_seen(pose) if env.cfg.expert_bike_visible else np.ones(n, bool),
+               "behind_unseen": np.zeros(n, bool)}
         lat = route.poly.project(np.array([pose[0], pose[1]], float), s - 8.0, s + 8.0)[1]
         p0 = route.poly.interp(s)
         for j in np.nonzero(np.hypot(*(bk.xy - p0).T) < 60.0)[0]:
@@ -188,6 +193,9 @@ class Expert:
                 continue                                    # beyond the ends of that stretch
             if abs(wrap(bk.yaw[j] - float(route.poly.heading(s_j)))) > 0.7:
                 continue                                    # crossing the route: an obstacle like any other
+            if not out["visible"][j] and float(bk.v[j]) > v + 0.3 and s_j < s + hl:
+                out["behind_unseen"][j] = True              # expert_bike_visible: coming up unseen from behind
+                continue
             out["along"][j], out["s"][j], out["d"][j] = True, s_j, d_j
             k = route.lane_index_at(s_j)
             lane = town.lanes[route.lanes[k]]
@@ -219,6 +227,14 @@ class Expert:
             out["want"][j] = min(max(hw + 0.3 + BIKE_FREE + 0.05 - d_j, 0.0), c)
         return out
 
+    def bikes_seen(self, pose):
+        """The riders the rig's first camera on `pose` sees right now (EnvConfig.expert_bike_visible)."""
+        w = self.env.world
+        c = self.env.cfg.camera
+        x, y, yaw = float(pose[0]), float(pose[1]), float(pose[2])
+        cam = (x + c.x * math.cos(yaw) - c.y * math.sin(yaw), y + c.x * math.sin(yaw) + c.y * math.cos(yaw))
+        return w.bikes.visible_from(cam, yaw, math.radians(c.fov_deg) / 2, c.max_dist, w.town)
+
     def bike_rules(self, route, s, v, bikes, pts, cum, real):
         """The speed rules for bicycles -> target speed (inf: none binds). Behind one the ego cannot pass (less
         than BIKE_MIN beside it on the path bike_scan allows) it follows, BIKE_GAP0 behind at a stand. Passing
@@ -227,13 +243,15 @@ class Expert:
         巻き込み確認: before a left turn (the front bumper within BIKE_LEFT of the lane's end and not past it) the ego
         stops at its stop line (or the lane's end) while a bicycle beside or behind it would reach the turn before
         the ego has cleared it plus BIKE_LEFT_MARGIN; one standing beside goes first (for BIKE_LEFT_WAIT s at most).
-        The riders behind are outside a camera looking ahead: a privileged check (the mirrors)."""
+        The riders behind are outside a camera looking ahead: a privileged check (the mirrors), unless
+        EnvConfig.expert_bike_visible, which leaves the 巻き込み確認 to the riders the camera sees (bikes["visible"])."""
         w = self.env.world
         bk, town, ego = w.bikes, w.town, w.ego
         hl, hw, hb = ego.LENGTH / 2, ego.WIDTH / 2, BIKE_LEN / 2
         target = math.inf
         cxy, cr, own, csp, cyw = bk.circles(predict=True)
         keep = (np.arange(len(own)) < bk.n * NCB) | ~bikes["along"][own]     # no predictions for the ones alongside
+        keep &= ~bikes["behind_unseen"][own]             # (expert_bike_visible: nor any circle of these)
         one = np.ones((1, len(pts)), bool)
         org, hd = np.array([[ego.x, ego.y]]), np.array([ego.yaw])
         for free in (False, True):
@@ -264,7 +282,7 @@ class Expert:
             if d <= -0.5:
                 break
             t_clear = clear_time(jn["s_in"] + 1.0 - s_front, min(v, 5.0), ego.LENGTH) + BIKE_LEFT_MARGIN
-            for j in np.nonzero(bikes["along"])[0]:
+            for j in np.nonzero(bikes["along"] & bikes["visible"])[0]:
                 ds, vb = bikes["s"][j] - s, float(bk.v[j])
                 if ds >= hl + hb + 1.0:
                     continue                                # ahead of the ego: the corridor check
@@ -331,6 +349,8 @@ class Expert:
             if ch["s_a"] - s < LC_PUSH and ch["a0"] < ch["a_max"]:
                 route.retime_change(lc_i, route.local_s(s, ch["k"] - 1) + LC_PUSH_TO)
         bikes = self.bike_scan(route, s, pose, v) if w.bikes is not None and w.bikes.n else None
+        if real:
+            self.last_bikes = bikes
         path = self.path_local(route, s, pose, bikes)
         reason = "cruise"
         if w.town.speed_varies:          # road types: the route's own limits
@@ -456,6 +476,8 @@ class Expert:
 
             def tables():
                 if not env.cfg.expert_yield_visible:
+                    if env.cfg.expert_bike_visible and bikes is not None:
+                        return tr.yield_tables(bikes_visible=bikes["visible"])
                     return tr.yield_tables()
                 # only the cars the camera (on `pose`: a displaced camera's own view) shows right now
                 c = env.cfg.camera

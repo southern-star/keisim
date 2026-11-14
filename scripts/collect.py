@@ -205,6 +205,26 @@ def crosswalk_near(env, ahead):
     return False
 
 
+BK_FOCUS_AHEAD = 20.0         # m: bicycle_near for the report without --focus_bicycle
+BK_FOCUS_BEHIND = 3.0         # --focus_bicycle: m a rider riding along may be behind the ego's rear and still count
+
+
+def bicycle_near(env, plan, ahead):
+    """--focus_bicycle: the expert's reason is "bicycle" (following one, passing one slowly, the 巻き込み確認 before a
+    left turn), or a rider rides along the route (Expert.bike_scan) from BK_FOCUS_BEHIND m behind the ego's rear to
+    `ahead` m ahead of its front, one the camera sees (expert_bike_visible: the riders the expert's rules count)."""
+    if plan["reason"] == "bicycle":
+        return True
+    bk = env.world.bikes
+    scan = env.expert.last_bikes
+    if bk is None or not bk.n or scan is None or len(scan["along"]) != bk.n:
+        return False
+    hl = env.world.ego.LENGTH / 2
+    ds = scan["s"] - env.s_ego
+    m = scan["along"] & scan["visible"] & (ds > -(hl + BK_FOCUS_BEHIND)) & (ds < hl + ahead)
+    return bool(m.any())
+
+
 def ramp_state(env):
     """(near, early) of the ego against the ramps its route takes: near, from RAMP_LEAD m before the change into a
     ramp to the end of the ramp's junction (the acceleration lane's merge included); early, ahead of the route's path
@@ -234,7 +254,7 @@ def osm_spec(spec):
 STAT_KEYS = ("steps", "steps_focus", "steps_lead_edge", "frames", "focus", "lead_edge", "lead_edge_vehicle",
              "lead_edge_tl_none", "lead_edge_tl_none_red", "steps_freeze", "freeze", "freezes", "stand_perts",
              "stand_pert", "steps_ramp", "ramp", "ramp_early_dropped",
-             "scene", "crosswalk", "crosswalk_near")
+             "scene", "crosswalk", "crosswalk_near", "bicycle", "bicycle_near")
 FREEZE_REASONS = ("curve", "cruise")    # --freeze_reasons: the expert drives on along the road, no one to wait for
 
 
@@ -309,6 +329,7 @@ def worker(wid, args, quota, out_dir, counter):
     cfg.renderer = args.renderer
     cfg.keiview_roads = args.keiview_roads
     cfg.expert_yield_visible = bool(args.yield_visible)
+    cfg.expert_bike_visible = bool(args.bike_visible)
     if args.ego_cross_rate is not None:
         cfg.traffic.ego_cross_rate = args.ego_cross_rate
     if args.ped_spacing is not None:
@@ -429,10 +450,11 @@ def worker(wid, args, quota, out_dir, counter):
                     env.world.town.ramps else (False, False)
                 focus = in_scene                    # the guardrail scenes are all in focus
                 cw_near = args.focus_crosswalk > 0 and crosswalk_near(env, args.focus_crosswalk)
+                bk_near = args.focus_bicycle > 0 and bicycle_near(env, plan, args.focus_bicycle)
                 if args.focus_yield < 1.0 and not focus:   # mostly frames around junction decisions, model mistakes
                     focus = np.isfinite(plan.get("yield_tta", np.nan)) or plan["reason"] in args.focus_reasons or \
                         (v_model is not None and abs(v_model - plan["target_speed"]) > args.focus_disagree) or edge \
-                        or (args.focus_ramp and near_ramp) or cw_near
+                        or (args.focus_ramp and near_ramp) or cw_near or bk_near
                     keep = keep and (focus or standing or rng.random() < args.focus_yield)
                 if args.ramp_early_drop and early and keep:
                     keep = False
@@ -451,6 +473,9 @@ def worker(wid, args, quota, out_dir, counter):
                     stats["scene"] += int(in_scene)
                     stats["crosswalk_near"] += int(cw_near)
                     stats["crosswalk"] += int(plan["reason"] == "crosswalk")
+                    stats["bicycle"] += int(plan["reason"] == "bicycle")
+                    stats["bicycle_near"] += int(bk_near if args.focus_bicycle > 0 else
+                                                 env.world.bikes is not None and bicycle_near(env, plan, BK_FOCUS_AHEAD))
                     if edge:
                         stats["lead_edge"] += 1
                         stats["lead_edge_vehicle"] += int(plan["reason"] == "vehicle")
@@ -518,6 +543,10 @@ def report(out_dir):
     if tot.get("crosswalk") or tot.get("crosswalk_near"):
         print(f"crosswalks: {tot['crosswalk']} frames ({tot['crosswalk'] / fr:.1%}) where the expert gives way at a zebra, "
               f"{tot['crosswalk_near']} ({tot['crosswalk_near'] / fr:.1%}) by a zebra with people in the way (--focus_crosswalk)")
+    if tot.get("bicycle") or tot.get("bicycle_near"):
+        print(f"bicycles: {tot['bicycle']} frames ({tot['bicycle'] / fr:.1%}) with the expert's reason bicycle, "
+              f"{tot['bicycle_near']} ({tot['bicycle_near'] / fr:.1%}) with a rider about (bicycle_near: the reason, or "
+              f"one riding along within --focus_bicycle m, {BK_FOCUS_AHEAD:g} m without it)")
     return tot
 
 
@@ -578,6 +607,12 @@ def parse_args(argv=None):
                          "to the ego's stretch of it within CW_FOCUS_REACH s (crosswalk_near)")
     ap.add_argument("--bicycles", type=float, default=0.0,
                     help="bicycles per km of road (TrafficConfig.bicycles; 0: none)")
+    ap.add_argument("--bike_visible", type=int, default=0, choices=[0, 1],
+                    help="the expert's 巻き込み確認 and give-way counts only the riders the camera sees, and riders "
+                         "coming unseen from behind do not move its path (EnvConfig.expert_bike_visible)")
+    ap.add_argument("--focus_bicycle", type=float, default=0.0,
+                    help="with --focus_yield < 1, frames are also in focus where the expert's reason is bicycle or a "
+                         "rider the camera sees rides along the route within this many m ahead (bicycle_near)")
     ap.add_argument("--renderer", default="keisim", choices=["keisim", "keiview"], help="camera renderer")
     ap.add_argument("--keiview_roads", default="plain", choices=["plain", "detail"],
                     help="KeiView road surface: plain (every KeiView dataset so far) or detail (markings, signs, ...)")
@@ -637,6 +672,8 @@ def main():
                **({"crosswalk_spawn": args.crosswalk_spawn} if args.crosswalk_spawn is not None else {}),
                **({"focus_crosswalk": args.focus_crosswalk} if args.focus_crosswalk > 0 else {}),
                **({"bicycles": args.bicycles} if args.bicycles > 0 else {}),
+               **({"bike_visible": 1} if args.bike_visible else {}),
+               **({"focus_bicycle": args.focus_bicycle} if args.focus_bicycle > 0 else {}),
                **({"freeze_reasons": args.freeze_reasons} if args.freeze_takeover > 0 else {}),
                **({"stand_pert": args.stand_pert, "stand_hold": args.stand_hold} if args.stand_pert > 0 else {}),
                **({"via_ramp": args.via_ramp} if args.via_ramp > 0 else {}),
