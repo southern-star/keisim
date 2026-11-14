@@ -1970,3 +1970,49 @@ def test_expert_bike_visible():
         assert (rear > 1.0) == on
         fast = rule(-6.0, v_bike=4.0)[1]               # coming up from behind
         assert fast["along"][0] != on and fast["behind_unseen"][0] == on
+
+
+def test_expert_bike_sweep():
+    """EnvConfig.expert_bike_sweep (off by default): a car pointing off its path (as coming out of a turn) has its
+    front corner out of the path's band; with the option the room beside a rider ahead counts it. A rider standing
+    a little more than BIKE_MIN clear of the path's band (with the room the ego has to move over): the expert keeps going towards it with the car turned 15 deg its way unless the
+    option is on; pointing along the path, both keep going."""
+    import math
+    from keisim.config import set_camera_rig
+    from keisim.expert import PATH_S
+    assert EnvConfig().expert_bike_sweep is False
+    env = _bike_env(10.0, "twophase")
+    set_camera_rig(env.cfg, "wide_narrow")
+    env.reset(town_seed=1014, episode_seed=9201, route_length=600.0, render=False)
+    w, ex, route = env.world, env.expert, env.route
+    bk, ego = w.bikes, w.ego
+    s = route.s_start + 40.0
+    while any(j["s_in"] - 30.0 < s < j["s_out"] + 30.0 for j in route.junctions):
+        s += 10.0
+    p, h = route.poly.interp(s), float(route.poly.heading(s))
+    left = np.array([-math.sin(h), math.cos(h)])
+    from keisim.bicycles import BIKE_R
+    from keisim.traffic import BIKE_MIN
+    bk.xy[:] = 1e6
+    bk.yaw[0], bk.v[0] = h, 0.0
+    ego.x, ego.y, ego.yaw, ego.v = float(p[0]), float(p[1]), h, 3.0
+
+    def place(clear):                  # the rider `clear` m beyond the path's band (half width + its radius)
+        bk.xy[0] = route.poly.interp(s + 7.0) + (ego.WIDTH / 2 + BIKE_R + clear) * left
+    place(1.0)
+    room = float(ex.bike_scan(route, s, ego.pose, 3.0)["room"][0])
+    # between the margin without the corner (BIKE_MIN - room) and with it (+ half length x sin 15 deg = 0.58 m)
+    place(BIKE_MIN - room + 0.25)
+
+    def target(turned, on):
+        env.cfg.expert_bike_sweep = on
+        yaw = h + (math.radians(15.0) if turned else 0.0)
+        ego.x, ego.y, ego.yaw, ego.v = float(p[0]), float(p[1]), yaw, 3.0
+        pose = (ego.x, ego.y, yaw)
+        scan = ex.bike_scan(route, s, pose, 3.0)
+        pts = route.poly.interp(np.minimum(s + np.asarray(PATH_S), route.poly.length))
+        return ex.bike_rules(route, s, 3.0, scan, pts, np.asarray(PATH_S, float), False)
+
+    assert target(False, False) > 3.0 and target(False, True) > 3.0
+    assert target(True, False) > 3.0
+    assert target(True, True) < 2.0

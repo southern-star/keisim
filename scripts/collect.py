@@ -212,7 +212,8 @@ BK_FOCUS_BEHIND = 3.0         # --focus_bicycle: m a rider riding along may be b
 def bicycle_near(env, plan, ahead):
     """--focus_bicycle: the expert's reason is "bicycle" (following one, passing one slowly, the 巻き込み確認 before a
     left turn), or a rider rides along the route (Expert.bike_scan) from BK_FOCUS_BEHIND m behind the ego's rear to
-    `ahead` m ahead of its front, one the camera sees (expert_bike_visible: the riders the expert's rules count)."""
+    `ahead` m ahead of its front: with expert_bike_visible one the camera sees (the riders the expert's rules count),
+    without it any rider."""
     if plan["reason"] == "bicycle":
         return True
     bk = env.world.bikes
@@ -330,6 +331,7 @@ def worker(wid, args, quota, out_dir, counter):
     cfg.keiview_roads = args.keiview_roads
     cfg.expert_yield_visible = bool(args.yield_visible)
     cfg.expert_bike_visible = bool(args.bike_visible)
+    cfg.expert_bike_sweep = bool(args.bike_sweep)
     if args.ego_cross_rate is not None:
         cfg.traffic.ego_cross_rate = args.ego_cross_rate
     if args.ped_spacing is not None:
@@ -337,7 +339,8 @@ def worker(wid, args, quota, out_dir, counter):
     if args.vehicle_spacing is not None:
         cfg.traffic.vehicle_spacing = tuple(args.vehicle_spacing)
     cfg.traffic.ego_patience_s = args.ego_patience
-    cfg.traffic.light_past_line = bool(args.npc_past_line)
+    cfg.traffic.light_past_line = args.npc_past_line >= 1
+    cfg.traffic.past_line_light_only = args.npc_past_line >= 2
     cfg.traffic.crosswalks = args.crosswalks
     if args.crosswalk_spawn is not None:
         cfg.traffic.crosswalk_spawn = args.crosswalk_spawn
@@ -593,9 +596,9 @@ def parse_args(argv=None):
     ap.add_argument("--ego_patience", type=float, default=0.0,
                     help="s the ego may stand before the NPCs that give way to it stop waiting for it "
                          "(TrafficConfig.ego_patience_s; 0: they wait for ever)")
-    ap.add_argument("--npc_past_line", type=int, default=0, choices=[0, 1],
+    ap.add_argument("--npc_past_line", type=int, default=0, choices=[0, 1, 2],
                     help="1: NPCs standing a little past their stop line still obey its light "
-                         "(TrafficConfig.light_past_line)")
+                         "(TrafficConfig.light_past_line); 2: and only its light (past_line_light_only)")
     ap.add_argument("--crosswalks", type=float, default=0.0,
                     help="crosswalks at signals (TrafficConfig.crosswalks): the chance that a person at a two-phase "
                          "signal's road end crosses on the zebra with the pedestrian light; turning cars give way")
@@ -610,9 +613,13 @@ def parse_args(argv=None):
     ap.add_argument("--bike_visible", type=int, default=0, choices=[0, 1],
                     help="the expert's 巻き込み確認 and give-way counts only the riders the camera sees, and riders "
                          "coming unseen from behind do not move its path (EnvConfig.expert_bike_visible)")
+    ap.add_argument("--bike_sweep", type=int, default=0, choices=[0, 1],
+                    help="the expert's room beside a rider ahead counts its front corner off the path when it points "
+                         "off it (EnvConfig.expert_bike_sweep)")
     ap.add_argument("--focus_bicycle", type=float, default=0.0,
                     help="with --focus_yield < 1, frames are also in focus where the expert's reason is bicycle or a "
-                         "rider the camera sees rides along the route within this many m ahead (bicycle_near)")
+                         "rider rides along the route within this many m ahead (bicycle_near): with --bike_visible 1 "
+                         "only the riders the camera sees, without it every rider")
     ap.add_argument("--renderer", default="keisim", choices=["keisim", "keiview"], help="camera renderer")
     ap.add_argument("--keiview_roads", default="plain", choices=["plain", "detail"],
                     help="KeiView road surface: plain (every KeiView dataset so far) or detail (markings, signs, ...)")
@@ -667,12 +674,13 @@ def main():
                **({"keiview_roads": args.keiview_roads} if args.keiview_roads != "plain" else {}),
                **({"yield_visible": 1} if args.yield_visible else {}),
                **({"ego_patience": args.ego_patience} if args.ego_patience else {}),
-               **({"npc_past_line": 1} if args.npc_past_line else {}),
+               **({"npc_past_line": args.npc_past_line} if args.npc_past_line else {}),
                **({"crosswalks": args.crosswalks} if args.crosswalks > 0 else {}),
                **({"crosswalk_spawn": args.crosswalk_spawn} if args.crosswalk_spawn is not None else {}),
                **({"focus_crosswalk": args.focus_crosswalk} if args.focus_crosswalk > 0 else {}),
                **({"bicycles": args.bicycles} if args.bicycles > 0 else {}),
                **({"bike_visible": 1} if args.bike_visible else {}),
+               **({"bike_sweep": 1} if args.bike_sweep else {}),
                **({"focus_bicycle": args.focus_bicycle} if args.focus_bicycle > 0 else {}),
                **({"freeze_reasons": args.freeze_reasons} if args.freeze_takeover > 0 else {}),
                **({"stand_pert": args.stand_pert, "stand_hold": args.stand_hold} if args.stand_pert > 0 else {}),

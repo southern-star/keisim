@@ -820,12 +820,11 @@ class Town:
                     continue
                 A = self.lanes[arm_in["ins"][0]]
                 straight = left = None
-                for arm_out in J.arms:
-                    if arm_out is arm_in or not arm_out["outs"]:
-                        continue
-                    dh = float(wrap(self.lanes[arm_out["outs"][0]].heading[0] - A.heading[-1]))
+                outs = [o for o in J.arms if o is not arm_in and o["outs"]]
+                dhs = [float(wrap(self.lanes[o["outs"][0]].heading[0] - A.heading[-1])) for o in outs]
+                for arm_out, dh, turn in zip(outs, dhs, turn_labels(dhs, self.cfg.turn_rule)):   # as the connectors
                     kerb = dh if self.cfg.left_hand_traffic else -dh
-                    if abs(dh) <= 0.5:
+                    if turn == "straight":
                         straight = arm_out
                     elif math.radians(60) <= kerb <= math.radians(120):
                         left = arm_out

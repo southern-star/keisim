@@ -162,6 +162,11 @@ class TrafficConfig:
     # braking for the box rule) counted as past the line and drove into the junction at red (grid long3d_dense
     # 1018/9500: into the ego setting off at its green). Off by default: the old evaluations stay reproducible.
     light_past_line: bool = False
+    # With light_past_line: such a car obeys only its light, not the box rule nor the exit check (it is already past
+    # the line), and the expert's give-way (Traffic.min_arrival) counts it as stopping at a red / yellow light, as it
+    # does. With light_past_line alone it held for the ego standing in the junction to turn right while the ego waited
+    # for it (twophase 1019/9800 with crosswalks: for good). Off: light_past_line as before (round 10's data).
+    past_line_light_only: bool = False
     # Crosswalks at signals (Town.ped_crossings: the zebras at the ends of the roads of two-phase signalised junctions).
     # crosswalks: the chance that a person walking up to such an end crosses there: they wait at the kerb for the
     # pedestrian green (the green of the cars crossing that road's flow, minus ped_flash s of flashing) and walk over
@@ -312,6 +317,12 @@ class EnvConfig:
     # (Expert.bike_scan). Riders the ego is passing (slower than it: it saw them ahead) keep their room, and the
     # corridor rules ahead (follow, pass slowly) keep every rider, as for the cars. Off: every rider counts.
     expert_bike_visible: bool = False
+    # Bicycles: the expert's room beside a rider ahead (Expert.bike_rules) counts how far its front corner sticks out
+    # of the path when the car points off it (half its length x sin(heading - path heading), e.g. coming out of a
+    # turn before it has turned all the way), as the path alone did not: coming out of a right turn the front left
+    # corner hit a rider standing at the start of the exit road with 0.53 m beside the path (bigjunction 3004/9801).
+    # Off: as before (the bicycle evaluations of PR #35).
+    expert_bike_sweep: bool = False
 
     @property
     def cameras(self):

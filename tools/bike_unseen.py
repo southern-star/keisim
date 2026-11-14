@@ -6,6 +6,10 @@ changes are labels that follow an unseen rider. Counted per part: the 巻き込�
 (follow / pass slowly / crossing riders), and the path's move-over.
 
     uv run python tools/bike_unseen.py --style twophase --towns 1010 1020 --episodes 9400 9401 --steps 3000
+
+--off: the expert as before (expert_bike_visible off) instead, counting the steps where its 巻き込み確認 makes it
+stop (or slow down) for riders: only for riders its first camera does not see (the labels --bike_visible changes: it
+would turn into them), and for riders it sees (the 巻き込み scenes the bicycle data keeps).
 """
 import argparse
 import math
@@ -19,7 +23,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 
 def run(job):
-    style, town, ep, steps, cw = job
+    style, town, ep, steps, cw, off = job
+    if off:
+        return run_off(job)
     from keisim.config import EnvConfig, set_camera_rig, town_config
     from keisim.env import KeiEnv
     from keisim.expert import PATH_S
@@ -90,6 +96,56 @@ def run(job):
     return c
 
 
+def run_off(job):
+    """--off: bike_rules with every rider seen, none seen and the camera's riders seen; the 巻き込み確認 (the only
+    part of bike_rules that reads bikes["visible"]) binds where the first two differ."""
+    style, town, ep, steps, cw, _ = job
+    from keisim.config import EnvConfig, set_camera_rig, town_config
+    from keisim.env import KeiEnv
+    from keisim.expert import PATH_S
+    cfg = set_camera_rig(EnvConfig(), "wide_narrow")
+    cfg.town = town_config(style)
+    cfg.traffic.box_rule = cfg.traffic.release_hidden = True
+    cfg.traffic.bicycles, cfg.traffic.crosswalks = 8.0, cw
+    cfg.traffic.max_vehicles *= 2
+    cfg.traffic.max_peds *= 2
+    cfg.render_rgb = cfg.render_seg = False
+    env = KeiEnv(cfg)
+    env.reset(town_seed=town, episode_seed=ep, route_length=2500.0, render=False)
+    ex, w = env.expert, env.world
+    c = {"steps": 0, "left_check": 0, "left_check_label": 0, "left_unseen_only": 0, "left_unseen_only_label": 0,
+         "left_seen": 0, "left_seen_label": 0}
+    done, n = False, 0
+    cum = np.asarray(PATH_S, float)
+    while not done and n < steps:
+        n += 1
+        c["steps"] += 1
+        bk, scan = w.bikes, ex.last_bikes
+        if bk is not None and bk.n and scan is not None and len(scan["along"]) == bk.n and scan["along"].any():
+            route, s, pose, v = env.route, env.s_ego, w.ego.pose, w.ego.v
+            p = ex.path_local(route, s, pose, scan)
+            cc, sn = math.cos(pose[2]), math.sin(pose[2])
+            p = np.stack([pose[0] + cc * p[:, 0] - sn * p[:, 1], pose[1] + sn * p[:, 0] + cc * p[:, 1]], -1)
+            wait = ex._bk_wait
+
+            def rule(vis):
+                t = ex.bike_rules(route, s, v, {**scan, "visible": vis}, p, cum, False)
+                ex._bk_wait = wait
+                return min(t, 30.0)
+            t_all, t_none = rule(np.ones(bk.n, bool)), rule(np.zeros(bk.n, bool))
+            if t_all < t_none - 0.3:
+                t_seen = rule(ex.bikes_seen(pose))
+                label = t_all <= env.plan["target_speed"] + 0.05       # the 巻き込み確認 sets the label
+                c["left_check"] += 1
+                c["left_check_label"] += int(label)
+                key = "left_seen" if t_seen < t_none - 0.3 else "left_unseen_only"
+                c[key] += 1
+                c[key + "_label"] += int(label)
+        _, _, done, _ = env.step(env.expert_action())
+    c["status"] = env.status
+    return c
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--style", default="twophase")
@@ -98,13 +154,14 @@ def main():
     ap.add_argument("--steps", type=int, default=3000)
     ap.add_argument("--crosswalks", type=float, default=0.0)
     ap.add_argument("--workers", type=int, default=4)
+    ap.add_argument("--off", action="store_true", help="the expert as before (expert_bike_visible off): see above")
     a = ap.parse_args()
-    jobs = [(a.style, t, e, a.steps, a.crosswalks) for t in range(*a.towns) for e in a.episodes]
+    jobs = [(a.style, t, e, a.steps, a.crosswalks, a.off) for t in range(*a.towns) for e in a.episodes]
     with ProcessPoolExecutor(a.workers) as ex:
         res = list(ex.map(run, jobs))
     tot = {k: sum(r[k] for r in res) for k in res[0] if k != "status"}
     st = max(tot["steps"], 1)
-    print(f"{a.style}: {len(jobs)} episodes, {tot['steps']} steps; statuses {[r['status'] for r in res]}")
+    print(f"{a.style}{' (--off)' if a.off else ''}: {len(jobs)} episodes, {tot['steps']} steps; statuses {[r['status'] for r in res]}")
     for k, v in tot.items():
         print(f"  {k:16s} {v:6d}  ({v / st:.2%} of the steps)")
 
