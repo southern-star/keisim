@@ -132,13 +132,16 @@ def main():
                     help="weight of the auxiliary yield head (earliest oncoming arrival at right turns); 0: off")
     ap.add_argument("--dir_weight", nargs="*", default=[], metavar="DIR=W",
                     help="extra sampling weight for every frame from a data directory, e.g. data/dir_expert=3")
+    ap.add_argument("--mmap", action="store_true",
+                    help="leave the shards' image bytes on disk (np.memmap) instead of reading them all into memory; "
+                         "same frames and batches, the page cache holds what fits")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
     torch.manual_seed(args.seed)
     torch.backends.cudnn.benchmark = True
     device = "cuda"
 
-    data, files = load_shards(args.data, with_prev=bool(args.history))      # earlier frames only for history models
+    data, files = load_shards(args.data, with_prev=bool(args.history), mmap=args.mmap)   # earlier frames: history models
     # the camera rig of the data (collect.py --rig, meta.json); a rig model takes all of its cameras
     rigs = set()
     for d_ in args.data:
