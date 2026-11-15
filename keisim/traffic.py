@@ -7,8 +7,8 @@ import numpy as np
 
 from .config import TL_GREEN, TL_RED, TL_YELLOW, TrafficConfig
 from .geometry import box_corners, curvature_of, rays_clear, wrap
-from .parked import (PARKED_OWNER, PK_ACC, PK_CLEAR, PK_DECIDE, PK_IN, PK_KEEP, PK_MARGIN, PK_ONCOMING_T, PK_OUT,
-                     PK_PASS_V, PK_RATE, PK_SWING_V, PK_WAIT, PK_YIELD_B, PK_YIELD_D, PK_ZONE)
+from .parked import (PARKED_OWNER, PK_ACC, PK_CLEAR, PK_DECIDE, PK_EXIT, PK_IN, PK_KEEP, PK_MARGIN, PK_ONCOMING_T,
+                     PK_OUT, PK_PASS_V, PK_RATE, PK_SWING_V, PK_WAIT, PK_YIELD_B, PK_YIELD_D, PK_ZONE)
 from .roadnet import PED_FLASH, PED_GREEN
 from .route import (LC_CHECK, LC_PUSH, LC_PUSH_TO, LC_START_MARGIN, blend_weight, change_room, change_window,
                     lane_moves, link_map, pick_move)
@@ -1302,8 +1302,8 @@ class Traffic:
         it: lane_cars) may be on the passing stretch (PK_ZONE round the group, on that lane), and everyone coming
         must be able to stop short of it (PK_YIELD_B, PK_YIELD_D: they give way to a car out there) or get there only
         after t_me + PK_ONCOMING_T; and
-        (s_me: the passing car's position on `lane`) nobody may be ahead of it in its lane up to PK_OUT and a car's
-        length past the group."""
+        (s_me: the passing car's position on `lane`) nobody may be ahead of it in its lane up to PK_OUT + PK_EXIT past
+        the group."""
         O = G["opp"]
         if O < 0:
             return True
@@ -1327,7 +1327,7 @@ class Traffic:
         # one at a time, and room to pull back in: nobody in the lane between the car (at s_me) and PK_OUT + a car's
         # length past the group (no convoys over the centre line: when the first stops, the rest are stuck there)
         if s_me is not None:
-            end = G["s_hi"] + PK_OUT[1] + 6.0
+            end = G["s_hi"] + PK_OUT[1] + PK_EXIT
             for so, vo, ln in self.lane_cars(lane.id, by_lane, exclude=exclude, ego=ego):
                 if so > s_me and so - ln / 2 < end:
                     return False

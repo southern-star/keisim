@@ -26,8 +26,10 @@ from .geometry import box_corners, rays_clear
 PK_EDGE = (0.2, 0.45)       # m: from the road surface's edge to the parked car's kerb side
 PK_FROM = (30.0, 30.0)      # m: no parked car this close to its lane's start (a car waiting behind it leaves room to
                             # come out of the junction) / end (junctions, zebras, stop lines) ...
-PK_FROM_JUNCTION = 60.0     # m: ... or to a junction of 3+ arms (bends: PK_FROM): the queues at it would stand beside
-                            # the parked car (in the oncoming lane at the lane's start, behind it at its end)
+PK_FROM_JUNCTION = 60.0     # m: ... and this close to a junction of 3+ arms (through bends): the queues at it would
+                            # stand beside the parked car (in the oncoming lane before it, behind it after it)
+PK_EXIT = 20.0              # m: a car passes parked cars only with nobody in its lane up to PK_OUT + this past them
+                            # (it would stand in the oncoming lane, unable to pull back in)
 PK_CURVE = 1.0 / 60.0       # 1/m: no parked car where the lane bends more than this, within PK_CURVE_REACH of it
 PK_CURVE_REACH = 15.0
 PK_SPACING = 30.0           # m: between two parked cars on one kerb (bumper to bumper), but for rows
@@ -92,11 +94,34 @@ def parked_lanes(town):
     return out
 
 
+def _to_junction(town, lane, ahead, limit=PK_FROM_JUNCTION):
+    """Metres from `lane`'s end (ahead) or start (behind) to the next junction of 3+ arms that way, through bends
+    (a bend does not stop a queue); `limit` or more: limit."""
+    J, lanes = town.junctions, town.lanes
+    d, L = 0.0, lane
+    for _ in range(8):
+        jn = J[L.end_junction if ahead else L.start_junction]
+        if len(jn.arms) != 2:
+            return d if len(jn.arms) >= 3 else limit
+        nxt = L.succ if ahead else L.pred                  # the bend's connector, then the lane beyond it
+        if len(nxt) != 1:
+            return d
+        C = lanes[nxt[0]]
+        nn = C.succ if ahead else C.pred
+        if len(nn) != 1:
+            return d
+        L = lanes[nn[0]]
+        d += C.length + L.length
+        if d >= limit:
+            return limit
+    return d
+
+
 def parked_span(town, lane):
-    """(from, to): where on `lane` parked cars may stand (PK_FROM, PK_FROM_JUNCTION from its ends)."""
-    J = town.junctions
-    a = PK_FROM_JUNCTION if len(J[lane.start_junction].arms) >= 3 else PK_FROM[0]
-    b = PK_FROM_JUNCTION if len(J[lane.end_junction].arms) >= 3 else PK_FROM[1]
+    """(from, to): where on `lane` parked cars may stand: PK_FROM from its ends, and PK_FROM_JUNCTION from the
+    nearest junction of 3+ arms each way (through bends)."""
+    a = max(PK_FROM[0], PK_FROM_JUNCTION - _to_junction(town, lane, False))
+    b = max(PK_FROM[1], PK_FROM_JUNCTION - _to_junction(town, lane, True))
     return a, lane.length - b
 
 
