@@ -65,6 +65,9 @@ PK_SLOW_B = 1.6             # m/s^2: ... slowing down to it
 PK_SWING_V = 3.0            # m/s: a car that has not moved out far enough yet comes up to the parked car no faster
 PK_RATE = 1.2               # m/s sideways at most (and 0.5 of the speed: a car turns out round a parked car more
 PK_ACC = 2.0                # sharply than it moves over for a bicycle), m/s^2 sideways
+PK_BACK = 0.25              # m sideways per metre driven: back into the lane past it (0.25 of the speed)
+PK_GIVE_ROOM = 6.0          # m: an oncoming car giving way to a car out round parked cars stops this far short of
+                            # the passing stretch (room for it to pull back in)
 PARKED_OWNER = 2_000_000    # owner ids of their circles (corridor_gaps): this + the parked car's index
 DART_TRIGGER = (10.0, 16.0)  # m: a hidden child runs out when the ego's front bumper is this far before their line
 DART_SPEED = (2.2, 3.0)     # m/s: running

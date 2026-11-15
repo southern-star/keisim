@@ -7,8 +7,9 @@ import numpy as np
 
 from .config import TL_GREEN, TL_RED, TL_YELLOW, TrafficConfig
 from .geometry import box_corners, curvature_of, rays_clear, wrap
-from .parked import (PARKED_OWNER, PK_ACC, PK_CLEAR, PK_DECIDE, PK_EXIT, PK_IN, PK_KEEP, PK_MARGIN, PK_ONCOMING_T,
-                     PK_OUT, PK_PASS_V, PK_RATE, PK_SWING_V, PK_WAIT, PK_YIELD_B, PK_YIELD_D, PK_ZONE)
+from .parked import (PARKED_OWNER, PK_ACC, PK_BACK, PK_CLEAR, PK_DECIDE, PK_EXIT, PK_GIVE_ROOM, PK_IN, PK_KEEP,
+                     PK_MARGIN, PK_ONCOMING_T, PK_OUT, PK_PASS_V, PK_RATE, PK_SWING_V, PK_WAIT, PK_YIELD_B, PK_YIELD_D,
+                     PK_ZONE)
 from .roadnet import PED_FLASH, PED_GREEN
 from .route import (LC_CHECK, LC_PUSH, LC_PUSH_TO, LC_START_MARGIN, blend_weight, change_room, change_window,
                     lane_moves, link_map, pick_move)
@@ -1207,7 +1208,7 @@ class Traffic:
         acc = BIKE_ACC
         if swing is not None and swing.any():
             rate = np.where(swing, np.minimum(PK_RATE, 0.5 * np.maximum(self.v - 0.3, 0.0)), rate)
-            back = np.where(swing, np.minimum(PK_RATE, 0.25 * self.v), back)
+            back = np.where(swing, np.minimum(PK_RATE, PK_BACK * self.v), back)
             acc = np.where(swing, PK_ACC, BIKE_ACC)
         v_t = np.clip((target - self.shift) * 1.6, -back, rate)
         self.shift_tgt = target
@@ -1293,7 +1294,7 @@ class Traffic:
                     lo = pk.groups[g]["opp_zone"][0]
                     d = lo - (float(self.s[i]) + hl[i])
                     if 0.0 < d < 40.0:
-                        stop_gap[i] = min(stop_gap[i], d - 1.0)
+                        stop_gap[i] = min(stop_gap[i], d - PK_GIVE_ROOM)
         return target, swing, vmax
 
     def parked_oncoming_clear(self, lane, G, t_me, by_lane=None, exclude=None, ego=None, s_me=None):
@@ -1454,7 +1455,8 @@ class Traffic:
                 ahead, behind = s_lo - (sp + hl_i), (sp - hl_i) - s_hi
                 f = np.where(ahead > 0.0, (PK_IN[0] - ahead) / (PK_IN[0] - PK_IN[1]),
                              np.where(behind > 0.0, (PK_OUT[1] - behind) / (PK_OUT[1] - PK_OUT[0]), 1.0))
-                o[i] = np.maximum(need * np.clip(f, 0.0, 1.0), left[i])
+                back_i = np.maximum(sh[i, 0] - PK_BACK * d[i], 0.0)       # (it steers back faster than for a bike)
+                o[i] = np.maximum(need * np.clip(f, 0.0, 1.0), back_i)
         dp = np.gradient(paths, axis=1)
         ln = np.hypot(dp[..., 0], dp[..., 1])
         ok = ln > 1e-6

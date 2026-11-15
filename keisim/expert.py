@@ -14,8 +14,8 @@ import numpy as np
 from .config import TL_GREEN, TL_NONE, TL_RED, TL_YELLOW
 from .bicycles import BIKE_LEN, BIKE_R, NCB
 from .geometry import world_to_local, wrap
-from .parked import (PARKED_OWNER, PK_CLEAR, PK_DECIDE, PK_GAP0, PK_IN, PK_KEEP, PK_MARGIN, PK_OUT, PK_PASS_V,
-                     PK_SLOW_AT, PK_SLOW_B, PK_WAIT, PK_ZONE)
+from .parked import (PARKED_OWNER, PK_CLEAR, PK_DECIDE, PK_GAP0, PK_GIVE_ROOM, PK_IN, PK_KEEP, PK_MARGIN, PK_OUT,
+                     PK_PASS_V, PK_SLOW_AT, PK_SLOW_B, PK_WAIT, PK_ZONE)
 from .route import LC_CHECK, LC_PUSH, LC_PUSH_TO, change_room, link_map
 from .traffic import (BIKE_END, BIKE_FREE, BIKE_IN, BIKE_KEEP, BIKE_LEFT, BIKE_LEFT_WAIT, BIKE_MIN, BIKE_OUT,
                       BIKE_PASS_DV, BIKE_PASS_V, CW_MARGIN, CW_REACH, PASS_SPEED, YIELD_GAP, Traffic, corridor_gaps,
@@ -342,7 +342,7 @@ class Expert:
                     if g in active:
                         d = float(route.offsets[k] - route.s0[k]) + pk.groups[g]["opp_zone"][0] - (s + hl)
                         if 0.0 < d < 40.0:
-                            target = min(target, stop_profile(d - 1.0, self.B_COMF))
+                            target = min(target, stop_profile(d - PK_GIVE_ROOM, self.B_COMF))
         for o in parked:
             if o["behind"] > 1.0:
                 continue
