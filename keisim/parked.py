@@ -45,7 +45,7 @@ PK_CLEAR = 0.5              # m: a car passing a parked car leaves this much roo
 PK_PASSABLE = 0.3           # m: a parked car stands only where a wide car (half width PK_WIDE_HW) passes it with this
 PK_WIDE_HW = 0.95
 PK_MARGIN = 0.15            # m: the corridor's margin to parked cars (corridor_gaps): passing them, cars come closer
-PK_BIKE_CLEAR = 0.4         # m: a bicycle moves out round a parked car (keisim/bicycles.py) with this much room beside it
+PK_BIKE_CLEAR = 0.4         # m: a bicycle moves out round a parked car (keisim/bicycles.py) with this much room
 PK_KEEP = 0.15              # m: ... and keeps this far inside its own lane when that is enough (no oncoming check)
 PK_IN = (16.0, 5.0)         # m before the parked car's rear: the move out begins / is complete
 PK_OUT = (1.0, 8.0)         # m past its front bumper: the move back begins / is complete
@@ -119,8 +119,10 @@ def _to_junction(town, lane, ahead, limit=PK_FROM_JUNCTION):
 
 def parked_span(town, lane):
     """(from, to): where on `lane` parked cars may stand: PK_FROM from its ends, and PK_FROM_JUNCTION from the
-    nearest junction of 3+ arms each way (through bends)."""
-    a = max(PK_FROM[0], PK_FROM_JUNCTION - _to_junction(town, lane, False))
+    nearest junction of 3+ arms each way (through bends); behind, from the start of the passing stretch (PK_ZONE):
+    the queue in the oncoming lane at that junction would stand on it, the cars waiting to pass would queue back
+    into the junction, and the two lock it up."""
+    a = max(PK_FROM[0], PK_FROM_JUNCTION + PK_ZONE[0] - _to_junction(town, lane, False, PK_FROM_JUNCTION + PK_ZONE[0]))
     b = max(PK_FROM[1], PK_FROM_JUNCTION - _to_junction(town, lane, True))
     return a, lane.length - b
 
