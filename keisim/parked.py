@@ -32,7 +32,8 @@ PK_EXIT = 20.0              # m: a car passes parked cars only with nobody in it
                             # (it would stand in the oncoming lane, unable to pull back in)
 PK_CURVE = 1.0 / 60.0       # 1/m: no parked car where the lane bends more than this, within PK_CURVE_REACH of it
 PK_CURVE_REACH = 15.0
-PK_SPACING = 30.0           # m: between two parked cars on one kerb (bumper to bumper), but for rows
+PK_SPACING = 45.0           # m: between two parked cars on one kerb (bumper to bumper), but for rows: a car that has
+                            # passed one pulls back in (PK_OUT) and has room to wait (PK_WAIT) before the next one
 PK_ROW = 0.3                # the chance that a parked car has another one right behind it (PK_ROW_GAP apart)
 PK_ROW_GAP = (0.8, 2.5)
 PK_GROUP_GAP = 6.0          # m: parked cars of one kerb closer than this (bumper to bumper) are passed in one go
