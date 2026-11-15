@@ -183,6 +183,16 @@ class TrafficConfig:
     # to here; no random draw is made for them, so the old episodes stay as they were). max_bikes caps the number.
     bicycles: float = 0.0
     max_bikes: int = 40
+    # Parked cars (keisim/parked.py, 路上駐車): parked cars per km of kerb on two-way roads with one lane each way
+    # (not main roads), away from junctions, curves and the other side's parked cars. Cars and the expert move out
+    # round them, over the centre line only when the oncoming lane is clear (else they wait behind). 0: none (no
+    # random draw is made for them, so the old episodes stay as they were). max_parked caps the number.
+    parked: float = 0.0
+    max_parked: int = 60
+    # 飛び出し: the chance that a parked car the ego's route passes (on a road with walkways on both sides) hides a
+    # child in front of it, who runs out across the road when the ego comes near (parked.DART_TRIGGER). The expert
+    # sees them only once the parked car no longer hides them.
+    dart_out: float = 0.0
 
 
 @dataclass

@@ -74,6 +74,10 @@ SUITES = {
     "crosswalks_bk8": [(t, 9800 + e) for t in range(1010, 1020) for e in range(2)],
     "crosswalks_sub_bk8": [(t, 9850 + e) for t in range(2000, 2010) for e in range(2)],
     "bigjunction_bk8": [(t, 9800 + e) for t in range(3000, 3010) for e in range(2)],
+    # parked cars (TrafficConfig.parked, 8 per km of kerb: 路上駐車) and children running out from in front of them
+    # (dart_out 0.6: 飛び出し), in the road-types towns (residential roads and alleys), long3's town seeds with
+    # episodes no other suite uses; 2.5 km routes
+    "parked": [(t, 9950 + e) for t in range(1010, 1020) for e in range(2)],
 }
 CAP_SCALE = {"classic": 1, "varied": 2, "twophase": 2, "roadtypes": 2, "suburban": 2, "ramps": 2, "bigjunction": 2}      # NPC count caps per town style
 # per-suite defaults for arguments left unset on the command line
@@ -97,6 +101,7 @@ SUITE_DEFAULTS["long3e"] = SUITE_DEFAULTS["long3f"] = SUITE_DEFAULTS["long3"]
 SUITE_DEFAULTS["crosswalks"] = {**SUITE_DEFAULTS["long3"], "crosswalks": 0.7}
 SUITE_DEFAULTS["crosswalks_sub"] = {**SUITE_DEFAULTS["long3"], "town_style": "suburban", "crosswalks": 0.7}
 SUITE_DEFAULTS["bigjunction"] = {**SUITE_DEFAULTS["long3"], "town_style": "bigjunction", "crosswalks": 0.7}
+SUITE_DEFAULTS["parked"] = {**SUITE_DEFAULTS["long3"], "town_style": "roadtypes", "parked": 8.0, "dart_out": 0.6}
 for _k in ("crosswalks", "crosswalks_sub", "bigjunction"):
     SUITE_DEFAULTS[f"{_k}_bk8"] = {**SUITE_DEFAULTS[_k], "bicycles": 8.0, "bike_visible": 1, "npc_past_line": 2,
                                      "bike_sweep": 1}
@@ -137,6 +142,8 @@ def run_route(job):
     cfg.traffic.past_line_light_only = int(args.get("npc_past_line", 0)) >= 2
     cfg.traffic.crosswalks = float(args.get("crosswalks", 0.0))
     cfg.traffic.bicycles = float(args.get("bicycles", 0.0))
+    cfg.traffic.parked = float(args.get("parked", 0.0))
+    cfg.traffic.dart_out = float(args.get("dart_out", 0.0))
     if args.get("dense"):
         cfg.traffic.vehicle_spacing = (20.0, 28.0)
         cfg.traffic.ped_spacing = (14.0, 20.0)
@@ -237,6 +244,13 @@ def run_route(job):
                                if env.world.town.lanes[j["lane"]].kind == "ramp" and j["s_out"] < env.s_ego))})
     if env.world.peds.cw_on:      # crosswalks at signals: s the expert's plan gave way at a zebra (whoever drove)
         m["crosswalk_yield_s"] = round(sum(1 for x in log if x[3] == "crosswalk") * dt, 1)
+    pk = env.world.parked
+    if pk is not None:            # parked cars: the groups the route passed, s the expert's plan waited behind one
+        passed = sum(1 for k, lid in enumerate(env.route.lanes) for g in pk.lane_groups.get(lid, ())
+                     if env.route.offsets[k] - env.route.s0[k] + pk.groups[g]["s_hi"] < env.s_ego)
+        m.update({"parked_passed": int(passed),
+                  "parked_wait_s": round(sum(1 for x in log if x[3] == "parked" and x[2] < 0.1) * dt, 1),
+                  "darts": int(sum(d[3] for d in env.world.darts))})
     if kv is not None:
         m["keiview_ms"] = {"town": kv_town_ms, "frames": len(kv_ms),
                            "mean": float(np.mean(kv_ms)) if kv_ms else None,
@@ -321,6 +335,10 @@ def summarize(results):
         **({"crosswalk_yield_s": round(sum(r.get("crosswalk_yield_s", 0.0) for r in results), 1),
             "routes_with_crosswalk_yield": int(sum(r.get("crosswalk_yield_s", 0.0) > 0 for r in results))}
            if any("crosswalk_yield_s" in r for r in results) else {}),
+        **({"parked_passed": int(sum(r.get("parked_passed", 0) for r in results)),
+            "parked_wait_s": round(sum(r.get("parked_wait_s", 0.0) for r in results), 1),
+            "darts": int(sum(r.get("darts", 0) for r in results))}
+           if any("parked_passed" in r for r in results) else {}),
     }
     kinds = {}
     for r in results:
@@ -404,6 +422,12 @@ def main():
     ap.add_argument("--bike_sweep", type=int, default=None, choices=[0, 1],
                     help="the expert's room beside a rider ahead counts its front corner off the path "
                          "(EnvConfig.expert_bike_sweep; default 0, the _bk8 suites 1); suffix _bs / _nobs")
+    ap.add_argument("--parked", type=float, default=None,
+                    help="parked cars per km of kerb (TrafficConfig.parked, keisim/parked.py; 0: none, as in every "
+                         "evaluation before them); suffix _pk<N>")
+    ap.add_argument("--dart_out", type=float, default=None,
+                    help="the chance that a parked car the route passes hides a child who runs out "
+                         "(TrafficConfig.dart_out); suffix _do<P>")
     ap.add_argument("--only", nargs="+", default=None, metavar="TOWN:EP",
                     help="only these routes of the suite (e.g. 1018:9400), for checks on picked routes; give --out")
     args = ap.parse_args()
@@ -419,10 +443,12 @@ def main():
         SUITE_DEFAULTS["osm"] = {"town_style": "twophase", "jam_fixes": True, "blocked_timeout": 180.0}
         args.suite = "osm"
     dflt = {"route_length": 600.0, "max_steps": 4000, "town_style": "classic", "jam_fixes": 0, "blocked_timeout": 90.0,
-            "via_ramp": 0, "crosswalks": 0.0, "bicycles": 0.0, "bike_visible": 0, "npc_past_line": 0, "bike_sweep": 0, **SUITE_DEFAULTS.get(args.suite, {})}
+            "via_ramp": 0, "crosswalks": 0.0, "bicycles": 0.0, "bike_visible": 0, "npc_past_line": 0, "bike_sweep": 0,
+            "parked": 0.0, "dart_out": 0.0, **SUITE_DEFAULTS.get(args.suite, {})}
     suite_style, suite_fixes, suite_timeout = dflt["town_style"], int(dflt["jam_fixes"]), dflt["blocked_timeout"]
     suite_cw, suite_bk, suite_bv = float(dflt["crosswalks"]), float(dflt["bicycles"]), int(dflt["bike_visible"])
     suite_npc, suite_bs = int(dflt["npc_past_line"]), int(dflt["bike_sweep"])
+    suite_pk, suite_do = float(dflt["parked"]), float(dflt["dart_out"])
     for k, v in dflt.items():
         if getattr(args, k) is None:
             setattr(args, k, v)
@@ -462,7 +488,9 @@ def main():
         ("" if args.crosswalks == suite_cw else f"_cw{args.crosswalks:g}") + \
         ("" if args.bicycles == suite_bk else f"_bk{args.bicycles:g}") + \
         ("" if int(args.bike_visible) == suite_bv else ("_bv" if args.bike_visible else "_nobv")) + \
-        ("" if int(args.bike_sweep) == suite_bs else ("_bs" if args.bike_sweep else "_nobs"))
+        ("" if int(args.bike_sweep) == suite_bs else ("_bs" if args.bike_sweep else "_nobs")) + \
+        ("" if args.parked == suite_pk else f"_pk{args.parked:g}") + \
+        ("" if args.dart_out == suite_do else f"_do{args.dart_out:g}")
     if args.osm_town:
         suffix = suffix.replace("_twophase", "")
         fail_dir = os.path.join("runs", "failures", args.osm_town, f"{tag}{suffix}")
@@ -477,7 +505,8 @@ def main():
          "blocked_timeout": args.blocked_timeout, "osm_bbox": args.osm_bbox, "yield_visible": bool(args.yield_visible),
          "rig": args.rig, "ego_patience": args.ego_patience, "via_ramp": bool(args.via_ramp),
          "npc_past_line": int(args.npc_past_line), "crosswalks": args.crosswalks, "bicycles": args.bicycles,
-         "bike_visible": bool(args.bike_visible), "bike_sweep": bool(args.bike_sweep)}
+         "bike_visible": bool(args.bike_visible), "bike_sweep": bool(args.bike_sweep), "parked": args.parked,
+         "dart_out": args.dart_out}
     t0 = time.time()
     ctx = mp.get_context("spawn")
     with ctx.Pool(args.workers) as pool:

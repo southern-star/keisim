@@ -14,6 +14,8 @@ import numpy as np
 from .config import TL_GREEN, TL_NONE, TL_RED, TL_YELLOW
 from .bicycles import BIKE_LEN, BIKE_R, NCB
 from .geometry import world_to_local, wrap
+from .parked import (PARKED_OWNER, PK_CLEAR, PK_DECIDE, PK_GAP0, PK_IN, PK_KEEP, PK_MARGIN, PK_OUT, PK_PASS_V,
+                     PK_SLOW_AT, PK_SLOW_B, PK_WAIT, PK_ZONE)
 from .route import LC_CHECK, LC_PUSH, LC_PUSH_TO, change_room, link_map
 from .traffic import (BIKE_END, BIKE_FREE, BIKE_IN, BIKE_KEEP, BIKE_LEFT, BIKE_LEFT_WAIT, BIKE_MIN, BIKE_OUT,
                       BIKE_PASS_DV, BIKE_PASS_V, CW_MARGIN, CW_REACH, PASS_SPEED, YIELD_GAP, Traffic, corridor_gaps,
@@ -54,6 +56,7 @@ BIKE_LEFT_MARGIN = 1.0                   # s: 巻き込み確認: the ego turns 
                                          # the bicycle's line this long before the bicycle gets there
 STOP_SIGN_OVER = 1.5                     # m: a car that rolled this far past the line without stopping stops there;
                                          # further in, the junction's own rules take over
+PK_START = 6.0                           # m into a road: the move out round a parked car grows from none to all of it
 
 
 def clear_time(d_cross, v, length):
@@ -137,13 +140,23 @@ class Expert:
         self._ss_route, self._ss_done = None, set()    # 止まれ lines (route s) the ego has stopped at on this route
         self._bk_wait = 0.0                            # s waited before a left turn for a bicycle standing beside
         self.last_bikes = None                         # bike_scan of the ego's own last plan (collect.py)
+        self._pk_route, self._pk_go = None, set()      # parked-car groups the ego has set off to pass (this route)
+        self.last_parked = None                        # parked_scan of the ego's own last plan (collect.py)
 
-    def path_local(self, route, s, pose, bikes=None):
+    def path_local(self, route, s, pose, bikes=None, parked=None):
         """The label waypoints in the frame of `pose`. With bicycles about (bike_scan; computed here when `bikes` is
-        not given) the path moves over to the right inside the lane round the ones the ego passes."""
+        not given) the path moves over to the right inside the lane round the ones the ego passes; with parked cars
+        (parked_scan, likewise), out round the ones it passes (over the centre line where it has to)."""
         sw = np.minimum(s + PATH_S, route.poly.length)
         pts = route.poly.interp(sw)
         w = self.env.world
+        if parked is None and getattr(w, "parked", None) is not None and w.parked.n:
+            parked = self.parked_scan(route, s, w.ego.v, False)
+        if parked:
+            off_pk = self.parked_offsets(parked, sw)
+            if off_pk.any():
+                h = route.poly.heading(sw)
+                pts = pts + np.stack([np.sin(h), -np.cos(h)], -1) * off_pk[:, None]
         if bikes is None and getattr(w, "bikes", None) is not None and w.bikes.n:
             bikes = self.bike_scan(route, s, pose, w.ego.v)
         if bikes is not None and bikes["want"].any():
@@ -160,6 +173,88 @@ class Expert:
             h = route.poly.heading(sw)
             pts = pts + np.stack([np.sin(h), -np.cos(h)], -1) * off[:, None]
         return world_to_local(pts, *pose)
+
+    def parked_scan(self, route, s, v, real):
+        """The groups of parked cars (keisim/parked.py) beside the route from just behind the ego to 45 m ahead, for a
+        car at route position `s` -> [{g, s_lo, s_hi (route s of the group's rear and front), s_lane0 (where their
+        lane begins on the route), ahead (front bumper to their rear), behind (rear bumper past their front), need
+        (how far out: PK_CLEAR beside them), go (passing them: inside the lane when that is enough, else once set
+        off), lane, G}]. real (the ego itself): the nearest group the ego has to pass over the centre line is set off
+        for (self._pk_go) from PK_DECIDE behind it on, once the oncoming lane is clear (Traffic.parked_oncoming_clear,
+        a privileged check of the oncoming traffic, as the NPCs')."""
+        w = self.env.world
+        pk, town, ego, tr = w.parked, w.town, w.ego, w.traffic
+        hl, hw = ego.LENGTH / 2, ego.WIDTH / 2
+        if self._pk_route is not route:
+            self._pk_route, self._pk_go = route, set()
+        out = []
+        k0, k1 = route.lane_index_at(s - 30.0), route.lane_index_at(s + 60.0)
+        for k in range(k0, k1 + 1):
+            lid = route.lanes[k]
+            gs = pk.lane_groups.get(lid)
+            if not gs:
+                continue
+            lane = town.lanes[lid]
+            base = float(route.offsets[k] - route.s0[k])            # route s of the lane's own s = 0
+            for g in gs:
+                G = pk.groups[g]
+                s_lo, s_hi = base + G["s_lo"], base + G["s_hi"]
+                ahead, behind = s_lo - (s + hl), (s - hl) - s_hi
+                if behind > PK_OUT[1] or ahead > 45.0:
+                    continue
+                need = min(G["q"] + PK_CLEAR + hw, lane.width - hw - 0.1)
+                free = need <= lane.width / 2 - hw - PK_KEEP
+                out.append({"g": g, "s_lo": s_lo, "s_hi": s_hi, "s_lane0": base, "ahead": ahead, "behind": behind,
+                            "need": need, "go": free or g in self._pk_go, "lane": lane, "G": G})
+        if real:
+            tr.ego_pk_go = self._pk_go                   # (the oncoming NPCs give way to the ego passing them)
+            self._pk_go &= {o["g"] for o in out}
+            for o in out:
+                if o["go"]:
+                    continue
+                if 0.0 < o["ahead"] <= PK_DECIDE:
+                    t_me = Traffic._reach(o["s_hi"] + PK_ZONE[1] - (s - hl), v, PK_PASS_V, 1.5)
+                    s_me = o["G"]["s_lo"] - (o["ahead"] + hl)              # the ego's centre on that lane
+                    if tr.parked_oncoming_clear(o["lane"], o["G"], t_me, s_me=s_me):
+                        self._pk_go.add(o["g"])
+                        o["go"] = True
+                elif o["ahead"] <= 0.0:          # beside it already (e.g. it started there): out round it
+                    self._pk_go.add(o["g"])
+                    o["go"] = True
+                break                            # the nearest one first
+        return out
+
+    def parked_offsets(self, parked, sw):
+        """How far right of the route's line the ego is to be with its centre at route positions `sw`, round the
+        parked cars it passes (parked_scan): PK_IN before them to PK_OUT past them, and only from PK_START into
+        their road (none of it in the junction before)."""
+        hl = self.env.world.ego.LENGTH / 2
+        sw = np.asarray(sw, float)
+        off = np.zeros(len(sw))
+        for o in parked:
+            if not o["go"]:
+                continue
+            ahead, behind = o["s_lo"] - (sw + hl), (sw - hl) - o["s_hi"]
+            f = np.where(ahead > 0.0, (PK_IN[0] - ahead) / (PK_IN[0] - PK_IN[1]),
+                         np.where(behind > 0.0, (PK_OUT[1] - behind) / (PK_OUT[1] - PK_OUT[0]), 1.0))
+            g = np.clip((sw - o["s_lane0"]) / PK_START, 0.0, 1.0)
+            off = np.maximum(off, o["need"] * np.clip(f, 0.0, 1.0) * g)
+        return off
+
+    def peds_hidden(self, pose):
+        """The people the expert does not see (TrafficConfig.dart_out): the children hiding in front of parked cars,
+        and those running out while the parked car still hides them from the rig's first camera on `pose`."""
+        w = self.env.world
+        pd = w.peds
+        hide = pd.mode == pd.HIDE
+        run = pd.dart & ~hide
+        if run.any():
+            c = self.env.cfg.camera
+            x, y, yaw = float(pose[0]), float(pose[1]), float(pose[2])
+            cam = (x + c.x * math.cos(yaw) - c.y * math.sin(yaw), y + c.x * math.sin(yaw) + c.y * math.cos(yaw))
+            idx = np.nonzero(run)[0]
+            hide[idx] = w.parked.hides(cam, pd.xy[idx], near=60.0)
+        return hide
 
     def bike_scan(self, route, s, pose, v):
         """Bicycles (TrafficConfig.bicycles) riding beside the route, for a car at `pose` (route position `s`, speed
@@ -226,6 +321,49 @@ class Expert:
             out["room"][j], out["cap"][j], out["s0"][j] = c, cap, s0
             out["want"][j] = min(max(hw + 0.3 + BIKE_FREE + 0.05 - d_j, 0.0), c)
         return out
+
+    def parked_rules(self, parked, pts, cum, route, s):
+        """The speed rules for parked cars (parked_scan) -> target speed (inf: none binds). Behind a group it does not
+        pass yet (the oncoming lane is not clear) it waits PK_WAIT behind it; the corridor (pts: moved out round the
+        ones it passes) keeps PK_GAP0 from any parked car still in the way; passing one, it slows to PK_PASS_V by
+        PK_SLOW_AT before its rear (PK_SLOW_B) and keeps to it until its rear is a metre past its front (a child may
+        run out from in front of it)."""
+        w = self.env.world
+        ego = w.ego
+        target = math.inf
+        # an NPC passing parked cars on the other side of the road: wait short of its passing stretch (on the ego's
+        # lane), as the NPCs do (Traffic._parked_gaps)
+        active = set(w.traffic.pk_go.values())
+        if active:
+            pk, hl = w.parked, ego.LENGTH / 2
+            k0, k1 = route.lane_index_at(s), route.lane_index_at(s + 45.0)
+            for k in range(k0, k1 + 1):
+                for g in pk.opp_groups.get(route.lanes[k], ()):
+                    if g in active:
+                        d = float(route.offsets[k] - route.s0[k]) + pk.groups[g]["opp_zone"][0] - (s + hl)
+                        if 0.0 < d < 40.0:
+                            target = min(target, stop_profile(d - 1.0, self.B_COMF))
+        for o in parked:
+            if o["behind"] > 1.0:
+                continue
+            if not o["go"]:
+                if o["ahead"] > 0.0:
+                    target = min(target, stop_profile(o["ahead"] - PK_WAIT, self.B_COMF))
+                continue
+            target = min(target, math.sqrt(PK_PASS_V ** 2 + 2 * PK_SLOW_B * max(o["ahead"] - PK_SLOW_AT, 0.0)))
+        pk = w.parked
+        near = np.nonzero(np.hypot(*(pk.xy - np.array([ego.x, ego.y])).T) < 60.0)[0]
+        if len(near):
+            cxy, cr, own = pk.circles()
+            m = np.isin(own - PARKED_OWNER, near)
+            if m.any():
+                g, _, _ = corridor_gaps(pts[None], cum[None], np.ones((1, len(pts)), bool),
+                                        np.array([[ego.x, ego.y]]), np.array([ego.yaw]), np.array([ego.LENGTH / 2]),
+                                        np.array([ego.WIDTH / 2]), cxy[m], cr[m], own[m], np.zeros(int(m.sum())),
+                                        np.zeros(int(m.sum())), np.array([-1]), PK_MARGIN)
+                if np.isfinite(g[0]):
+                    target = min(target, stop_profile(float(g[0]) - PK_GAP0, self.B_COMF))
+        return target
 
     def bikes_seen(self, pose):
         """The riders the rig's first camera on `pose` sees right now (EnvConfig.expert_bike_visible)."""
@@ -354,7 +492,10 @@ class Expert:
         bikes = self.bike_scan(route, s, pose, v) if w.bikes is not None and w.bikes.n else None
         if real:
             self.last_bikes = bikes
-        path = self.path_local(route, s, pose, bikes)
+        parked = self.parked_scan(route, s, v, real) if w.parked is not None and w.parked.n else None
+        if real:
+            self.last_parked = parked
+        path = self.path_local(route, s, pose, bikes, parked if parked is not None else [])
         reason = "cruise"
         if w.town.speed_varies:          # road types: the route's own limits
             v_lim = route.speed_limit_ahead(s + hl)
@@ -377,6 +518,11 @@ class Expert:
         sp = sp[sp < route.poly.length]
         pts = route.poly.interp(sp)
         cum = sp - s
+        if parked:                       # out round the parked cars it passes (path_local)
+            off_pk = self.parked_offsets(parked, sp)
+            if off_pk.any():
+                h = route.poly.heading(sp)
+                pts = pts + np.stack([np.sin(h), -np.cos(h)], -1) * off_pk[:, None]
         tr = w.traffic
         cxy, cr, cow = tr.circles()
         csp, cyw = tr.v[cow], tr.yaw[cow]
@@ -386,9 +532,15 @@ class Expert:
             # current + short-horizon predicted positions for crossing pedestrians
             vel = peds.velocity_vectors()
             crossing = peds.mode == peds.CROSS
-            pp = [peds.xy]
+            pxy0 = peds.xy
+            if getattr(w, "darts", None):           # the children it cannot see yet (TrafficConfig.dart_out)
+                hidden = self.peds_hidden(pose)
+                if hidden.any():
+                    pxy0 = peds.xy.copy()
+                    pxy0[hidden] = 1e6
+            pp = [pxy0]
             for tau in (0.8, 1.6, 2.4):
-                pp.append(np.where(crossing[:, None], peds.xy + vel * tau, peds.xy))
+                pp.append(np.where(crossing[:, None], pxy0 + vel * tau, pxy0))
             pxy = np.concatenate(pp)
             m = len(pp)
             cxy = np.concatenate([cxy, pxy])
@@ -426,6 +578,11 @@ class Expert:
                     v_pass = math.sqrt(PASS_SPEED ** 2 + 2 * 1.6 * max(float(g_pass[0]), 0.0))
                     if v_pass < target:
                         target, reason = v_pass, "pedestrian"
+
+        if parked is not None:
+            v_pk = self.parked_rules(parked, pts, cum, route, s)
+            if v_pk < target:
+                target, reason = v_pk, "parked"
 
         if bikes is not None:
             v_bk = self.bike_rules(route, s, v, bikes, pts, cum, real)

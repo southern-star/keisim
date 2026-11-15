@@ -97,6 +97,14 @@ class BEVRenderer:
                     continue
                 cv2.fillPoly(img, [np.round(q * 4).astype(np.int32)], (200, 120, 40), cv2.LINE_AA, shift=2)
                 cv2.polylines(img, [np.round(q * 4).astype(np.int32)], True, (255, 200, 120), 1, cv2.LINE_AA, shift=2)
+        pk = getattr(world, "parked", None)
+        if pk is not None and pk.n:            # parked cars (keisim/parked.py): grey
+            for i in range(pk.n):
+                q = self.world_to_px(pk.corners[i], pose)
+                if q[:, 0].max() < 0 or q[:, 0].min() > self.W or q[:, 1].max() < 0 or q[:, 1].min() > self.H:
+                    continue
+                cv2.fillPoly(img, [np.round(q * 4).astype(np.int32)], (150, 150, 150), cv2.LINE_AA, shift=2)
+                cv2.polylines(img, [np.round(q * 4).astype(np.int32)], True, (230, 230, 230), 1, cv2.LINE_AA, shift=2)
         pd = world.peds
         if pd.n:
             q = self.world_to_px(pd.xy, pose)

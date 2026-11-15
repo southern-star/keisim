@@ -2016,3 +2016,109 @@ def test_expert_bike_sweep():
     assert target(False, False) > 3.0 and target(False, True) > 3.0
     assert target(True, False) > 3.0
     assert target(True, True) < 2.0
+
+
+def _parked_env(parked=8.0, dart=0.0, style="roadtypes"):
+    from keisim.config import town_config
+    cfg = EnvConfig()
+    cfg.town = town_config(style)
+    tc = cfg.traffic
+    tc.parked, tc.dart_out = parked, dart
+    tc.box_rule = tc.release_hidden = True
+    cfg.blocked_timeout = 180.0
+    cfg.render_rgb = cfg.render_seg = False
+    return KeiEnv(cfg)
+
+
+def test_parked_cars_placement():
+    """TrafficConfig.parked: none unless asked for; with it, parked cars stand at the kerb of two-way roads with one
+    lane each way (not main roads), within parked_span of their lane (away from junctions), on the road surface,
+    passable by a wide car, apart from each other and from the other kerb's; the renderers get them, and the ego
+    running into one is a "parked" collision."""
+    from keisim.geometry import obb_overlap
+    from keisim.parked import (
+        PK_OPPOSITE,
+        PK_PASSABLE,
+        PK_WIDE_HW,
+        parked_lanes,
+        parked_span,
+    )
+    env = _parked_env(parked=0.0)
+    env.reset(1015, 9901, route_length=600.0, render=False)
+    assert env.world.parked is None and not env.world.darts and not env.world.peds.dart.any()
+    env = _parked_env()
+    env.reset(1015, 9901, route_length=600.0, render=False)
+    w = env.world
+    pk, town = w.parked, w.town
+    assert pk.n >= 5
+    ok = set(parked_lanes(town))
+    for j in range(pk.n):
+        lane = town.lanes[pk.lane[j]]
+        rs = town.roads[lane.road].spec
+        assert lane.id in ok and rs.kind != "main" and not rs.oneway and rs.lanes == 1
+        a, b = parked_span(town, lane)
+        assert a - 1e-6 <= pk.s[j] - pk.dims[j, 0] / 2 and pk.s[j] + pk.dims[j, 0] / 2 <= b + 1e-6
+        assert pk.side[j] < 0.0 and pk.inner_edge(j) + PK_PASSABLE + 2 * PK_WIDE_HW + 0.1 <= lane.width + 1e-6
+        assert (town.surface(pk.corners[j]) == 1).all()
+        assert not obb_overlap(pk.corners[j], np.delete(pk.corners, j, 0)).any()
+        so = town.lanes[pk.opp[j]].poly.project(pk.xy[j])[0]
+        assert all(abs(pk.s[i] - so) >= PK_OPPOSITE - 1e-6 for i in range(pk.n) if pk.lane[i] == pk.opp[j])
+    st = w.scene_state()
+    assert len(st.veh_xy) == w.traffic.n + pk.n and not st.veh_brake[w.traffic.n:].any()
+    e = w.ego
+    e.x, e.y, e.yaw = float(pk.xy[0, 0]), float(pk.xy[0, 1]), float(pk.yaw[0])
+    assert ("parked", 0) in w.ego_collisions()
+
+
+def test_parked_cars_passing():
+    """The expert passes the parked cars on its route: out round them (over the centre line where the lane is too
+    narrow, once the oncoming lane is clear), at PK_PASS_V at most beside them; and the NPCs pass theirs without
+    touching them."""
+    from keisim.geometry import box_corners, obb_overlap
+    from keisim.parked import PK_PASS_V
+    env = _parked_env()
+    env.reset(1016, 9901, route_length=1000.0, render=False)
+    w = env.world
+    pk, tr, route = w.parked, w.traffic, env.route
+    groups = [(k, g) for k, lid in enumerate(route.lanes) for g in pk.lane_groups.get(lid, ())]
+    assert len(groups) >= 3
+    spans = [(route.offsets[k] - route.s0[k] + pk.groups[g]["s_lo"], route.offsets[k] - route.s0[k] + pk.groups[g]["s_hi"])
+             for k, g in groups]
+    out, beside_v, touch = 0.0, 0.0, 0
+    for _ in range(6000):
+        _, _, done, info = env.step(env.expert_action())
+        e = w.ego
+        lat = route.poly.project(e.xy, env.s_ego - 5.0, env.s_ego + 5.0)[1]
+        out = max(out, -lat)
+        if any(a - 1.0 < env.s_ego < b for a, b in spans):
+            beside_v = max(beside_v, e.v)
+        bc = box_corners(tr.xy[:, 0], tr.xy[:, 1], tr.yaw, tr.dims[:, 0], tr.dims[:, 1])
+        for j in range(pk.n):
+            near = np.nonzero(np.hypot(*(tr.xy - pk.xy[j]).T) < 7.0)[0]
+            touch += int(obb_overlap(pk.corners[j], bc[near]).sum()) if len(near) else 0
+        if done:
+            break
+    assert info["status"] == "success" and not info["infractions"]
+    assert out > 0.8 and beside_v < PK_PASS_V + 0.5 and touch == 0
+
+
+def test_dart_out():
+    """TrafficConfig.dart_out: children hide in front of parked cars the route passes and run out when the ego comes
+    near. The expert does not see one while the parked car hides them (Expert.peds_hidden), and stops for them in
+    time; with the option off nobody hides."""
+    env = _parked_env(dart=1.0)
+    env.reset(1015, 9901, route_length=1000.0, render=False)
+    w = env.world
+    pd = w.peds
+    assert len(w.darts) >= 3
+    i0 = w.darts[0][0]
+    assert pd.mode[i0] == pd.HIDE and pd.dart[i0] and env.expert.peds_hidden(w.ego.pose)[i0]
+    hidden_run = 0
+    for _ in range(6000):
+        _, _, done, info = env.step(env.expert_action())
+        hid = env.expert.peds_hidden(w.ego.pose)
+        hidden_run += int(any(d[3] and pd.mode[d[0]] == pd.CROSS and hid[d[0]] for d in w.darts))
+        if done:
+            break
+    assert info["status"] == "success" and not info["infractions"]
+    assert sum(d[3] for d in w.darts) >= 3 and hidden_run > 0      # they ran out, hidden at first

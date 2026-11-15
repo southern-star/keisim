@@ -23,6 +23,13 @@ class World:
         n_veh = int(min(tc.max_vehicles, town.total_lane_length() / rng.uniform(*tc.vehicle_spacing)))
         self.traffic = Traffic(town, tc, rng, n_veh)
         ego_xy = self.ego.xy[None]
+        self.parked = None
+        if tc.parked > 0:       # parked cars (keisim/parked.py); no random draw without them
+            from .parked import ParkedCars, parked_lanes
+            n_pk = int(min(tc.max_parked, round(tc.parked * sum(town.lanes[l].length for l in parked_lanes(town))
+                                                / 1000.0)))
+            self.parked = ParkedCars(town, tc, rng, n_pk, avoid_xy=ego_xy, route=route)
+            self.traffic.parked = self.parked
         # a few vehicles ahead of the ego on its route -> car-following situations (none with max_vehicles 0)
         if route is not None and tc.max_vehicles > 0 and rng.random() < 0.7:
             first = route.lanes[0]
@@ -36,11 +43,19 @@ class World:
         if route is not None and tc.crosswalks > 0:     # the zebras at the exits of the route's turns
             focus = [ci for ci, kind, turn in route.zebras(town) if kind == "exit" and turn != "straight"]
         self.peds = Pedestrians(town, tc, rng, n_ped, focus_cw=focus)
+        self.darts = []         # hidden children (TrafficConfig.dart_out): [ped index, route s of their line, trigger m]
+        if self.parked is not None and self.parked.n:
+            self.peds.set_parked(self.parked)
+            if tc.dart_out > 0 and route is not None:
+                self._hide_children(route)
         self.bikes = None
         if tc.bicycles > 0:     # bicycles (keisim/bicycles.py); no random draw without them
             from .bicycles import Bicycles
             n_bk = int(min(tc.max_bikes, round(tc.bicycles * sum(r.length for r in town.roads) / 1000.0)))
             cxy, cr, _ = self.traffic.circles()
+            if self.parked is not None and self.parked.n:          # nor in a parked car
+                pxy, pr, _ = self.parked.circles()
+                cxy, cr = np.concatenate([cxy, pxy]), np.concatenate([cr, pr])
             ahead = None
             if route is not None and rng.random() < 0.6:        # one ahead of the ego on its first road
                 first = town.lanes[route.lanes[0]]
@@ -55,6 +70,30 @@ class World:
         self.n_heads = len(town.signal_heads)
         self._head_j = np.array([h["junction"] for h in town.signal_heads], int)
         self._head_p = np.array([h["phase"] for h in town.signal_heads], int)
+
+    def _hide_children(self, route):
+        """TrafficConfig.dart_out: children hidden in front of the parked cars along the route ahead of the ego
+        (keisim/parked.py), each with the route position of their line and the distance at which they run out."""
+        from .parked import DART_HEIGHT, DART_SPEED, DART_TRIGGER, KID_SHIRTS, dart_spot
+        town, pk, rng = self.town, self.parked, self.rng
+        for k, lid in enumerate(route.lanes):
+            for j in pk.by_lane.get(lid, ()):
+                if k == 0 and pk.s[j] < route.s_start + 30.0:
+                    continue
+                if rng.random() >= self.cfg.traffic.dart_out:
+                    continue
+                spot = dart_spot(town, pk, j)
+                if spot is None:
+                    continue
+                xy, to, w_to, s_to, lat_to = spot
+                s_loc = float(town.lanes[lid].poly.project(xy)[0])
+                s_r = float(route.offsets[k] + s_loc - route.s0[k])
+                if not route.s_start + 20.0 < s_r < route.s_end:
+                    continue
+                shirt = KID_SHIRTS[rng.integers(len(KID_SHIRTS))]
+                i = self.peds.add_hidden(xy, to, w_to, s_to, lat_to, rng.uniform(*DART_HEIGHT), rng.uniform(*DART_SPEED),
+                                         shirt)
+                self.darts.append([i, s_r, float(rng.uniform(*DART_TRIGGER)), False])
 
     # ----------------------------------------------------------------- state
     def lamp_states(self):
@@ -78,6 +117,11 @@ class World:
             color = np.vstack([color, [[40, 200, 60]]])
             kind = np.append(kind, 0)
             brake = np.append(brake, e.control[2] > 0.05)
+        pk = self.parked
+        if pk is not None and pk.n:     # parked cars: after the NPCs (and the ego), lights off
+            p_xy, p_yaw, p_dims, p_col, p_kind, p_brake = pk.scene()
+            xy, yaw, dims = np.vstack([xy, p_xy]), np.append(yaw, p_yaw), np.vstack([dims, p_dims])
+            color, kind, brake = np.vstack([color, p_col]), np.append(kind, p_kind), np.append(brake, p_brake)
         st = SceneState(xy, yaw, dims, color, kind, brake, pd.xy, pd.yaw, pd.height, pd.colors, pd.phase,
                         self.lamp_states())
         if self.bikes is not None and self.bikes.n:
@@ -109,6 +153,8 @@ class World:
             walk = pd.walking_in_road()                          # but slowly; people waiting at a zebra's kerb closely
             ped_margin = np.where(walk | pd.waiting_at_kerb(), 0.2, 0.9)
             pass_xy = pd.xy[walk]
+        if self.darts:          # the children hiding in front of parked cars are beside the cars' way
+            ped_margin = np.where(pd.mode == pd.HIDE, 0.0, 0.9 if ped_margin is None else ped_margin)
         self.traffic.step(dt, self.t, ext_xy, ext_r, ext_o, ext_v, ext_yaw, e.xy, e.v, e.yaw, ego_info,
                           ped_margin=ped_margin, pass_xy=pass_xy, ego_len=e.LENGTH, ego_wait=self._ego_lc_wait(),
                           peds=pd)
@@ -124,6 +170,12 @@ class World:
             veh_xy = np.vstack([veh_xy, bk.xy[mv]])
             veh_v = np.append(veh_v, bk.v[mv])
             veh_yaw = np.append(veh_yaw, bk.yaw[mv])
+        if self.darts and self.ego_s is not None:      # 飛び出し: a hidden child runs out ahead of the ego
+            front = self.ego_s + e.LENGTH / 2
+            for dt_ in self.darts:
+                if not dt_[3] and e.v > 1.0 and 0.0 < dt_[1] - front <= dt_[2]:
+                    pd.start_dart(dt_[0])
+                    dt_[3] = True
         trigger = None
         if pd.n:
             d = pd.xy - e.xy
@@ -198,6 +250,8 @@ class World:
                                  np.full(len(idx), BIKE_W))
                 for i in idx[obb_overlap(ec, bc)]:
                     hits.append(("bicycle", int(i)))
+        if self.parked is not None and self.parked.n:
+            hits += [("parked", j) for j in self.parked.collisions(ec, e.xy, obb_overlap)]
         sb = self.town.static_boxes
         if len(sb):
             r = 0.5 * np.hypot(sb[:, 3], sb[:, 4])
