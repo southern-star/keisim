@@ -101,7 +101,10 @@ SUITE_DEFAULTS["long3e"] = SUITE_DEFAULTS["long3f"] = SUITE_DEFAULTS["long3"]
 SUITE_DEFAULTS["crosswalks"] = {**SUITE_DEFAULTS["long3"], "crosswalks": 0.7}
 SUITE_DEFAULTS["crosswalks_sub"] = {**SUITE_DEFAULTS["long3"], "town_style": "suburban", "crosswalks": 0.7}
 SUITE_DEFAULTS["bigjunction"] = {**SUITE_DEFAULTS["long3"], "town_style": "bigjunction", "crosswalks": 0.7}
-SUITE_DEFAULTS["parked"] = {**SUITE_DEFAULTS["long3"], "town_style": "roadtypes", "parked": 8.0, "dart_out": 0.6}
+# (the road-types towns' usual NPC caps, not twice them: CAP_SCALE 2 crowds the residential roads so that the queues
+# waiting to pass parked cars and the oncoming queues standing beside them lock up a junction now and then)
+SUITE_DEFAULTS["parked"] = {**SUITE_DEFAULTS["long3"], "town_style": "roadtypes", "parked": 8.0, "dart_out": 0.6,
+                            "cap_scale": 1}
 for _k in ("crosswalks", "crosswalks_sub", "bigjunction"):
     SUITE_DEFAULTS[f"{_k}_bk8"] = {**SUITE_DEFAULTS[_k], "bicycles": 8.0, "bike_visible": 1, "npc_past_line": 2,
                                      "bike_sweep": 1}
@@ -151,7 +154,7 @@ def run_route(job):
         cfg.traffic.max_peds = 110
         cfg.traffic.ego_cross_rate = 0.3
     # varied towns have ~1.75x the lane length: twice the caps keep the traffic density of the classic towns
-    cap = CAP_SCALE.get(args.get("town_style", "classic"), 1)
+    cap = args.get("cap_scale") or CAP_SCALE.get(args.get("town_style", "classic"), 1)
     cfg.traffic.max_vehicles *= cap
     cfg.traffic.max_peds *= cap
     if cfg.renderer == "keiview":
@@ -422,6 +425,9 @@ def main():
     ap.add_argument("--bike_sweep", type=int, default=None, choices=[0, 1],
                     help="the expert's room beside a rider ahead counts its front corner off the path "
                          "(EnvConfig.expert_bike_sweep; default 0, the _bk8 suites 1); suffix _bs / _nobs")
+    ap.add_argument("--cap_scale", type=int, default=None,
+                    help="NPC count caps times this (default: CAP_SCALE of the town style; the parked suite 1); "
+                         "suffix _cap<N>")
     ap.add_argument("--parked", type=float, default=None,
                     help="parked cars per km of kerb (TrafficConfig.parked, keisim/parked.py; 0: none, as in every "
                          "evaluation before them); suffix _pk<N>")
@@ -444,11 +450,11 @@ def main():
         args.suite = "osm"
     dflt = {"route_length": 600.0, "max_steps": 4000, "town_style": "classic", "jam_fixes": 0, "blocked_timeout": 90.0,
             "via_ramp": 0, "crosswalks": 0.0, "bicycles": 0.0, "bike_visible": 0, "npc_past_line": 0, "bike_sweep": 0,
-            "parked": 0.0, "dart_out": 0.0, **SUITE_DEFAULTS.get(args.suite, {})}
+            "parked": 0.0, "dart_out": 0.0, "cap_scale": 0, **SUITE_DEFAULTS.get(args.suite, {})}
     suite_style, suite_fixes, suite_timeout = dflt["town_style"], int(dflt["jam_fixes"]), dflt["blocked_timeout"]
     suite_cw, suite_bk, suite_bv = float(dflt["crosswalks"]), float(dflt["bicycles"]), int(dflt["bike_visible"])
     suite_npc, suite_bs = int(dflt["npc_past_line"]), int(dflt["bike_sweep"])
-    suite_pk, suite_do = float(dflt["parked"]), float(dflt["dart_out"])
+    suite_pk, suite_do, suite_cap = float(dflt["parked"]), float(dflt["dart_out"]), int(dflt["cap_scale"])
     for k, v in dflt.items():
         if getattr(args, k) is None:
             setattr(args, k, v)
@@ -490,7 +496,8 @@ def main():
         ("" if int(args.bike_visible) == suite_bv else ("_bv" if args.bike_visible else "_nobv")) + \
         ("" if int(args.bike_sweep) == suite_bs else ("_bs" if args.bike_sweep else "_nobs")) + \
         ("" if args.parked == suite_pk else f"_pk{args.parked:g}") + \
-        ("" if args.dart_out == suite_do else f"_do{args.dart_out:g}")
+        ("" if args.dart_out == suite_do else f"_do{args.dart_out:g}") + \
+        ("" if int(args.cap_scale) == suite_cap else f"_cap{args.cap_scale}")
     if args.osm_town:
         suffix = suffix.replace("_twophase", "")
         fail_dir = os.path.join("runs", "failures", args.osm_town, f"{tag}{suffix}")
@@ -506,7 +513,7 @@ def main():
          "rig": args.rig, "ego_patience": args.ego_patience, "via_ramp": bool(args.via_ramp),
          "npc_past_line": int(args.npc_past_line), "crosswalks": args.crosswalks, "bicycles": args.bicycles,
          "bike_visible": bool(args.bike_visible), "bike_sweep": bool(args.bike_sweep), "parked": args.parked,
-         "dart_out": args.dart_out}
+         "dart_out": args.dart_out, "cap_scale": int(args.cap_scale)}
     t0 = time.time()
     ctx = mp.get_context("spawn")
     with ctx.Pool(args.workers) as pool:
