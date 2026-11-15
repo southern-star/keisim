@@ -165,6 +165,7 @@ cd web && node tools/serve.mjs                    # → http://localhost:5174/?p
   - 片側2車線とランプの町（下）では、周りの車も車線を変え、ランプを使います。
   - 自車のカメラに見えない所で 40 秒以上止まっている車は、別の場所に移します。
   - 自車と車体が重なると「接触」として数え、HUD に表示します。
+  - `?bikes=8` を付けると、自転車が道路の左端を走ります（道路 1 km あたりの台数、`src/bicycles.js`。付けなければ出ません）。周りの車は右へ寄って追い越すか、後ろを付いて行きます。自転車との接触も HUD の「接触」に数えます。くわしくはリポジトリの README の「自転車」。
   - 描画が重いときは、画面の「周りの車」ボタンか T キーで消せます（選んだ設定はブラウザに残ります）。`?traffic=0` でも消せます。周りの車の描画は、1 台を材質ごとに 1 つのメッシュにまとめて軽くしています（車 24 台が見えているとき、描画命令は 520 → 740、RTX 3060・1280×720 で 1 フレームあたり 2〜3 ms 増）。
 - カメラから 70 m 以内の周りの車は、詳しい形のモデル（`src/world/cars.js`）で描きます。
   - 車種は KeiSim が決めた車の大きさで選びます。軽ハイトワゴン、軽ハッチ、軽トラ（白い軽に多い）、コンパクト、セダン、SUV、ミニバン、小型トラックの 8 種類です。
@@ -212,7 +213,7 @@ cd web && node tools/serve.mjs                    # → http://localhost:5174/?p
   - `?pace=0` を付けると、町は判断を待ちません（前の動き）。
 - モデルの重みは float16 で保存し、グラフの中で float32 に戻します（30 MB、計算は float32）。値は Release の重みと同じです。
 
-URL パラメータ: `?town=1001`（二段階の信号の町は `?town=1015-98782ab7`、札幌は `?town=osm_sapporo`）、`?q=low`（表示の画質。モデルの入力は常に medium）、`?ep=wasm` / `?ep=webgpu`（推論エンジンを固定）、`?pace=0.25`（モデルの判断に何秒までかかってよいか。それより長くかかるときは町の時間をゆっくり進めて待つ、既定 0.25。HUD に「スロー ×0.5」などと出る。`?pace=0` で待たない）、`?model=<URL>`、`?traffic=0`（周りの車なし）、`?cars=20`（周りの車の台数）、`?cardetail=0`（周りの車を簡易な形で表示）、`?tdir=.towns`（`scripts/import_osm.py` が `web/.towns` に書き出した町、例 `?tdir=.towns&town=osm_nishioi`: 一方通行の道路は中心線の上の車線 1 本で、周りの車もその向きにだけ走ります）、`?ramp=N`（ランプのある町: N 本目のランプの手前から。`-1` でふつうの出発点）、`?ort=node_modules/onnxruntime-web/dist/`（onnxruntime-web を CDN ではなくこのサイトから読む。同じサイトの相対パスだけ。CDN に出られない環境のテスト用: `npm install --no-save onnxruntime-web@1.20.1`）
+URL パラメータ: `?town=1001`（二段階の信号の町は `?town=1015-98782ab7`、札幌は `?town=osm_sapporo`）、`?q=low`（表示の画質。モデルの入力は常に medium）、`?ep=wasm` / `?ep=webgpu`（推論エンジンを固定）、`?pace=0.25`（モデルの判断に何秒までかかってよいか。それより長くかかるときは町の時間をゆっくり進めて待つ、既定 0.25。HUD に「スロー ×0.5」などと出る。`?pace=0` で待たない）、`?model=<URL>`、`?traffic=0`（周りの車なし）、`?cars=20`（周りの車の台数）、`?bikes=8`（自転車を出す。道路 1 km あたりの台数、最大 30。付けなければ自転車なし）、`?cardetail=0`（周りの車を簡易な形で表示）、`?tdir=.towns`（`scripts/import_osm.py` が `web/.towns` に書き出した町、例 `?tdir=.towns&town=osm_nishioi`: 一方通行の道路は中心線の上の車線 1 本で、周りの車もその向きにだけ走ります）、`?ramp=N`（ランプのある町: N 本目のランプの手前から。`-1` でふつうの出発点）、`?ort=node_modules/onnxruntime-web/dist/`（onnxruntime-web を CDN ではなくこのサイトから読む。同じサイトの相対パスだけ。CDN に出られない環境のテスト用: `npm install --no-save onnxruntime-web@1.20.1`）
 
 ```bash
 node tools/pilot_check.mjs --town 1000 --sec 60   # headless Chrome で 60 秒（シミュレーション時間）走らせて記録を表示
@@ -221,6 +222,8 @@ node tools/pilot_check.mjs --town osm_sapporo --sec 120 --model models/keipilot_
 node tools/pilot_check.mjs --town 2000-8c5d282b --sec 60 --ort node_modules/onnxruntime-web/dist/   # ランプの町（CDN なし）
 node tools/pilot_check.mjs --town 1000 --ep wasm --realtime 60 --sec 0   # ページのループのまま実時間で 60 秒: fps、判断の回数、推論と描画の時間、町の速さ
 node tools/traffic_check.mjs --town 2002-8c5d282b --sec 600 --why   # 周りの車とナビだけを node で（接触の詳細つき）
+node tools/pilot_check.mjs --pilot mc --town 1015-98782ab7 --sec 300 --every 5 --bikes 8   # 自転車あり（行の最後に 自転車の台数/自車との接触/車との接触、いちばん近い自転車までの距離）
+node tools/traffic_check.mjs --town osm_sapporo --sec 1200 --bikes 8 --seed 7 --why   # 自転車と周りの車を node で
 ```
 
 `pilot_check.mjs` は、モデルの計算を毎ステップ待つので、KeiSim と同じく推論の遅れがない状態で走ります（`--realtime` の間だけは、見る人のブラウザと同じく実時間で走ります）。

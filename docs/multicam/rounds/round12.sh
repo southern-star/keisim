@@ -1,57 +1,101 @@
 #!/bin/bash
-# Multi-camera KeiPilot, round 12: crosswalks at signals (README, 3 章の「横断歩道を渡る人と歩行者用の信号」, PR #31).
-# mc12 (v0.11.0) has never seen people crossing on the zebras with their pedestrian light: on the crosswalks suite's
-# towns with 600 m routes (KeiSim, measured on a cloud CPU) it drove onto a zebra in front of people on 3 of 20 routes
-# and hit someone on 2 of them, where the expert went 20/20 without infractions (runs/eval/*_crosswalks_600m.json).
-# 0. mc12 on the crosswalk suites (2.5 km x 20): crosswalks and crosswalks_sub on KeiSim, crosswalks on KeiView
-# 1. data with people on the zebras (--crosswalks 0.7) and 3 corner people per zebra (--crosswalk_spawn 3), thinned to
-#    the junction decisions and the zebras at the exits of the route's junctions with someone in the way
-#    (--focus_yield 0.15 --focus_reasons yield junction_blocked crosswalk --focus_crosswalk 30). A cloud check of the
-#    KeiSim expert (3000 frames, two-phase towns): 2.2 % of the frames with the expert giving way at a zebra and 19 % by
-#    an exit zebra with someone in the way, against 0.2 % / none without the thinning and with 1 corner person.
-#    Two-phase towns and suburban towns (片側2車線: longer zebras): KeiSim expert 25k + 15k, KeiView expert 10k,
-#    DAgger with mc12 20k + 10k
-# 2. mc13 = mc12 trained on mc12's sets (round 11) + the 5 new ones, 4 x 200k samples. The new sets at weight 2:
-#    round 11's 80k guardrail frames at weight 1 were 2.9 % of the samples, so these should be about 6 %
-#    (scripts/train.py also weights the frames giving way at a zebra x3, as the pedestrian ones). Old sets halved
-#    until under 21.3 GB, round 11's order first
-# 3. mc13 on the crosswalk suites, round 11's curve courses and round 10's town suites (both renderers, Sapporo _pat3)
-# Written in the cloud (no GPU) from round11.sh and not run end to end: the three collect.py commands were tried on a
-# few hundred frames each (the DAgger one with keipilot_mc.pt = mc12 on the CPU). Every step skips what is already
-# there.
+# Multi-camera KeiPilot, round 12: crosswalks, big junctions and bicycles in one round (mc12 -> mc13).
+# mc12 (v0.11.0) has never seen any of the three. Cloud checks on 600 m routes (KeiSim, the expert went 20/20 on each):
+#   crosswalks (PR #31): 17/20, drove onto a zebra in front of people on 3 routes, hit someone on 2
+#   bigjunction (PR #33, with PR #39's turn commands): 16/20 (zebras 4, red light 1, a car 1, stuck in a left turn 1)
+#   bicycles (PR #35, long3c 2.5 km, --bicycles 8): 18/20, never hit a rider, mostly follows them
+# The labels of the bicycle data count only the riders the wide camera sees (--bike_visible 1, PR #40): the 巻き込み
+# from behind on the left that no camera of the rig sees is left as it is for now.
+# 0. mc12 on the new suites: crosswalks, crosswalks_sub, bigjunction and the three with bicycles (_bk8) on KeiSim,
+#    crosswalks and bigjunction on KeiView (2.5 km x 20 each)
+# 1. data, each as KeiSim expert, mc12 DAgger and KeiView expert:
+#    a. people on the zebras (as before): --crosswalks 0.7 --crosswalk_spawn 3, thinned to the junction decisions and
+#       the exit zebras with someone in the way (--focus_crosswalk 30). Two-phase and suburban towns.
+#    b. big junctions (bigjunction towns): the changes into the right-turn lanes (reason lane_change kept), scramble
+#       crossings and their diagonal zebras (the same zebra focus)
+#    c. bicycles: --bicycles 8 --bike_visible 1 --focus_bicycle 15 (frames with the expert's reason bicycle or a rider
+#       the camera sees riding along within 15 m), with people on the zebras too. Two-phase and suburban towns. A
+#       cloud check (3000 frames, --focus_bicycle 20): 31 % of the frames with the reason bicycle, half with a rider
+#       about; 15 m keeps somewhat fewer
+#    b and c take the settings of the _bk8 suites (PR #42; README, 3 章の「自転車」): --npc_past_line 2 (an NPC standing a little
+#    past its stop line obeys only its light: with the old NPCs one set off at red and locked with the crossing road's
+#    right turn in the junction, and with --npc_past_line 1 one held for the ego waiting in the junction while the ego
+#    waited for it), and for c --bike_sweep 1 (the expert's room beside a rider ahead counts its front corner off the
+#    path: coming out of a right turn it clipped a rider standing at the start of the exit road)
+# 2. mc13 = mc12 trained on mc12's sets (round 11) + the new ones, 4 x 200k samples. Weights (--dir_weight):
+#    crosswalk sets 2 (as before), big junction sets 2, bicycle sets 1.
+#    Every weight of train.py (reason, DAgger, KeiView, yellow, setting off, turns) on cloud sets of 3000 KeiSim expert
+#    frames: a frame of a bicycle set weighs ~1.4 x one of an ordinary set (mean 2.0-2.06 against 1.44, the twophase
+#    expert without bicycles), about half of it from the reason-bicycle frames (x3; 22-31 % of the frames with
+#    --focus_bicycle 20). Share of the samples, from round 11's anchor (its 80k guardrail frames at weight 1 were
+#    2.9 %: the old sets ~2.68M frame-weights) and those per-frame weights (crosswalk sets ~1.1 x and big junction ~1 x, assumed, not measured):
+#    crosswalks 80k x 2 x 1.1 ~ 5.8 %, big junctions 48k x 2 ~ 3.2 %, bicycles 53k x 1 x 1.4 ~ 2.5 % (the
+#    reason-bicycle frames ~1.2 % of all), all new sets ~ 11 % (round 11: 2.9 %, the crosswalks alone: ~ 6 %). The
+#    bicycle sets keep weight 1 and the x3 stays: about 1 % of the samples on the reason-bicycle frames is not too much
+#    for a new kind of road user; the 巻き込み scenes the camera sees are rare in them (0.03 % of the steps in the
+#    two-phase towns, 0.3 % in the suburban ones, tools/bike_unseen.py --off)
+#    Memory: the new sets are ~181k frames (~4 GB). MMAP=1 (train.py --mmap, PR #38) leaves the shards' images on disk
+#    and keeps every old set whole; without it the old sets are halved until under 21.3 GB as before (round 11's
+#    order first), and more of them than before
+# 3. mc13 on the new suites, round 11's curve courses and round 10's town suites (both renderers, Sapporo _pat3)
+# Written in the cloud (no GPU) and not run end to end: every collect.py command was tried on a few hundred frames (the
+# DAgger ones with keipilot_mc.pt = mc12 on the CPU, the KeiView ones not: no browser in the cloud). Every step skips
+# what is already there.
 set -x
 cd "$(git rev-parse --show-toplevel)"
 export OMP_NUM_THREADS=2
-grep -q -- "--focus_crosswalk" scripts/collect.py && grep -q '"crosswalks_sub"' scripts/evaluate.py \
-    || { echo "not the code with the crosswalks (PR #31) and round 12's collect.py options"; exit 1; }
+grep -q -- "--focus_crosswalk" scripts/collect.py && grep -q -- "--focus_bicycle" scripts/collect.py \
+    && grep -q '"bigjunction_bk8"' scripts/evaluate.py && grep -q 'turn_rule' keisim/config.py \
+    || { echo "not the code with the crosswalks (PR #31), big junctions (#33, #39) and bicycles (#35, #40)"; exit 1; }
+MMAP=${MMAP:-0}
+[ $MMAP = 1 ] && { grep -q -- "--mmap" scripts/train.py || { echo "MMAP=1: train.py has no --mmap (PR #38)"; exit 1; }; }
 M12=runs/keipilot_mc12/last.pt
 [ -f $M12 ] || { echo "$M12 (round 11) is missing"; exit 1; }
 R="--rig wide_narrow"
 L="--brake_hold --red_hold --yield_hold 4 1 3.5 4 0.5 0.5 10"
 
-# ---- 0. mc12 on the crosswalk suites
+# ---- 0. mc12 on the new suites
 T12=keipilot_mc12_hold_red_yh_4_1_3.5_4_0.5_0.5_10
 E12="uv run scripts/evaluate.py --agent model --ckpt $M12 $L"
-[ -f runs/eval/${T12}_crosswalks.json ] || $E12 --suite crosswalks --workers 6 || exit 1
-[ -f runs/eval/${T12}_crosswalks_sub.json ] || $E12 --suite crosswalks_sub --workers 6 || exit 1
-[ -f runs/eval/${T12}_crosswalks_keiview.json ] || $E12 --suite crosswalks --renderer keiview --workers 3 || exit 1
+for s in crosswalks crosswalks_sub bigjunction crosswalks_bk8 crosswalks_sub_bk8 bigjunction_bk8; do
+  [ -f runs/eval/${T12}_$s.json ] || $E12 --suite $s --workers 6 || exit 1
+done
+for s in crosswalks bigjunction; do
+  [ -f runs/eval/${T12}_${s}_keiview.json ] || $E12 --suite $s --renderer keiview --workers 3 || exit 1
+done
 echo R12_BASELINE_DONE
 
 # ---- 1. data
 TP="--town_style twophase --jam_fixes 1"
 SUB="--town_style suburban --jam_fixes 1"
-C="--crosswalks 0.7 --crosswalk_spawn 3 --focus_yield 0.15 --focus_reasons yield junction_blocked crosswalk --focus_crosswalk 30"
+BJ="--town_style bigjunction --jam_fixes 1"
+CW="--crosswalks 0.7 --crosswalk_spawn 3 --focus_yield 0.15 --focus_crosswalk 30"
+C="$CW --focus_reasons yield junction_blocked crosswalk"
+CB="$CW --focus_reasons yield junction_blocked crosswalk lane_change --npc_past_line 2"
+CK="$CW --focus_reasons yield junction_blocked crosswalk bicycle --bicycles 8 --bike_visible 1 --focus_bicycle 15 \
+    --npc_past_line 2 --bike_sweep 1"
 col() {   # col NAME ARGS...: collect.py into data/NAME, once
   local n=$1; shift
   [ -f data/$n/.done ] && return
-  uv run scripts/collect.py $R $C "$@" --out data/$n || return 1
+  uv run scripts/collect.py $R "$@" --out data/$n || return 1
   touch data/$n/.done
 }
-col mc_cw_expert $TP --frames 25000 --workers 10 --seed 3121 || exit 1
-col mc_cw_sub_expert $SUB --frames 15000 --workers 10 --seed 3124 || exit 1
-col mc_cw_dagger_mc12 $TP --mode dagger --ckpt $M12 --frames 20000 --workers 6 --seed 3123 || exit 1
-col mc_cw_sub_dagger_mc12 $SUB --mode dagger --ckpt $M12 --frames 10000 --workers 6 --seed 3125 || exit 1
-col mc_cw_kv_expert $TP --renderer keiview --episodes_per_town 3 --frames 10000 --workers 3 --seed 3122 || exit 1
+# a. crosswalks (as in the first round12.sh)
+col mc_cw_expert $TP $C --frames 25000 --workers 10 --seed 3121 || exit 1
+col mc_cw_sub_expert $SUB $C --frames 15000 --workers 10 --seed 3124 || exit 1
+col mc_cw_dagger_mc12 $TP $C --mode dagger --ckpt $M12 --frames 20000 --workers 6 --seed 3123 || exit 1
+col mc_cw_sub_dagger_mc12 $SUB $C --mode dagger --ckpt $M12 --frames 10000 --workers 6 --seed 3125 || exit 1
+col mc_cw_kv_expert $TP $C --renderer keiview --episodes_per_town 3 --frames 10000 --workers 3 --seed 3122 || exit 1
+# b. big junctions (collect.py's town seeds 0-399: the bigjunction suites use 3000-3009)
+col mc_bj_expert $BJ $CB --frames 25000 --workers 10 --seed 3131 || exit 1
+col mc_bj_dagger_mc12 $BJ $CB --mode dagger --ckpt $M12 --frames 15000 --workers 6 --seed 3133 || exit 1
+col mc_bj_kv_expert $BJ $CB --renderer keiview --episodes_per_town 3 --frames 8000 --workers 3 --seed 3132 || exit 1
+# c. bicycles
+col mc_bk_expert $TP $CK --frames 20000 --workers 10 --seed 3141 || exit 1
+col mc_bk_sub_expert $SUB $CK --frames 10000 --workers 10 --seed 3144 || exit 1
+col mc_bk_dagger_mc12 $TP $CK --mode dagger --ckpt $M12 --frames 10000 --workers 6 --seed 3143 || exit 1
+col mc_bk_sub_dagger_mc12 $SUB $CK --mode dagger --ckpt $M12 --frames 5000 --workers 6 --seed 3145 || exit 1
+col mc_bk_kv_expert $TP $CK --renderer keiview --episodes_per_town 3 --frames 8000 --workers 3 --seed 3142 || exit 1
 echo R12_COLLECT_DONE
 
 # ---- 2. mc13
@@ -102,13 +146,22 @@ W="$W data/mc_guard_expert=1 data/mc_guard_kv_expert=1 data/mc_guard_dagger_mc11
 D="$D data/mc_cw_expert data/mc_cw_sub_expert data/mc_cw_dagger_mc12 data/mc_cw_sub_dagger_mc12 data/mc_cw_kv_expert"
 W="$W data/mc_cw_expert=2 data/mc_cw_sub_expert=2 data/mc_cw_dagger_mc12=2 data/mc_cw_sub_dagger_mc12=2"
 W="$W data/mc_cw_kv_expert=2"
+D="$D data/mc_bj_expert data/mc_bj_dagger_mc12 data/mc_bj_kv_expert"
+W="$W data/mc_bj_expert=2 data/mc_bj_dagger_mc12=2 data/mc_bj_kv_expert=2"
+D="$D data/mc_bk_expert data/mc_bk_sub_expert data/mc_bk_dagger_mc12 data/mc_bk_sub_dagger_mc12 data/mc_bk_kv_expert"
+W="$W data/mc_bk_expert=1 data/mc_bk_sub_expert=1 data/mc_bk_dagger_mc12=1 data/mc_bk_sub_dagger_mc12=1"
+W="$W data/mc_bk_kv_expert=1"
 gb() { du -sLc "$@" | tail -1 | awk '{printf "%.1f", $1 / 1048576}'; }
 echo "training data: $(gb $D) GB"
-# the RAM: halve until under 21.3 GB, round 11's order first (the older and more general sets), then older DAgger sets
+if [ $MMAP = 0 ]; then
+# the RAM (MMAP=0): halve until under 21.3 GB, round 11's order first (the older and more general sets), then older
+# DAgger sets; the new sets are ~4 GB more than the first round12.sh had, so the list goes on to more old DAgger sets
 for s in mc_osm_dagger_mc7 mc_kv_expert_half mc_tp_kv_expert_half mc_tp_expert_half_half mc_osm_kv_dagger_mc4_half_half \
          mc_osm_kv_dagger_mc5b_half_half mc_osm_y_dagger_mc7 mc_osm_kv_dagger_mc7 \
          mc_osm_dagger_mc6_half mc_osm_y_dagger_mc6_half mc_osm_kv_dagger_mc6_half_half mc_tp_dagger_mc7_half \
-         mc_ped_dagger_mc3_half mc_vped_dagger_mc3_half mc_kv_dagger_mc3_half mc_tp3_dagger_mc3_half; do
+         mc_ped_dagger_mc3_half mc_vped_dagger_mc3_half mc_kv_dagger_mc3_half mc_tp3_dagger_mc3_half \
+         mc_osm_dagger_mc5b_half mc_osm_y_dagger_mc5b_half mc_osm_dagger_mc4_half_half mc_osm_y_dagger_mc4_half_half \
+         mc_osm_dagger_mc3_half_half mc_osm_y_dagger_mc3_half_half mc_fl_dagger_mc2_half mc_ped_dagger_mc2_half; do
   awk -v g="$(gb $D)" 'BEGIN { exit !(g >= 21.3) }' || break
   half $s
   D=" $D "; D="${D/ data\/$s / data/${s}_half }"; D="${D# }"; D="${D% }"
@@ -116,9 +169,11 @@ for s in mc_osm_dagger_mc7 mc_kv_expert_half mc_tp_kv_expert_half mc_tp_expert_h
   echo "training data with $s halved: $(gb $D) GB"
 done
 awk -v g="$(gb $D)" 'BEGIN { exit !(g >= 21.5) }' && { echo "training data still $(gb $D) GB"; exit 1; }
+fi
 [ -f runs/keipilot_mc13/last.pt ] || {
   ls -d $D >/dev/null || exit 1
   T="--bs 48 --speed_input --speed_drop 0.5 --cf_prob 0.5 --cf_weight 1.5 --mem_input --aux_weight 0.5 --workers 8 --kv_weight 2 --dagger_weight 2"
+  [ $MMAP = 1 ] && T="$T --mmap"
   uv run scripts/train.py --data $D --init $M12 --out runs/keipilot_mc13 --epochs 4 \
       --samples_per_epoch 200000 $T $W || exit 1; }
 echo R12_TRAIN_MC13_DONE
@@ -128,10 +183,12 @@ M=runs/keipilot_mc13/last.pt
 TAG=keipilot_mc13_hold_red_yh_4_1_3.5_4_0.5_0.5_10
 E="uv run scripts/evaluate.py --agent model --ckpt $M $L"
 ev() { local name=$1; shift; [ -f runs/eval/${TAG}_$name.json ] || $E "$@"; }
-ev crosswalks --suite crosswalks --workers 6
-ev crosswalks_sub --suite crosswalks_sub --workers 6
+for s in crosswalks crosswalks_sub bigjunction crosswalks_bk8 crosswalks_sub_bk8 bigjunction_bk8; do
+  ev $s --suite $s --workers 6
+done
 ev crosswalks_keiview --suite crosswalks --renderer keiview --workers 3
-echo R12_CROSSWALKS_MC13_DONE
+ev bigjunction_keiview --suite bigjunction --renderer keiview --workers 3
+echo R12_NEW_SUITES_MC13_DONE
 curve() {   # curve NAME CKPT: round 11's curve courses
   local n=$1 C="uv run scripts/curve_test.py --agent model --ckpt $2 $L --tp ahead"
   for ep in 0 1 2 3; do $C --weather noon --episode $ep --variants weak weak_lines --tag ${n}_weak_ep$ep || return 1; done

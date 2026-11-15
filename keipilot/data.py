@@ -5,6 +5,7 @@ import glob
 import json
 import math
 import os
+import struct
 import zipfile
 
 import cv2
@@ -157,11 +158,109 @@ def _n_cams(zf):
     return c
 
 
-def load_shards(dirs, with_prev=True):
+def _member_data(path, zf, key):
+    """(offset, length) of the data of 1-D uint8 array `key` inside shard `path` (an open zipfile of it): np.savez
+    stores its members uncompressed, so the bytes sit as they are in the file, after the member's local zip header
+    and its .npy header. (0, 0) if the shard has no such array."""
+    try:
+        info = zf.getinfo(key + ".npy")
+    except KeyError:
+        return 0, 0
+    if info.compress_type != zipfile.ZIP_STORED:
+        raise ValueError(f"{path}: {key} is compressed (np.savez_compressed); disk reading needs np.savez shards")
+    with open(path, "rb") as fp:
+        fp.seek(info.header_offset)
+        head = fp.read(30)
+        if head[:4] != b"PK\x03\x04":
+            raise ValueError(f"{path}: no local zip header for {key}")
+        n_name, n_extra = struct.unpack("<HH", head[26:30])
+        fp.seek(info.header_offset + 30 + n_name + n_extra)
+        version = np.lib.format.read_magic(fp)
+        read = np.lib.format.read_array_header_1_0 if version == (1, 0) else np.lib.format.read_array_header_2_0
+        shape, _, dtype = read(fp)
+        if dtype != np.uint8 or len(shape) != 1:
+            raise ValueError(f"{path}: {key} is not a 1-D uint8 array ({dtype}, {shape})")
+        return fp.tell(), int(shape[0])
+
+
+_MAPS = {}      # (path, inode, size, mtime) -> np.memmap of the whole shard file, shared by its arrays
+
+
+def _shard_map(path):
+    """The process's one read-only map of shard file `path` (each map holds a file descriptor). The soft limit of
+    open files is raised towards the hard one when needed (the usual soft limit is 1024; a round's data has ~1000
+    shard files)."""
+    st = os.stat(path)
+    key = (os.path.abspath(path), st.st_ino, st.st_size, st.st_mtime_ns)
+    if key not in _MAPS:
+        try:
+            import resource
+            soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+            if soft != resource.RLIM_INFINITY and len(_MAPS) + 256 > soft:
+                want = 2 * soft + 256 if hard == resource.RLIM_INFINITY else min(hard, 2 * soft + 256)
+                if want > soft:
+                    resource.setrlimit(resource.RLIMIT_NOFILE, (want, hard))
+        except (ImportError, ValueError, OSError):
+            pass
+        _MAPS[key] = np.memmap(path, np.uint8, "r")
+    return _MAPS[key]
+
+
+class ShardBytes:
+    """A byte buffer of load_shards(..., mmap=True): one array key (jpg, seg, ...) of every shard, read from the
+    shard files through np.memmap instead of copied into memory. It is sliced like the in-memory buffer, with the
+    same global offsets (jpg_off, ...); a slice must lie within one shard, as every frame's bytes do. The pages
+    read are file-backed (the kernel's page cache), so they do not count against the process's own memory and are
+    dropped under memory pressure. Pickling (DataLoader workers started with spawn / forkserver) keeps only the
+    file names and offsets and maps the files again."""
+
+    def __init__(self, parts):
+        """parts: (path, offset in the file, length) per shard, in the order of the global buffer."""
+        self.parts = [(p, int(o), int(n)) for p, o, n in parts]
+        self.starts = np.concatenate([[0], np.cumsum([n for _, _, n in self.parts])]).astype(np.int64)
+        self._open()
+
+    def _open(self):
+        self.views = [_shard_map(p)[o:o + n] if n else np.zeros(0, np.uint8) for p, o, n in self.parts]
+
+    def __getstate__(self):
+        return {"parts": self.parts, "starts": self.starts}
+
+    def __setstate__(self, st):
+        self.parts, self.starts = st["parts"], st["starts"]
+        self._open()
+
+    def __len__(self):
+        return int(self.starts[-1])
+
+    @property
+    def nbytes(self):
+        return len(self)
+
+    def __getitem__(self, s):
+        if not isinstance(s, slice) or s.step not in (None, 1):
+            raise TypeError("ShardBytes takes contiguous slices [a:b] only")
+        a, b = int(s.start or 0), len(self) if s.stop is None else int(s.stop)
+        if b <= a:
+            return np.zeros(0, np.uint8)
+        k = int(np.searchsorted(self.starts, a, side="right")) - 1
+        base = int(self.starts[k])
+        if b > self.starts[k + 1]:
+            raise IndexError(f"slice [{a}:{b}] crosses a shard boundary")
+        return np.asarray(self.views[k][a - base:b - base])
+
+    def __array__(self, dtype=None, copy=None):
+        out = np.concatenate([np.asarray(v) for v in self.views]) if self.views else np.zeros(0, np.uint8)
+        return out if dtype is None else out.astype(dtype)
+
+
+def load_shards(dirs, with_prev=True, mmap=False):
     """All shards of `dirs` in memory. The byte buffers (jpg, seg, jpg_prev; ~45 GB for v0.7's data) are allocated
     once from the shard headers and filled in place, so loading peaks at about the data size instead of twice that.
     with_prev=False skips the earlier frames (a quarter of the bytes) for single-frame models.
-    Shards of a camera rig also hold jpg_c1 / seg_c1, ... (data["n_cams"] cameras); all shards need the same rig."""
+    Shards of a camera rig also hold jpg_c1 / seg_c1, ... (data["n_cams"] cameras); all shards need the same rig.
+    mmap=True leaves the byte buffers on disk (ShardBytes, read through np.memmap): only the labels and offsets are
+    in memory, and the buffers are sliced with the same offsets, so the frames are the same as with mmap=False."""
     files = []
     dir_version, dir_renderer = {}, {}
     for d in dirs if isinstance(dirs, (list, tuple)) else [dirs]:
@@ -174,18 +273,26 @@ def load_shards(dirs, with_prev=True):
             dir_renderer[f] = m.get("renderer", "keisim")
     if not files:
         raise FileNotFoundError(f"no shards in {dirs}")
-    sizes, cams = [], []
+    sizes, cams, where = [], [], []
     for f in files:
         with zipfile.ZipFile(f) as zf:
             cams.append(_n_cams(zf))
-            sizes.append((_npy_len(zf, "jpg"), _npy_len(zf, "seg"), _npy_len(zf, "jpg_prev") if with_prev else 0)
-                         + tuple(_npy_len(zf, f"{k}_c{c}") for c in range(1, cams[-1]) for k in ("jpg", "seg")))
+            keys = ("jpg", "seg", "jpg_prev") + tuple(f"{k}_c{c}" for c in range(1, cams[-1]) for k in ("jpg", "seg"))
+            if mmap:
+                where.append([_member_data(f, zf, k) if (k != "jpg_prev" or with_prev) else (0, 0) for k in keys])
+                sizes.append(tuple(n for _, n in where[-1]))
+            else:
+                sizes.append(tuple(_npy_len(zf, k) if (k != "jpg_prev" or with_prev) else 0 for k in keys))
     n_cams = cams[0]
     if any(c != n_cams for c in cams):
         raise ValueError(f"shards of different camera rigs ({sorted(set(cams))} cameras) in {dirs}")
     extra_keys = tuple(f"{k}_c{c}" for c in range(1, n_cams) for k in ("jpg", "seg"))
     total = np.sum(np.array(sizes, np.int64), axis=0)
-    buf = {k: np.empty(int(n), np.uint8) for k, n in zip(("jpg", "seg", "jpg_prev") + extra_keys, total)}
+    buf_keys = ("jpg", "seg", "jpg_prev") + extra_keys
+    if mmap:            # the shards' own bytes, in file order; filled below only with the offsets
+        buf = {k: ShardBytes([(f, *where[fi][j]) for fi, f in enumerate(files)]) for j, k in enumerate(buf_keys)}
+    else:
+        buf = {k: np.empty(int(n), np.uint8) for k, n in zip(buf_keys, total)}
     xo, xbase = {k: [] for k in extra_keys}, dict.fromkeys(extra_keys, 0)
     jo, so, src = [], [], []
     po, pbase = [], 0
@@ -196,19 +303,22 @@ def load_shards(dirs, with_prev=True):
         z = np.load(f)
         nj, ns, npv = sizes[fi][:3]
         src.append(np.full(len(z["jpg_off"]) - 1, fi, np.int32))
-        buf["jpg"][jbase:jbase + nj] = z["jpg"]
-        buf["seg"][sbase:sbase + ns] = z["seg"]
+        if not mmap:
+            buf["jpg"][jbase:jbase + nj] = z["jpg"]
+            buf["seg"][sbase:sbase + ns] = z["seg"]
         jo.append(z["jpg_off"][:-1] + jbase)
         so.append(z["seg_off"][:-1] + sbase)
         jbase += nj
         sbase += ns
         for key, nx in zip(extra_keys, sizes[fi][3:]):
-            buf[key][xbase[key]:xbase[key] + nx] = z[key]
+            if not mmap:
+                buf[key][xbase[key]:xbase[key] + nx] = z[key]
             xo[key].append(z[key + "_off"][:-1] + xbase[key])
             xbase[key] += nx
         n_frames = len(z["jpg_off"]) - 1
         if npv:
-            buf["jpg_prev"][pbase:pbase + npv] = z["jpg_prev"]
+            if not mmap:
+                buf["jpg_prev"][pbase:pbase + npv] = z["jpg_prev"]
             po.append(z["jpg_prev_off"][:-1] + pbase)
             pbase += npv
         else:                                        # no history recorded (or not loaded): zero-length entries

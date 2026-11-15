@@ -1,5 +1,4 @@
 """Basic invariants of the simulator (run: python -m pytest tests -q)."""
-import math
 import os
 import sys
 
@@ -572,6 +571,63 @@ def test_load_shards_fills_buffers_in_place(tmp_path):
     no_prev, _ = load_shards(dirs, with_prev=False)
     assert len(no_prev["jpg_prev"]) == 0 and not np.any(np.diff(no_prev["jpg_prev_off"]))
     assert np.array_equal(no_prev["jpg"], data["jpg"]) and np.array_equal(no_prev["jpg_off"], data["jpg_off"])
+
+
+def test_load_shards_mmap_same_batches(tmp_path):
+    """load_shards(mmap=True) leaves the image bytes in the shard files (ShardBytes over np.memmap): the same labels,
+    offsets and bytes as reading them into memory, so a seeded sampler gives the same batches (images, labels and
+    sample weights), in the main process, in DataLoader workers and after pickling (spawn / forkserver)."""
+    import pickle
+
+    import pytest
+    import torch
+    from keipilot.data import LABEL_KEYS, DrivingDataset, ShardBytes, ShardWriter, load_shards
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
+    from train import sample_weights
+
+    rng = np.random.default_rng(0)
+    lab = lambda i: {k: (rng.normal(size=2).astype(np.float32) if k == "tp" else
+                         rng.normal(size=(10, 2)).astype(np.float32) if k == "path" else
+                         np.float32(rng.uniform(0, 10)) if k in ("speed", "v") else int(rng.integers(0, 11)) if k == "reason"
+                         else i) for k in LABEL_KEYS}
+    for d, with_prev, rig in (("a", True, False), ("b", False, False), ("r", False, True), ("s", True, True)):
+        w = ShardWriter(str(tmp_path / d), "dagger" if d == "b" else "expert", frames_per_shard=4)
+        for i in range(9):
+            rgb = rng.integers(0, 255, (16, 32, 3), dtype=np.uint8)
+            seg = rng.integers(0, 9, (16, 32), dtype=np.uint8)
+            prev = rng.integers(0, 255, (16, 32, 3), dtype=np.uint8) if with_prev and i % 3 else None
+            extra = [(rng.integers(0, 255, (16, 32, 3), dtype=np.uint8), seg)] if rig else ()
+            w.add(rgb, seg, prev=prev, extra=extra, **lab(i))
+        w.flush()
+    for dirs in (["a", "b"], ["r", "s"]):
+        dirs = [str(tmp_path / d) for d in dirs]
+        for with_prev in (True, False):
+            mem, files = load_shards(dirs, with_prev=with_prev)
+            disk, files_d = load_shards(dirs, with_prev=with_prev, mmap=True)
+            assert files == files_d and set(mem) == set(disk)
+            for k, v in mem.items():
+                if isinstance(disk[k], ShardBytes):
+                    assert len(disk[k]) == len(v) and np.array_equal(np.asarray(disk[k]), v), k
+                else:
+                    assert np.array_equal(disk[k], v, equal_nan=v.dtype.kind == "f") if isinstance(v, np.ndarray) \
+                        else disk[k] == v, k
+            assert np.array_equal(sample_weights(mem, 2.0, 2.0), sample_weights(disk, 2.0, 2.0))
+            n = len(mem["cmd"])
+            batches = []
+            for d_, workers in ((mem, 0), (disk, 0), (disk, 2), (pickle.loads(pickle.dumps(disk)), 0)):
+                sampler = torch.utils.data.WeightedRandomSampler(torch.from_numpy(sample_weights(d_)), num_samples=24,
+                                                                 generator=torch.Generator().manual_seed(5))
+                dl = torch.utils.data.DataLoader(DrivingDataset(d_, np.arange(n), train=False), batch_size=6,
+                                                 sampler=sampler, num_workers=workers)
+                batches.append(list(dl))
+            for other in batches[1:]:
+                for b0, b1 in zip(batches[0], other, strict=True):
+                    for k in b0:
+                        x, y = b0[k].numpy(), b1[k].numpy()
+                        assert np.array_equal(x, y, equal_nan=x.dtype.kind == "f"), k
+            assert DrivingDataset(disk, np.arange(n), train=True)[n - 1]["img"].shape == batches[0][0]["img"][0].shape
+    with pytest.raises(IndexError):          # a slice across two shards is not a frame
+        disk["jpg"][int(disk["jpg_off"][3]):int(disk["jpg_off"][5])]
 
 
 def test_late_yield_after_overshoot():
@@ -1579,58 +1635,6 @@ def test_scramble_crossings():
     assert seen > 0
 
 
-def test_unique_turns():
-    """roadnet.unique_turns: the exits of one approach never share a turn; turn_of where it already tells them apart,
-    else by their order (the arm across a 4-arm junction is straight even when it bends)."""
-    from keisim.roadnet import unique_turns
-    r = math.radians
-    assert unique_turns([r(-90), r(0), r(90)]) == ["right", "straight", "left"]
-    assert unique_turns([r(-80), r(29), r(110)]) == ["right", "straight", "left"]          # the arm across bends left
-    assert unique_turns([r(73), r(-108), r(-37)]) == ["left", "right", "straight"]          # ... or right
-    assert unique_turns([r(-113), r(-41)]) == ["right", "straight"]                          # a Y: the nearer one
-    assert unique_turns([r(41), r(108)]) == ["straight", "left"]
-    assert unique_turns([r(-20), r(15)]) == ["right", "left"]                                # a fork, both ahead
-    assert unique_turns([r(-90), r(90)]) == ["right", "left"]                                # a T from its stem
-    assert unique_turns([r(10)]) == ["straight"] and unique_turns([r(80)]) == ["left"]       # a bend
-
-
-def test_unique_turns_town():
-    """TownConfig.unique_turns (on in the bigjunction towns): no approach of a junction has two exits of one turn,
-    so the route command names one way out; off (the other styles), skewed junctions can have two. Town 3009
-    junction 8: the arm across bends 29 deg to the left, beside a 110 deg left turn."""
-    import dataclasses
-
-    from keisim.config import town_config
-    cfg = town_config("bigjunction")
-    assert cfg.unique_turns
-
-    def shared(town):
-        n = 0
-        for J in town.junctions:
-            for arm in J.arms:
-                roads = {}
-                for lid in arm["ins"]:
-                    for c in town.lanes[lid].succ:
-                        roads.setdefault(town.lanes[c].turn, set()).add(town.lanes[town.lanes[c].succ[0]].road)
-                n += any(len(v) > 1 for v in roads.values())
-        return n
-
-    t = Town(3009, cfg)
-    assert shared(t) == 0
-    assert shared(Town(3009, dataclasses.replace(cfg, unique_turns=False))) > 0
-    J = t.junctions[8]
-    for arm in J.arms:
-        if not arm["ins"]:
-            continue
-        h = t.lanes[arm["ins"][0]].heading[-1]
-        turns = {round(math.degrees(d)): tt for _, d, tt in t._exit_turns(J, arm, h)}
-        if 29 in turns:
-            assert turns == {-80: "right", 29: "straight", 110: "left"}
-            break
-    else:
-        raise AssertionError("town 3009 junction 8 changed")
-
-
 def test_bigjunction_town():
     """bigjunction towns: main roads with a centre strip (RoadSpec.median) and right-turn lanes (lane kind 'pocket')
     before their signals; only the right-turn lane turns right there, cars change into it from the inner lane, and
@@ -1685,3 +1689,330 @@ def test_bigjunction_town():
         if done:
             break
     assert info["status"] == "success" and not info["infractions"] and on_pocket > 0
+
+
+def test_turn_rule_ordered():
+    """TownConfig.turn_rule "ordered" (bigjunction towns): where two exits of a junction approach share "left" (or
+    "right") by the heading alone, the one closest to straight ahead becomes "straight", so every exit of an approach
+    has its own command; approaches without such a pair keep their turns. The other styles keep "heading"."""
+    from keisim.config import TOWN_STYLES, town_config
+    from keisim.roadnet import turn_labels
+    assert turn_labels([0.71, 1.89]) == ["left", "left"]
+    assert turn_labels([0.71, 1.89], "ordered") == ["straight", "left"]
+    assert turn_labels([-1.97, -0.71], "ordered") == ["right", "straight"]
+    assert turn_labels([-1.72, -0.51, 1.24], "ordered") == ["right", "straight", "left"]
+    assert turn_labels([-1.6, 0.7], "ordered") == ["right", "left"]          # no pair: as by the heading
+    assert turn_labels([0.2, 0.7, 1.5], "ordered") == ["straight", "left", "left"]   # a straight one already
+    assert turn_labels([1.1, 1.9], "ordered") == ["left", "left"]            # nothing close to straight ahead
+    assert [s for s, d in TOWN_STYLES.items() if d.get("turn_rule", "heading") != "heading"] == ["bigjunction"]
+
+    def approaches(T):
+        out = {}
+        for L in T.lanes:
+            for c in L.succ:
+                C = T.lanes[c]
+                if L.kind != "conn" and C.kind == "conn" and len(T.junctions[C.junction].arms) >= 3:
+                    out.setdefault((C.junction, L.road), set()).add((C.turn, T.lanes[C.succ[0]].road))
+        return out
+
+    def n_ambiguous(T):
+        return sum(len({t for t, _ in v}) < len({r for _, r in v}) for v in approaches(T).values())
+
+    old = town_config("bigjunction")
+    old.turn_rule = "heading"
+    for seed in (3005, 3009):                    # 2 and 4 ambiguous approaches by the heading alone
+        a, b = Town(seed, old), Town(seed, town_config("bigjunction"))
+        assert n_ambiguous(a) > 0 and n_ambiguous(b) == 0
+        same = sum(approaches(a)[k] == v for k, v in approaches(b).items())
+        assert same >= len(approaches(b)) - n_ambiguous(a)
+
+
+def _bike_env(density=10.0, style=None):
+    from keisim.config import town_config
+    cfg = EnvConfig()
+    if style:
+        cfg.town = town_config(style)
+    cfg.traffic.bicycles = density
+    cfg.render_rgb = cfg.render_seg = False
+    return KeiEnv(cfg)
+
+
+def test_bicycles_off_by_default_and_replay():
+    """TrafficConfig.bicycles is 0 unless asked for (no rider, nothing for the renderers); with it on, the same
+    seeds give the same riders."""
+    assert EnvConfig().traffic.bicycles == 0.0
+    env = KeiEnv(EnvConfig())
+    env.reset(town_seed=3, episode_seed=7, render=False)
+    assert env.world.bikes is None or env.world.bikes.n == 0
+    assert getattr(env.world.scene_state(), "bike_xy", None) is None
+    runs = []
+    for _ in range(2):
+        env = _bike_env()
+        env.reset(town_seed=3, episode_seed=7, render=False)
+        for _ in range(120):
+            env.step(env.expert_action())
+        bk = env.world.bikes
+        runs.append(np.concatenate([bk.xy.ravel(), bk.v, bk.yaw, bk.roll, bk.crank]))
+    assert bk.n >= 5 and np.array_equal(runs[0], runs[1])
+
+
+def test_bicycles_ride_the_left_edge_and_keep_clear():
+    """Riders stay on the road surface left of their lane's centre line, at a bicycle's speed, lean into their
+    turns, stop for red lights, and neither they nor the cars (the expert's included) touch each other."""
+    from keisim.bicycles import BIKE_LEN, BIKE_W
+    from keisim.config import TL_RED
+    from keisim.geometry import box_corners, obb_overlap
+    for town_seed, style in ((5, None), (1015, "twophase")):
+        env = _bike_env(12.0, style)
+        env.reset(town_seed=town_seed, episode_seed=100 + town_seed, render=False)
+        w = env.world
+        bk, tr, town = w.bikes, w.traffic, w.town
+        assert bk.n >= 8
+        vs, ran_red, lean = [], 0, []
+        for _ in range(500):
+            lane0, s0 = bk.lane.copy(), bk.lane_s.copy()
+            _, _, done, info = env.step(env.expert_action())
+            assert not done, info
+            assert np.isfinite(bk.xy).all() and np.isfinite(bk.yaw).all()
+            assert town.is_drivable(bk.xy).all()
+            assert (bk.v >= 0).all() and bk.v.max() < 9.5 and np.abs(bk.roll).max() < 0.6
+            assert bk.side.min() > -0.6                              # never far over the centre line of their lane
+            bc = box_corners(bk.xy[:, 0], bk.xy[:, 1], bk.yaw, np.full(bk.n, BIKE_LEN), np.full(bk.n, BIKE_W))
+            cc = box_corners(tr.xy[:, 0], tr.xy[:, 1], tr.yaw, tr.dims[:, 0], tr.dims[:, 1])
+            for j in range(bk.n):
+                near = np.nonzero(np.hypot(*(tr.xy - bk.xy[j]).T) < 6.0)[0]
+                assert not len(near) or not obb_overlap(bc[j], cc[near]).any()
+                lane = town.lanes[bk.lane[j]]
+                if (lane.stop_s is not None and bk.lane[j] == lane0[j] and s0[j] < lane.stop_s + 0.3 <= bk.lane_s[j]
+                        and bk.lane_s[j] - s0[j] < 1.0 and town.signal_state_for_lane(lane.id, w.t) == TL_RED):
+                    ran_red += 1
+            vs.append(bk.v.mean())
+            lean.append(np.corrcoef(bk.roll, bk.yawrate * bk.v)[0, 1] if bk.v.std() > 0 and np.abs(bk.yawrate).max() > 0.2
+                        else np.nan)
+        assert 1.5 < np.mean(vs) < 6.5                               # 5 .. 23 km/h with the waits at lights
+        assert ran_red == 0
+        assert np.nanmean(lean) > 0.5                                # leaning to the inside of the turn
+
+
+def test_bicycles_in_the_renderers():
+    """A rider in front of the camera is drawn as a vehicle (the bike) and a pedestrian (the rider); KeiView gets one
+    row for each bike with its type, size, colours and pose."""
+    import math
+    from keisim.config import SEM
+    from keisim.render.camera import CameraRenderer
+    from keisim.render.keiview import KeiViewRenderer
+    cfg = EnvConfig()
+    cfg.traffic.bicycles = 10.0
+    env = KeiEnv(cfg)
+    env.reset(town_seed=1, episode_seed=3, render=False)
+    w = env.world
+    st = w.scene_state()
+    e = w.ego
+    for k in ("veh_xy", "veh_yaw", "veh_dims", "veh_kind", "veh_color", "veh_brake", "ped_xy"):
+        setattr(st, k, getattr(st, k)[:0])
+    st.bike_xy = np.array([[e.x + 7 * math.cos(e.yaw), e.y + 7 * math.sin(e.yaw)]])
+    st.bike_yaw = np.array([e.yaw + math.pi / 2])
+    st.bike_pose = np.array([[0.1, 0.1, 1.0, 2.0, 0.0, -1.0, 0.5]])
+    st.bike_kind, st.bike_height, st.bike_colors = np.array([0]), np.array([1.7]), w.bikes.colors[:1]
+    a = env.assets
+    a.cameras
+    _, seg = CameraRenderer(a.town, a.tex, a._static, cfg.cameras[0]).render(e.pose, st, env.weather)
+    assert (seg == SEM["vehicle"]).sum() > 20 and (seg == SEM["pedestrian"]).sum() > 20
+    veh, ped, bike = KeiViewRenderer._actors(type("R", (), {"max_dist": 150.0})(), np.array([e.x, e.y, 1.2]), st)
+    assert not veh and not ped and len(bike) == 1 and len(bike[0]) == 25
+    assert bike[0][4] == 0 and abs(bike[0][5] - 1.7) < 1e-6 and bike[0][18:] == [0.1, 0.1, 1.0, 2.0, 0.0, -1.0, 0.5]
+
+
+def test_expert_moves_over_for_a_bicycle_only_on_its_road():
+    """The expert's path moves over to the right for a bicycle it will pass, but not while the path is still in the
+    junction before the bicycle's road (a right turn's wait point moved 0.5 m towards the oncoming lane: the ego
+    and an oncoming car blocked each other for good, long3c 1012/9400 with bicycles)."""
+    import math
+    from keisim.expert import BIKE_START, PATH_S
+    env = _bike_env(10.0, "twophase")
+    env.reset(town_seed=1012, episode_seed=9400, route_length=600.0)
+    w, ex, route = env.world, env.expert, env.route
+    bk = w.bikes
+    jn = next(j for j in route.junctions
+              if j["s_in"] > 10.0 and w.town.lanes[route.lanes[route.lane_index_at(j["s_out"] + 1.0)]].length > 60.0)
+    s_b = jn["s_out"] + 12.0                                    # one rider 12 m into the road after the junction
+    h = float(route.poly.heading(s_b))
+    bk.xy[:] = 1e6
+    bk.xy[0] = route.poly.interp(s_b) + 1.5 * np.array([-math.sin(h), math.cos(h)])
+    bk.yaw[0], bk.v[0] = h, 3.0
+
+    def offsets(s):
+        p = route.poly.interp(s)
+        pose = (float(p[0]), float(p[1]), float(route.poly.heading(s)))
+        scan = ex.bike_scan(route, s, pose, 5.0)
+        assert scan["want"][0] > 0.3                            # there is room to move over beside this one
+        none = {k: np.zeros_like(v) for k, v in scan.items()}
+        d = ex.path_local(route, s, pose, scan) - ex.path_local(route, s, pose, none)
+        return s + PATH_S, np.hypot(d[:, 0], d[:, 1])
+    sw, off = offsets(jn["s_in"] - 3.0)                         # the ego about to enter the junction
+    assert (sw < jn["s_out"]).sum() >= 3
+    assert np.abs(off[sw <= jn["s_out"]]).max() < 1e-9
+    sw, off = offsets(jn["s_out"] - 4.0)                        # ... and about to leave it
+    assert np.abs(off[sw <= jn["s_out"]]).max() < 1e-9
+    assert off[sw >= jn["s_out"] + BIKE_START].min() > 0.3
+    assert np.all(np.diff(off) >= -1e-9)
+
+
+def test_a_car_moved_over_for_a_bicycle_checks_where_it_drives():
+    """A car that has moved over to the right for a bicycle looks for obstacles along the line it will drive, not
+    along its lane's centre line: all of the shift while it is held beside the bicycle, the rest of it on the way
+    back (the car waiting to turn right in the middle of a junction was hidden from it)."""
+    from keisim.traffic import BIKE_BACK, corridor_gaps
+    env = _bike_env(12.0, "twophase")
+    env.reset(town_seed=1015, episode_seed=1115, render=False)
+    tr = env.world.traffic
+    n, P = tr.n, 48
+    d = np.tile(np.arange(P) * 1.0, (n, 1))
+    paths = np.stack([d, np.zeros((n, P))], -1)             # every car: straight along +x from the origin
+    tr.yaw = np.zeros(n)
+    tr.v = np.full(n, 5.0)
+    tr.shift = np.full(n, 0.45)
+    tr.shift_tgt = np.full(n, 0.45)                         # held beside the bicycle
+    held = tr._shifted_paths(paths, d)
+    assert np.allclose(held[..., 1], -0.45) and np.allclose(held[..., 0], d)
+    tr.shift_tgt = np.zeros(n)                              # on the way back to the centre line
+    back = tr._shifted_paths(paths, d)
+    assert np.allclose(back[:, 0, 1], -0.45) and (np.diff(back[..., 1], axis=1) >= -1e-9).all()
+    assert (back[:, 2, 1] < -0.45 + BIKE_BACK * 2.0 + 1e-9).all() and np.allclose(back[:, 12:, 1], 0.0, atol=0.01)
+    # something standing just right of the lane: clear of the lane's own line, in the way of the car moved over
+    hl, hw = np.full(n, 2.2), np.full(n, 0.85)
+    obs = (np.array([[9.0, -(0.85 + 0.35 + 0.95 + 0.25)]]), np.array([0.95]), np.array([-1]), np.zeros(1), np.zeros(1))
+    xy0 = np.zeros((n, 2))
+    valid = np.ones((n, P), bool)
+    g0, _, _ = corridor_gaps(paths, d, valid, xy0, tr.yaw, hl, hw, *obs, np.arange(n), 0.35)
+    g1, _, _ = corridor_gaps(held, d, valid, xy0 + [0.0, -0.45], tr.yaw, hl, hw, *obs, np.arange(n), 0.35)
+    assert np.isinf(g0).all() and (g1 < 9.0).all()
+
+
+def test_expert_waits_only_so_long_for_a_bicycle_standing_beside_its_left_turn():
+    """巻き込み確認: the ego stopped before a left turn lets a rider standing beside it go first, for BIKE_LEFT_WAIT s.
+    After that it goes, and keeps going while the rider still stands there (the wait used to start again as soon
+    as the rule let the ego move: one step every 6 s, and both stood for good, long3 1014/9201 with bicycles)."""
+    import math
+    from keisim.expert import BIKE_LEFT_WAIT, PATH_S
+    env = _bike_env(10.0, "twophase")
+    env.reset(town_seed=1014, episode_seed=9201, route_length=600.0, render=False)
+    w, ex, route = env.world, env.expert, env.route
+    bk, ego, L = w.bikes, w.ego, w.town.lanes
+    jn = next(j for j in route.junctions if L[j["lane"]].kind == "conn" and L[j["lane"]].turn == "left")
+    lin = L[L[jn["lane"]].pred[0]]
+    s = jn["s_in"] - (lin.length - lin.stop_s if lin.stop_s is not None else 0.0) - ego.LENGTH / 2 - 0.3
+    p, h = route.poly.interp(s), float(route.poly.heading(s))
+    ego.x, ego.y, ego.yaw = float(p[0]), float(p[1]), h
+    bk.xy[:] = 1e6
+    bk.xy[0] = route.poly.interp(s - 1.0) + 1.5 * np.array([-math.sin(h), math.cos(h)])    # beside the rear door
+    bk.yaw[0], bk.v[0] = h, 0.0
+    pose = (ego.x, ego.y, h)
+    step = env.cfg.dt * env.cfg.action_repeat
+
+    def rule(v):
+        scan = ex.bike_scan(route, s, pose, v)
+        assert scan["along"][0]
+        pts = ex.path_local(route, s, pose, scan)
+        c, sn = math.cos(h), math.sin(h)
+        pts = np.stack([ego.x + c * pts[:, 0] - sn * pts[:, 1], ego.y + sn * pts[:, 0] + c * pts[:, 1]], -1)
+        return ex.bike_rules(route, s, v, scan, pts, np.asarray(PATH_S, float), True)
+    ex._bk_wait = 0.0
+    n_wait = 0
+    while rule(0.0) < 0.3 and n_wait < 200:
+        n_wait += 1
+    assert abs(n_wait * step - BIKE_LEFT_WAIT) <= 2 * step
+    for v in (0.0, 0.4, 1.2, 2.5, 0.0):                         # setting off, the rider still standing there
+        assert rule(v) > 1.0
+    bk.v[0] = 3.0                                               # the rider rides on: the next one is waited for again
+    rule(0.0)
+    assert ex._bk_wait == 0.0
+
+
+def test_expert_bike_visible():
+    """EnvConfig.expert_bike_visible (off by default): before a left turn the expert waits only for the riders the
+    rig's first camera (Mc: the 180 deg wide one) sees. A rider standing beside the rear door is out of its view: the
+    expert goes; one beside the front door is in view: it waits, as it does for both with the option off. A rider
+    coming up unseen from behind, faster than the ego, does not move the expert's path over."""
+    import math
+    from keisim.config import set_camera_rig
+    from keisim.expert import PATH_S
+    assert EnvConfig().expert_bike_visible is False
+    env = _bike_env(10.0, "twophase")
+    set_camera_rig(env.cfg, "wide_narrow")
+    env.reset(town_seed=1014, episode_seed=9201, route_length=600.0, render=False)
+    w, ex, route = env.world, env.expert, env.route
+    bk, ego, L = w.bikes, w.ego, w.town.lanes
+    jn = next(j for j in route.junctions if L[j["lane"]].kind == "conn" and L[j["lane"]].turn == "left")
+    lin = L[L[jn["lane"]].pred[0]]
+    s = jn["s_in"] - (lin.length - lin.stop_s if lin.stop_s is not None else 0.0) - ego.LENGTH / 2 - 0.3
+    p, h = route.poly.interp(s), float(route.poly.heading(s))
+    ego.x, ego.y, ego.yaw, ego.v = float(p[0]), float(p[1]), h, 0.0
+    left = np.array([-math.sin(h), math.cos(h)])
+    pose = (ego.x, ego.y, h)
+
+    def rule(ds, v_bike=0.0, v=0.0):
+        bk.xy[:] = 1e6
+        bk.xy[0] = route.poly.interp(s + ds) + 1.5 * left
+        bk.yaw[0], bk.v[0] = h, v_bike
+        ex._bk_wait = 0.0
+        scan = ex.bike_scan(route, s, pose, v)
+        pts = ex.path_local(route, s, pose, scan)
+        c, sn = math.cos(h), math.sin(h)
+        pts = np.stack([ego.x + c * pts[:, 0] - sn * pts[:, 1], ego.y + sn * pts[:, 0] + c * pts[:, 1]], -1)
+        return ex.bike_rules(route, s, v, scan, pts, np.asarray(PATH_S, float), False), scan
+
+    for on in (False, True):
+        env.cfg.expert_bike_visible = on
+        assert rule(1.5)[0] < 0.3                      # beside the front door: seen, waited for
+        rear, scan = rule(-1.0)                        # beside the rear door: out of the wide camera's view
+        assert scan["along"][0] and scan["visible"][0] == (not on)
+        assert (rear > 1.0) == on
+        fast = rule(-6.0, v_bike=4.0)[1]               # coming up from behind
+        assert fast["along"][0] != on and fast["behind_unseen"][0] == on
+
+
+def test_expert_bike_sweep():
+    """EnvConfig.expert_bike_sweep (off by default): a car pointing off its path (as coming out of a turn) has its
+    front corner out of the path's band; with the option the room beside a rider ahead counts it. A rider standing
+    a little more than BIKE_MIN clear of the path's band (with the room the ego has to move over): the expert keeps going towards it with the car turned 15 deg its way unless the
+    option is on; pointing along the path, both keep going."""
+    import math
+    from keisim.config import set_camera_rig
+    from keisim.expert import PATH_S
+    assert EnvConfig().expert_bike_sweep is False
+    env = _bike_env(10.0, "twophase")
+    set_camera_rig(env.cfg, "wide_narrow")
+    env.reset(town_seed=1014, episode_seed=9201, route_length=600.0, render=False)
+    w, ex, route = env.world, env.expert, env.route
+    bk, ego = w.bikes, w.ego
+    s = route.s_start + 40.0
+    while any(j["s_in"] - 30.0 < s < j["s_out"] + 30.0 for j in route.junctions):
+        s += 10.0
+    p, h = route.poly.interp(s), float(route.poly.heading(s))
+    left = np.array([-math.sin(h), math.cos(h)])
+    from keisim.bicycles import BIKE_R
+    from keisim.traffic import BIKE_MIN
+    bk.xy[:] = 1e6
+    bk.yaw[0], bk.v[0] = h, 0.0
+    ego.x, ego.y, ego.yaw, ego.v = float(p[0]), float(p[1]), h, 3.0
+
+    def place(clear):                  # the rider `clear` m beyond the path's band (half width + its radius)
+        bk.xy[0] = route.poly.interp(s + 7.0) + (ego.WIDTH / 2 + BIKE_R + clear) * left
+    place(1.0)
+    room = float(ex.bike_scan(route, s, ego.pose, 3.0)["room"][0])
+    # between the margin without the corner (BIKE_MIN - room) and with it (+ half length x sin 15 deg = 0.58 m)
+    place(BIKE_MIN - room + 0.25)
+
+    def target(turned, on):
+        env.cfg.expert_bike_sweep = on
+        yaw = h + (math.radians(15.0) if turned else 0.0)
+        ego.x, ego.y, ego.yaw, ego.v = float(p[0]), float(p[1]), yaw, 3.0
+        pose = (ego.x, ego.y, yaw)
+        scan = ex.bike_scan(route, s, pose, 3.0)
+        pts = route.poly.interp(np.minimum(s + np.asarray(PATH_S), route.poly.length))
+        return ex.bike_rules(route, s, 3.0, scan, pts, np.asarray(PATH_S, float), False)
+
+    assert target(False, False) > 3.0 and target(False, True) > 3.0
+    assert target(True, False) > 3.0
+    assert target(True, True) < 2.0

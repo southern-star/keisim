@@ -186,7 +186,17 @@ class KeiViewRenderer:
                 ped.append([int(i), round(float(x), 3), round(float(y), 3), round(float(scene.ped_yaw[i]), 4),
                             round(float(scene.ped_height[i]), 2)] + [int(v) for v in cols.reshape(-1)]
                            + [round(float(scene.ped_phase[i]), 3)])
-        return veh, ped
+        bike = []
+        bxy = getattr(scene, "bike_xy", None)
+        if bxy is not None and len(bxy):
+            d2 = ((bxy - C[:2]) ** 2).sum(1)
+            for i in np.nonzero(d2 < r2)[0]:
+                cols = scene.bike_colors[i][:, ::-1]          # (frame, shirt, pants, skin) BGR -> RGB
+                bike.append([int(i), round(float(bxy[i, 0]), 3), round(float(bxy[i, 1]), 3),
+                             round(float(scene.bike_yaw[i]), 4), int(scene.bike_kind[i]),
+                             round(float(scene.bike_height[i]), 2)] + [int(v) for v in cols.reshape(-1)]
+                            + [round(float(v), 3) for v in scene.bike_pose[i]])
+        return veh, ped, bike
 
     @staticmethod
     def _decode(v):
@@ -203,9 +213,11 @@ class KeiViewRenderer:
         if self.rig:
             return self.render_rig(pose, scene, t, want_rgb, want_seg, offset, which=[0])[0]
         C, R = camera_pose(self.cfg, *pose, offset)
-        veh, ped = self._actors(C, scene)
+        veh, ped, bike = self._actors(C, scene)
         req = {"op": "render", "cam": {"pos": [float(v) for v in C], "fwd": [float(v) for v in R[2]], "vfov": self.vfov},
                "t": float(t), "veh": veh, "ped": ped, "labels": bool(want_seg), "reset": self._new_episode}
+        if bike:
+            req["bike"] = bike
         if self._new_episode:
             req["light"] = self._light
         self._new_episode = False
@@ -219,7 +231,7 @@ class KeiViewRenderer:
         which = range(len(self.cameras)) if which is None else which
         # the level rig places the sky dome and the sun's shadow box, and finds the actors
         C, R = camera_pose(replace(self.cameras[0], yaw_deg=0.0, pitch_deg=0.0), *pose, offset)
-        veh, ped = self._actors(C, scene)
+        veh, ped, bike = self._actors(C, scene)
         cams, spans = [], []
         for ci in which:
             shots, maps = self._shots[ci]
@@ -230,6 +242,8 @@ class KeiViewRenderer:
                              "w": s.width, "h": s.height, "face": maps is not None})
         req = {"op": "render", "cam": {"pos": [float(v) for v in C], "fwd": [float(v) for v in R[2]], "vfov": 60.0},
                "cams": cams, "t": float(t), "veh": veh, "ped": ped, "labels": bool(want_seg), "reset": self._new_episode}
+        if bike:
+            req["bike"] = bike
         if self._new_episode:
             req["light"] = self._light
         self._new_episode = False

@@ -19,7 +19,8 @@ from .roadnet import Town
 from .route import ramp_route, random_route
 from .world import World
 
-PENALTY = {"vehicle": 0.60, "pedestrian": 0.50, "static": 0.65, "red_light": 0.70, "off_road": 0.80, "crosswalk": 0.70}
+PENALTY = {"vehicle": 0.60, "pedestrian": 0.50, "static": 0.65, "red_light": 0.70, "off_road": 0.80, "crosswalk": 0.70,
+           "bicycle": 0.50}
 CW_FAIL = 1.5      # s: crosswalks at signals: the ego's front entering a zebra while someone is on its stretch of it or
 #                    gets there within this long (Pedestrians.crosswalk_blocked) is a "crosswalk" infraction
 

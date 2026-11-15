@@ -9,6 +9,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { buildCar, carGlass } from './cars.js';
+import { makeBike, BIKE_FINE_DIST } from './bikes.js';
 
 const DETAIL_DIST = 70;           // m: detailed cars closer than this to the camera (main view)
 
@@ -22,7 +23,8 @@ export function build(ctx) {
   const root = new THREE.Group(); root.name = 'actors';
   const carRoot = new THREE.Group(); carRoot.name = 'cars'; carRoot.userData.sem = SEM_VEHICLE;
   const pedRoot = new THREE.Group(); pedRoot.name = 'pedestrians'; pedRoot.userData.sem = SEM_PED;
-  root.add(carRoot, pedRoot);
+  const bikeRoot = new THREE.Group(); bikeRoot.name = 'bicycles';       // classes inside: the bike a vehicle, its rider a pedestrian
+  root.add(carRoot, pedRoot, bikeRoot);
 
   const mGlass = M.toon('#4b5a76', { paint: 0.02 });
   const mTire = M.toon('#2d2d34', { paint: 0.02 });
@@ -158,7 +160,12 @@ export function build(ctx) {
     return { g, legs, arms };
   }
 
-  const cars = new Map(), peds = new Map();          // KeiSim actor id -> slot
+  // ------------------------------------------------------------------ bicycles (src/world/bikes.js)
+  const mBike = M.toon('#ffffff', { vertexColors: true, paint: 0.02 });
+  const rgbColor = (c) => new THREE.Color().setRGB(q8(c[0]) / 255, q8(c[1]) / 255, q8(c[2]) / 255, THREE.SRGBColorSpace);
+
+  const camPos = new THREE.Vector3();
+  const cars = new Map(), peds = new Map(), bikes = new Map();          // KeiSim actor id -> slot
   const drop = (slot, parent) => {
     parent.remove(slot.g);
     slot.g.traverse((o) => { if (o.isMesh) o.geometry.dispose(); });
@@ -167,11 +174,13 @@ export function build(ctx) {
   /**
    * veh: [[id, x, y, yaw, L, W, H, r, g, b, kind, brake], ...]  (KeiSim frame, colour RGB 0..255)
    * ped: [[id, x, y, yaw, height, sr, sg, sb, pr, pg, pb, kr, kg, kb, phase], ...]
+   * bike: [[id, x, y, yaw, kind, height, 12 rgb (frame, shirt, pants, skin), roll, steer, crank, wheel, foot, look, effort], ...]
    * Actors not listed this frame are hidden (callers may send only the ones near the camera).
    */
-  function update(veh, ped) {
+  function update(veh, ped, bike = []) {
     for (const s of cars.values()) s.g.visible = false;
     for (const s of peds.values()) s.g.visible = false;
+    for (const s of bikes.values()) s.g.visible = false;
     for (const v of veh) {
       const [id, x, y, yaw, L, W, H, r, gg, b, kind, brake] = v;
       const sig = `${kind}|${L.toFixed(2)}|${W.toFixed(2)}|${H.toFixed(2)}|${q8(r)},${q8(gg)},${q8(b)}`;
@@ -214,12 +223,31 @@ export function build(ctx) {
       s.legs[0].rotation.x = sw; s.legs[1].rotation.x = -sw;
       s.arms[0].rotation.x = -sw * 0.7; s.arms[1].rotation.x = sw * 0.7;
     }
+    if (bike.length && ctx.camera) ctx.camera.getWorldPosition(camPos);
+    for (const b of bike) {
+      const [id, x, y, yaw, kind, h] = b;
+      const sig = `${kind}|${h.toFixed(2)}|${b.slice(6, 18).map(q8).join(',')}`;
+      let s = bikes.get(id);
+      if (!s || s.sig !== sig) {
+        if (s) drop(s, bikeRoot);
+        const cols = [0, 1, 2, 3].map((k) => rgbColor(b.slice(6 + 3 * k, 9 + 3 * k)));
+        s = { ...makeBike(ctx, mBike, kind, h, cols, id), sig };
+        bikes.set(id, s);
+        bikeRoot.add(s.g);
+      }
+      const [X, Z] = T.P([x, y]);
+      s.g.position.set(X, 0, Z);
+      s.g.rotation.y = T.rotYOf(yaw);
+      s.g.visible = true;
+      s.pose(b.slice(18, 25));
+      const near = s.g.position.distanceTo(camPos) < BIKE_FINE_DIST;
+      for (const m of s.fine) m.visible = near;
+    }
   }
 
   /** Which car models are shown: 'main' (detailed within DETAIL_DIST of the camera, plain beyond) or 'model' (plain
    *  everywhere: the KeiPilot frame, as in training). */
   let viewMode = 'main';
-  const camPos = new THREE.Vector3();
   function view(mode) {
     viewMode = mode;
     if (!ctx.carDetail) return;
@@ -235,9 +263,10 @@ export function build(ctx) {
   function reset() {
     for (const s of cars.values()) drop(s, carRoot);
     for (const s of peds.values()) drop(s, pedRoot);
-    cars.clear(); peds.clear();
+    for (const s of bikes.values()) drop(s, bikeRoot);
+    cars.clear(); peds.clear(); bikes.clear();
   }
 
   ctx.add(root);
-  ctx.services.actors = { update, reset, view, cars, peds };
+  ctx.services.actors = { update, reset, view, cars, peds, bikes };
 }

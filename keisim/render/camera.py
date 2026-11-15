@@ -19,7 +19,8 @@ import numpy as np
 from ..config import SEM, CameraConfig
 from .maptex import MapTexture
 from .meshes import (CAR_T, LAMP_COLORS_ON, LAMP_OFF, PED_T, R_BODY, R_DARK, R_GLASS, R_HAIR, R_HEAD,
-                     R_PANTS, R_ROOF, R_SHIRT, R_SKIN, R_TAIL, TRUCK_T, StaticScene)
+                     R_PANTS, R_ROOF, R_SHIRT, R_SKIN, R_TAIL, TRUCK_T, KMAX, StaticScene, bike_faces,
+                     bike_palette)
 
 
 # ----------------------------------------------------------------------------
@@ -93,6 +94,13 @@ class SceneState:
     ped_colors: np.ndarray        # (M,3,3): shirt, pants, skin
     ped_phase: np.ndarray         # walk cycle phase
     lamp_state: np.ndarray        # (n_heads,) TL state per signal head
+    # bicycles (TrafficConfig.bicycles; keisim/bicycles.py: Bicycles.scene), None without them
+    bike_xy: np.ndarray = None    # (B,2)
+    bike_yaw: np.ndarray = None
+    bike_pose: np.ndarray = None  # (B,7): roll, steer, crank, wheel, foot, look, effort
+    bike_kind: np.ndarray = None  # (B,) 0 city, 1 sport, 2 slow
+    bike_height: np.ndarray = None    # the rider's
+    bike_colors: np.ndarray = None    # (B,4,3): frame, shirt, pants, skin
 
 
 def _gather_ranges(f0, f1):
@@ -340,6 +348,33 @@ class CameraRenderer:
                 sx = scene.ped_xy[idx, 0][:, None] + r[:, None] * np.cos(ang)[None]
                 sy = scene.ped_xy[idx, 1][:, None] + r[:, None] * np.sin(ang)[None]
                 out.append({"shadow": np.stack([sx, sy], -1)})
+        # bicycles: built from the riders' poses; their faces are drawn far to near (no fixed part order holds
+        # from every side for legs, wheels and frame)
+        if scene.bike_xy is not None and len(scene.bike_xy):
+            d = scene.bike_xy - C[:2]
+            dist = np.hypot(d[:, 0], d[:, 1])
+            idx = np.nonzero((dist < min(max_dist, 90.0)) & (d @ fwd_xy > -3.0))[0]
+            if len(idx):
+                loc, role, fsem = bike_faces(scene.bike_pose[idx], scene.bike_kind[idx], scene.bike_height[idx])
+                yaw = scene.bike_yaw[idx]
+                c, s = np.cos(yaw)[:, None, None], np.sin(yaw)[:, None, None]
+                wx = scene.bike_xy[idx, 0][:, None, None] + c * loc[..., 0] - s * loc[..., 1]
+                wy = scene.bike_xy[idx, 1][:, None, None] + s * loc[..., 0] + c * loc[..., 1]
+                verts = np.stack([wx, wy, loc[..., 2]], -1)
+                n, F = verts.shape[:2]
+                far = np.linalg.norm(verts.mean(2) - C, axis=-1)
+                verts = np.concatenate([verts, np.repeat(verts[:, :, -1:], KMAX - 4, 2)], 2)
+                col = bike_palette(scene.bike_kind[idx], scene.bike_colors[idx])[np.arange(n)[:, None], role[None]]
+                out.append({
+                    "verts": verts.reshape(n * F, -1, 3), "nv": np.full(n * F, 4, np.int32),
+                    "color": col.reshape(n * F, 3), "sem": np.tile(fsem, n), "order": -far.reshape(-1),
+                    "emissive": np.zeros(n * F, bool), "odist": np.repeat(dist[idx], F),
+                })
+                ang = np.linspace(0, 2 * np.pi, 8, endpoint=False)
+                ex, ey = 0.85 * np.cos(ang)[None], 0.2 * np.sin(ang)[None]
+                cc, sc = np.cos(yaw)[:, None], np.sin(yaw)[:, None]
+                out.append({"shadow": np.stack([scene.bike_xy[idx, 0][:, None] + cc * ex - sc * ey,
+                                                scene.bike_xy[idx, 1][:, None] + sc * ex + cc * ey], -1)})
         return out
 
     def render(self, pose, scene: SceneState, weather: Weather, want_rgb=True, want_seg=True, offset=None):

@@ -5,6 +5,7 @@
 //   {"id":1,"op":"town","town":1000}                        -> {"id":1,"ok":true,"ms":8800,"errors":[]}
 //   {"id":2,"op":"render","cam":{"pos":[x,y,z],"fwd":[fx,fy,fz],"vfov":61.6},"t":12.3,
 //    "veh":[[id,x,y,yaw,L,W,H,r,g,b,kind,brake],...],"ped":[[id,x,y,yaw,h,...9 rgb...,phase],...],
+//    "bike":[[id,x,y,yaw,kind,height,...12 rgb...,roll,steer,crank,wheel,foot,look,effort],...],   (optional)
 //    "labels":true,"reset":false}                           -> {"id":2,"ok":true,"rgb":"<b64>","sem":"<b64>","w":320,"h":160,"ms":6.1}
 //   a camera rig adds "cams":[{"pos":..,"fwd":..,"vfov":..,"w":150,"h":230,"face":true},...] (--w / --h at least as
 //   large as every camera; "cam" still places the sky and the shadows) -> {"id":2,"ok":true,"views":[{"rgb":..,"sem":..,"w":..,"h":..},...],"ms":..}

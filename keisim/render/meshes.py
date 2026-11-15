@@ -358,3 +358,193 @@ def ped_template():
 CAR_T = car_template()
 TRUCK_T = truck_template()
 PED_T = ped_template()
+
+
+# ----------------------------------------------------------------------------
+# Bicycles: built every frame from the riders' poses (keisim/bicycles.py, Bicycles.scene)
+# ----------------------------------------------------------------------------
+B_FRAME, B_TYRE, B_DARK, B_METAL, B_SHIRT, B_PANTS, B_SKIN, B_HAIR, B_RED = range(9)
+BIKE_STEER_X = 0.42         # m ahead of the middle of the bike: the steering axis (taken as upright)
+BIKE_BB = (-0.06, 0.29)     # x, z of the crank axle
+BIKE_CRANK = 0.17
+
+
+def _unit(v):
+    return v / np.maximum(np.linalg.norm(v, axis=-1, keepdims=True), 1e-9)
+
+
+def _wind(faces, outward):
+    """faces (..., 4, 3): reverse the ones whose normal points against `outward` (..., 3)."""
+    n = np.cross(faces[..., 1, :] - faces[..., 0, :], faces[..., 2, :] - faces[..., 0, :])
+    flip = (n * outward).sum(-1) < 0
+    faces[flip] = faces[flip][:, ::-1]
+    return faces
+
+
+def _beam(a, b, side, ws, wn, caps=False):
+    """A bar from a to b ((n, 3) each), 2 ws wide along `side` and 2 wn thick: (n, 4 or 6, 4, 3). The faces come
+    in the order: against the third axis (d x side), along side, along the third axis, against side, the two ends."""
+    d = _unit(b - a)
+    s = _unit(side - (side * d).sum(-1, keepdims=True) * d)
+    m = np.cross(d, s)
+    ws = np.asarray(ws, float).reshape(-1, 1)
+    wn = np.asarray(wn, float).reshape(-1, 1)
+    c = [-ws * s - wn * m, ws * s - wn * m, ws * s + wn * m, -ws * s + wn * m]
+    faces = [np.stack([a + c[i], b + c[i], b + c[j], a + c[j]], 1) for i, j in ((0, 1), (1, 2), (2, 3), (3, 0))]
+    out = [-m, s, m, -s]
+    if caps:
+        faces += [np.stack([a + ci for ci in c], 1), np.stack([b + ci for ci in c], 1)]
+        out += [-d, d]
+    return _wind(np.stack(faces, 1), np.stack(out, 1))
+
+
+def _wheel(c, u, v, r, t=0.06, w=0.022, k=8):
+    """A wheel as a ring (you see through it): centre c, in-plane unit vectors u, v ((n, 3) each), radius r (n,).
+    Both sides of the ring and the tread: (n, 3 k, 4, 3)."""
+    ang = np.arange(k + 1) * (2 * math.pi / k)
+    nrm = np.cross(u, v)
+    ring = np.cos(ang)[None, :, None] * u[:, None] + np.sin(ang)[None, :, None] * v[:, None]
+    r = np.asarray(r, float).reshape(-1, 1, 1)
+    o = c[:, None] + r * ring
+    i = c[:, None] + (r - t) * ring
+    off = w * nrm[:, None]
+    side = np.stack([o[:, :-1], o[:, 1:], i[:, 1:], i[:, :-1]], 2)
+    nk = np.broadcast_to(nrm[:, None], o[:, :-1].shape)
+    left = _wind(side + off[:, None], nk)
+    right = _wind(side - off[:, None], -nk)
+    tread = _wind(np.stack([o[:, :-1] - off, o[:, 1:] - off, o[:, 1:] + off, o[:, :-1] + off], 2),
+                  ring[:, :-1] + ring[:, 1:])
+    return np.concatenate([left, right, tread], 1)
+
+
+def _knee(hip, tgt, l1, l2, fwd):
+    """Two-bone leg: the knee (bending towards `fwd`) and the ankle the leg can reach."""
+    d = tgt - hip
+    dist = np.linalg.norm(d, axis=-1, keepdims=True)
+    e = d / np.maximum(dist, 1e-6)
+    l1, l2 = l1[:, None], l2[:, None]
+    dc = np.clip(dist, 0.05, 0.995 * (l1 + l2))
+    a = (l1 ** 2 - l2 ** 2 + dc ** 2) / (2 * dc)
+    hk = np.sqrt(np.maximum(l1 ** 2 - a ** 2, 0.0))
+    nb = _unit(fwd - (fwd * e).sum(-1, keepdims=True) * e)
+    return hip + a * e + hk * nb, hip + e * dc
+
+
+def bike_faces(pose, kind, height):
+    """Bikes with their riders. pose (n, 7), kind (n,), height (n,) as Bicycles.scene gives them. Returns the faces
+    (n, F, 4, 3) in each bike's own frame (x forward, y left, z up from the ground under its middle; the lean about
+    the line of the tyres on the ground is applied), their colour roles (n, F) and semantic classes (F,).
+
+    The same build as KeiView's (web/src/world/bikes.js), with far fewer parts: wheels as rings, the frame's tubes
+    (a step-through frame with a basket and a carrier for the city bike and the slow rider, a diamond frame with
+    low bars for the sport bike), the saddle, and a rider whose legs follow the pedals (the left foot goes to the
+    ground at a stop), whose hands are on the bars and whose head turns for the look behind."""
+    n = len(kind)
+    roll, steer, crank, foot, look, effort = (pose[:, k] for k in (0, 1, 2, 4, 5, 6))
+    sport = kind == 1
+    city = ~sport
+    h = np.asarray(height, float)
+    cr, sr = np.cos(roll), np.sin(roll)
+    cs, ss = np.cos(steer), np.sin(steer)
+    one = np.ones(n)
+
+    def P(x, y, z):                 # a point (or a direction) of the upright bike -> leaned
+        x, y, z = x * one, y * one, z * one
+        return np.stack([x, y * cr + z * sr, -y * sr + z * cr], -1)
+
+    def S(x, y, z):                 # the same for the steered front end
+        x, y = x * one, y * one
+        dx = x - BIKE_STEER_X
+        return P(BIKE_STEER_X + dx * cs - y * ss, dx * ss + y * cs, z)
+
+    xv, yv, zv = P(1, 0, 0), P(0, 1, 0), P(0, 0, 1)
+    yf = P(-ss, cs, 0)
+    bx, bz = BIKE_BB
+    rw = np.where(sport, 0.34, 0.33)
+    rear, front, bb = P(-0.54, 0, rw), S(0.54, 0, rw), P(bx, 0, bz)
+    # the rider's size sets the saddle: the leg is almost straight with the pedal at the bottom
+    l1, l2 = 0.245 * h, 0.245 * h
+    ext = np.where(sport, 0.93, np.where(kind == 0, 0.87, 0.85))
+    hip_d = ext * (l1 + l2) - 0.08
+    hx, hz = bx - 0.309 * hip_d, bz + 0.951 * hip_d
+    sz = hz - 0.10
+    seat = P(hx, 0, sz)
+    head_t, head_b = P(0.36, 0, np.where(sport, 0.88, 1.0)), P(0.44, 0, 0.64)
+    hcx, hcz, bw = np.where(sport, 0.565, 0.24), np.where(sport, 0.915, 1.07), np.where(sport, 0.24, 0.31)
+    parts = []                      # (faces, role, of the rider)
+
+    def add(f, role, rider=False, only=None):
+        if only is not None:        # a part this kind of bike does not have: faces of no area (culled)
+            f = f * only[:, None, None, None]
+        parts.append((f, role, rider))
+
+    add(_wheel(rear, xv, zv, rw), B_TYRE)
+    add(_wheel(front, P(cs, ss, 0), zv, rw), B_TYRE)
+    tube = 0.018
+    add(_beam(head_b, front, yf, tube, tube), B_FRAME)                               # fork
+    add(_beam(head_b, head_t, yv, 0.02, 0.02), B_FRAME)                              # head tube
+    add(_beam(head_t, S(hcx, 0, hcz), yf, tube, tube), B_DARK)                       # stem
+    add(_beam(S(hcx, -bw, hcz), S(hcx, bw, hcz), xv, tube, tube, caps=True), B_DARK)  # bars
+    add(_beam(head_b, bb, yv, 0.022, 0.022), B_FRAME)                                # down tube
+    add(_beam(P(0.38, 0, 0.84), P(hx + 0.05, 0, sz - 0.13), yv, tube, tube), B_FRAME, only=sport)    # top tube
+    add(_beam(bb, seat, yv, tube, tube), B_FRAME)                                    # seat tube
+    add(_beam(P(bx + 0.75 * (hx - bx), 0, bz + 0.75 * (sz - bz)), rear, yv, tube, tube), B_FRAME)    # seat stays
+    add(_beam(bb, rear, yv, tube, tube), B_FRAME)                                    # chain stays
+    add(_beam(P(hx - 0.15, 0, sz + 0.015), P(hx + 0.12, 0, sz + 0.015), yv, 0.075, 0.025, caps=True), B_DARK)
+    add(_beam(P(-0.86, 0, 0.71), P(-0.38, 0, 0.71), yv, 0.075, 0.012), B_METAL, only=city)           # carrier
+    add(_beam(S(0.50, 0, 0.86), S(0.78, 0, 0.86), yf, 0.17, 0.11, caps=True), B_METAL, only=city)    # basket
+    rx, rz = np.where(sport, hx - 0.16, -0.875), np.where(sport, sz - 0.07, 0.69)
+    refl = np.stack([P(rx, -0.035, rz - 0.03), P(rx, 0.035, rz - 0.03), P(rx, 0.035, rz + 0.03),
+                     P(rx, -0.035, rz + 0.03)], 1)[:, None]
+    add(_wind(refl, -xv[:, None]), B_RED)
+
+    # ---- the rider
+    lean = np.where(sport, 0.62, np.where(kind == 0, 0.24, 0.12)) + 0.10 * effort
+    lt = 0.30 * h
+    nx, nz = hx + lt * np.sin(lean), hz + lt * np.cos(lean)
+    neck = P(nx, 0, nz)
+    add(_beam(P(hx, 0, hz - 0.05), neck, yv, 0.105 * h, 0.055 * h, caps=True), B_SHIRT, True)
+    psi = look * 1.1
+    crown = P(nx + 0.15 * h * np.sin(0.3 * lean), 0, nz + 0.15 * h * np.cos(0.3 * lean))
+    hd = _beam(P(nx, 0, nz + 0.01), crown, P(-np.sin(psi), np.cos(psi), 0), 0.045 * h, 0.055 * h, caps=True)
+    add(hd[:, :1], B_SKIN, True)                    # the face
+    add(hd[:, 1:], B_HAIR, True)                    # hair, or the sport rider's helmet
+    arm = 0.026 * h
+    for sgn in (1.0, -1.0):
+        add(_beam(P(nx - 0.02, sgn * 0.115 * h, nz - 0.04), S(hcx, sgn * (bw - 0.03), hcz + 0.03), xv, arm, arm),
+            B_SHIRT, True)
+    ground = np.stack([hx + 0.10, 0.27 * one, 0.09 * one], -1)        # the left ankle with that foot on the ground
+    for sgn, ph in ((-1.0, crank), (1.0, crank + math.pi)):
+        ankle = P(bx + BIKE_CRANK * np.sin(ph) - 0.04, sgn * 0.11, bz + BIKE_CRANK * np.cos(ph) + 0.09)
+        if sgn > 0:
+            ankle = ankle + foot[:, None] * (ground - ankle)
+        hip = P(hx, sgn * 0.055 * h, hz)
+        knee, ankle = _knee(hip, ankle, l1, l2, P(1.0, sgn * 0.10, 0.2))
+        add(_beam(hip, knee, yv, 0.036 * h, 0.036 * h), B_PANTS, True)
+        add(_beam(knee, ankle, yv, 0.028 * h, 0.028 * h), B_PANTS, True)
+        flat = foot[:, None] if sgn > 0 else 0.0     # the shoe lies along the bike; flat on the ground at a stop
+        toe = xv * 0.17 - zv * 0.085 * (1 - flat) - np.array([0, 0, 0.065]) * flat
+        heel = -xv * 0.07 - zv * 0.06 * (1 - flat) - np.array([0, 0, 0.065]) * flat
+        add(_beam(ankle + heel, ankle + toe, yv, 0.045, 0.03, caps=True), B_DARK, True)
+
+    verts = np.concatenate([p[0] for p in parts], 1)
+    role = np.concatenate([np.full(p[0].shape[1], p[1], np.int32) for p in parts])
+    sem = np.concatenate([np.full(p[0].shape[1], SEM["pedestrian"] if p[2] else SEM["vehicle"], np.uint8)
+                          for p in parts])
+    return verts, role, sem
+
+
+def bike_palette(kind, colors):
+    """(n, 9, 3) colours by role (B, G, R) from Bicycles.scene's colours (frame, shirt, pants, skin)."""
+    n = len(kind)
+    pal = np.zeros((n, 9, 3))
+    pal[:, B_FRAME] = colors[:, 0]
+    pal[:, B_TYRE] = (28, 28, 30)
+    pal[:, B_DARK] = (40, 40, 44)
+    pal[:, B_METAL] = (165, 165, 168)
+    pal[:, B_SHIRT], pal[:, B_PANTS], pal[:, B_SKIN] = colors[:, 1], colors[:, 2], colors[:, 3]
+    pal[:, B_HAIR] = (30, 34, 42)
+    pal[kind == 1, B_HAIR] = (225, 225, 228)            # the sport rider's helmet
+    pal[kind == 2, B_HAIR] = (150, 190, 205)            # the slow rider's hat
+    pal[:, B_RED] = (40, 40, 200)
+    return pal

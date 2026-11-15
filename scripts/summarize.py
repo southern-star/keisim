@@ -24,15 +24,16 @@ def main():
         inf = s["infractions_per_km"]
         rows.append((name, s["routes"], s["DS"], s["RC"], s["IS"], s["success_rate"], s["km"], s["avg_speed_kmh"],
                      inf.get("vehicle", 0), inf.get("pedestrian", 0), inf.get("static", 0), inf.get("red_light", 0),
-                     inf.get("off_road", 0), s["status"], inf.get("crosswalk")))
+                     inf.get("off_road", 0), s["status"], inf.get("crosswalk"), inf.get("bicycle")))
     cw = any(r[14] is not None for r in rows)     # crosswalks at signals: a column for not giving way at a zebra
+    bk = any(r[15] is not None for r in rows)     # bicycles: a column for hitting one
     print("| run | routes | DS | RC | IS | success | km | avg km/h | veh/km | ped/km | static/km | red/km "
-          "| offroad/km |" + (" zebra/km |" if cw else "") + " status |")
-    print("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|" + ("---|" if cw else ""))
+          "| offroad/km |" + (" zebra/km |" if cw else "") + (" bicycle/km |" if bk else "") + " status |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|" + ("---|" if cw else "") + ("---|" if bk else ""))
     for r in rows:
         print(f"| {r[0]} | {r[1]} | {r[2]:.3f} | {r[3]:.3f} | {r[4]:.3f} | {r[5] * 100:.0f}% | {r[6]:.1f} | {r[7]:.1f} | "
               f"{r[8]:.2f} | {r[9]:.2f} | {r[10]:.2f} | {r[11]:.2f} | {r[12]:.2f} |"
-              + (f" {r[14] or 0:.2f} |" if cw else "") + f" {r[13]} |")
+              + (f" {r[14] or 0:.2f} |" if cw else "") + (f" {r[15] or 0:.2f} |" if bk else "") + f" {r[13]} |")
     if skipped:
         print(f"skipped {len(skipped)} files without a summary (not evaluate.py results): {', '.join(skipped)}",
               file=sys.stderr)

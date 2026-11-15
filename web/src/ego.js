@@ -205,7 +205,7 @@ export function installEgo({ ctx, renderer, scene, camera, pipeline, sky, sunDir
     ctx.shared.uGust.value = 0.5 + 0.28 * Math.sin(t * 0.37) + 0.14 * Math.sin(t * 1.13 + 1.7) + 0.08 * Math.sin(t * 2.9 + 0.4);
     placeCamera(q.cam, W, H);
     ctx.player.position.set(camera.position.x, 0, camera.position.z);
-    if (ctx.services.actors) ctx.services.actors.update(q.veh || [], q.ped || []);
+    if (ctx.services.actors) ctx.services.actors.update(q.veh || [], q.ped || [], q.bike || []);
     for (const fn of ctx._updates) { try { fn(0, t); } catch (e) { console.error('update error', e); } }
     sky.update(t, camera);            // the sky dome and the sun's shadow box follow q.cam
   }

@@ -93,10 +93,12 @@ class TownConfig:
     # 25 s over a diagonal): own random stream, so the rest of the town is that of scramble 0.
     scramble: float = 0.0
     scramble_green: tuple = (24.0, 32.0)
-    # turns told apart (roadnet.unique_turns): no two exits of one approach get the same turn - the route command
-    # (left / straight / right) names one way out. Off: each exit's turn from its own heading change (0.5 rad), so at
-    # a skewed junction two exits can both be "left" (e.g. the arm across bending left, and the side road).
-    unique_turns: bool = False
+    # how a junction connector gets its turn (Lane.turn: the navigation command of the routes through it).
+    # heading: by its change of heading alone (left over 0.5 rad, right under -0.5 rad, else straight); at a skewed
+    # junction two exits of one approach can then share "left" (or "right"). ordered: the same, but where two exits of
+    # an approach share a side and none is straight, the one closest to straight ahead (under TURN_ORDERED_MAX rad)
+    # becomes "straight" (roadnet.turn_labels)
+    turn_rule: str = "heading"
     building_prob: float = 0.85
     tree_prob: float = 0.55
     tex_res: float = 0.1              # metres per texel of the ground texture
@@ -160,6 +162,11 @@ class TrafficConfig:
     # braking for the box rule) counted as past the line and drove into the junction at red (grid long3d_dense
     # 1018/9500: into the ego setting off at its green). Off by default: the old evaluations stay reproducible.
     light_past_line: bool = False
+    # With light_past_line: such a car obeys only its light, not the box rule nor the exit check (it is already past
+    # the line), and the expert's give-way (Traffic.min_arrival) counts it as stopping at a red / yellow light, as it
+    # does. With light_past_line alone it held for the ego standing in the junction to turn right while the ego waited
+    # for it (twophase 1019/9800 with crosswalks: for good). Off: light_past_line as before (round 10's data).
+    past_line_light_only: bool = False
     # Crosswalks at signals (Town.ped_crossings: the zebras at the ends of the roads of two-phase signalised junctions).
     # crosswalks: the chance that a person walking up to such an end crosses there: they wait at the kerb for the
     # pedestrian green (the green of the cars crossing that road's flow, minus ped_flash s of flashing) and walk over
@@ -170,6 +177,12 @@ class TrafficConfig:
     crosswalks: float = 0.0
     crosswalk_spawn: float = 1.0
     ped_flash: float = 4.0
+    # Bicycles (keisim/bicycles.py): bicycles per km of road, riding along the left edge of the road surface (the
+    # 路側帯 where there is one) with the cars' lights, 止まれ and right of way; cars and the expert pass them with
+    # room to spare or follow them (Traffic._bike_gaps, 道路交通法 18 条 3 項). 0: none (every town and evaluation up
+    # to here; no random draw is made for them, so the old episodes stay as they were). max_bikes caps the number.
+    bicycles: float = 0.0
+    max_bikes: int = 40
 
 
 @dataclass
@@ -232,7 +245,7 @@ TOWN_STYLES = {
     # junctions on a main road scramble crossings (スクランブル交差点)
     "bigjunction": {"block_mode": "varied", "spacing_min": 100.0, "spacing_max": 220.0, "signal_mode": "two_phase",
                     "road_types": "mixed", "road_mix": (0.45, 0.45, 0.1), "main_lanes": 2, "main_roads": 3,
-                    "main_median": 3.0, "scramble": 0.6, "edge_drop": 0.08, "unique_turns": True},
+                    "main_median": 3.0, "scramble": 0.6, "edge_drop": 0.08, "turn_rule": "ordered"},
     # suburban with at-grade left-turn ramps at the main roads' junctions (分流・合流)
     "ramps": {"block_mode": "varied", "spacing_min": 100.0, "spacing_max": 220.0, "signal_mode": "two_phase",
               "road_types": "mixed", "road_mix": (0.45, 0.45, 0.1), "main_lanes": 2, "ramps": 0.8},
@@ -241,7 +254,7 @@ TOWN_STYLES = {
 # TownConfig fields added after town_tag() was introduced: part of the tag only when they differ from the
 # default, so the tags (and exported town names) of the existing styles stay the same.
 _TAG_LATER = ("road_types", "main_roads", "road_mix", "main_lanes", "ramps", "scramble", "scramble_green",
-              "main_median", "unique_turns")
+              "main_median", "turn_rule")
 
 
 def town_config(style="classic"):
@@ -298,6 +311,18 @@ class EnvConfig:
     # horizontal field of view, not behind a building; Traffic.visible_from), so its labels follow from the image:
     # with all of them, a car outside the 100 deg view made the expert wait where the image looked clear.
     expert_yield_visible: bool = False
+    # Bicycles (TrafficConfig.bicycles) for the expert: only the riders the first camera (on the labelled pose) sees
+    # right now (Bicycles.visible_from) count for the 巻き込み確認 before a left turn and for the give-way tables;
+    # riders it does not see that come up from behind faster than the ego do not move its path over either
+    # (Expert.bike_scan). Riders the ego is passing (slower than it: it saw them ahead) keep their room, and the
+    # corridor rules ahead (follow, pass slowly) keep every rider, as for the cars. Off: every rider counts.
+    expert_bike_visible: bool = False
+    # Bicycles: the expert's room beside a rider ahead (Expert.bike_rules) counts how far its front corner sticks out
+    # of the path when the car points off it (half its length x sin(heading - path heading), e.g. coming out of a
+    # turn before it has turned all the way), as the path alone did not: coming out of a right turn the front left
+    # corner hit a rider standing at the start of the exit road with 0.53 m beside the path (bigjunction 3004/9801).
+    # Off: as before (the bicycle evaluations of PR #35).
+    expert_bike_sweep: bool = False
 
     @property
     def cameras(self):
