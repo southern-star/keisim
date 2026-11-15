@@ -74,7 +74,7 @@ SUITES = {
     "crosswalks_bk8": [(t, 9800 + e) for t in range(1010, 1020) for e in range(2)],
     "crosswalks_sub_bk8": [(t, 9850 + e) for t in range(2000, 2010) for e in range(2)],
     "bigjunction_bk8": [(t, 9800 + e) for t in range(3000, 3010) for e in range(2)],
-    # parked cars (TrafficConfig.parked, 8 per km of kerb: 路上駐車) and children running out from in front of them
+    # parked cars (TrafficConfig.parked, 4 per km of kerb: 路上駐車) and children running out from in front of them
     # (dart_out 0.6: 飛び出し), in the road-types towns (residential roads and alleys), long3's town seeds with
     # episodes no other suite uses; 2.5 km routes
     "parked": [(t, 9950 + e) for t in range(1010, 1020) for e in range(2)],
@@ -103,7 +103,7 @@ SUITE_DEFAULTS["crosswalks_sub"] = {**SUITE_DEFAULTS["long3"], "town_style": "su
 SUITE_DEFAULTS["bigjunction"] = {**SUITE_DEFAULTS["long3"], "town_style": "bigjunction", "crosswalks": 0.7}
 # (the road-types towns' usual NPC caps, not twice them: CAP_SCALE 2 crowds the residential roads so that the queues
 # waiting to pass parked cars and the oncoming queues standing beside them lock up a junction now and then)
-SUITE_DEFAULTS["parked"] = {**SUITE_DEFAULTS["long3"], "town_style": "roadtypes", "parked": 8.0, "dart_out": 0.6,
+SUITE_DEFAULTS["parked"] = {**SUITE_DEFAULTS["long3"], "town_style": "roadtypes", "parked": 4.0, "dart_out": 0.6,
                             "cap_scale": 1}
 for _k in ("crosswalks", "crosswalks_sub", "bigjunction"):
     SUITE_DEFAULTS[f"{_k}_bk8"] = {**SUITE_DEFAULTS[_k], "bicycles": 8.0, "bike_visible": 1, "npc_past_line": 2,
