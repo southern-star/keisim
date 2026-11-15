@@ -100,13 +100,16 @@ def parked_lanes(town):
 
 def _to_junction(town, lane, ahead, limit=PK_FROM_JUNCTION):
     """Metres from `lane`'s end (ahead) or start (behind) to the next junction of 3+ arms that way, through bends
-    (a bend does not stop a queue); `limit` or more: limit."""
+    (a bend does not stop a queue), but for bends whose connectors yield to each other (a tight bend: a car standing
+    in one holds up the other way, like a junction); `limit` or more: limit."""
     J, lanes = town.junctions, town.lanes
     d, L = 0.0, lane
     for _ in range(8):
         jn = J[L.end_junction if ahead else L.start_junction]
         if len(jn.arms) != 2:
             return d if len(jn.arms) >= 3 else limit
+        if any(lanes[c].yields for c in jn.connectors):
+            return d
         nxt = L.succ if ahead else L.pred                  # the bend's connector, then the lane beyond it
         if len(nxt) != 1:
             return d
