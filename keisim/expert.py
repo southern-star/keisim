@@ -181,7 +181,8 @@ class Expert:
         (how far out: PK_CLEAR beside them), go (passing them: inside the lane when that is enough, else once set
         off), lane, G}]. real (the ego itself): the nearest group the ego has to pass over the centre line is set off
         for (self._pk_go) from PK_DECIDE behind it on, once the oncoming lane is clear (Traffic.parked_oncoming_clear,
-        a privileged check of the oncoming traffic, as the NPCs')."""
+        a privileged check of the oncoming traffic, as the NPCs'), or right behind a car passing it (a convoy:
+        Traffic.parked_follow)."""
         w = self.env.world
         pk, town, ego, tr = w.parked, w.town, w.ego, w.traffic
         hl, hw = ego.LENGTH / 2, ego.WIDTH / 2
@@ -216,8 +217,14 @@ class Expert:
                     t_me = Traffic._reach(o["s_hi"] + PK_ZONE[1] - (s - hl), v, PK_PASS_V, 1.5)
                     s_me = o["G"]["s_lo"] - (o["ahead"] + hl)              # the ego's centre on that lane
                     if tr.parked_oncoming_clear(o["lane"], o["G"], t_me, s_me=s_me):
-                        self._pk_go.add(o["g"])
-                        o["go"] = True
+                        tr.pk_convoy[o["g"]] = 1                         # the first of a convoy
+                    elif tr.parked_follow(o["lane"], o["g"], s_me, hl, tr.cars_by_lane()) and \
+                            tr.parked_oncoming_clear(o["lane"], o["G"], t_me):
+                        tr.pk_convoy[o["g"]] = tr.pk_convoy.get(o["g"], 0) + 1     # following the car ahead past it
+                    else:
+                        break
+                    self._pk_go.add(o["g"])
+                    o["go"] = True
                 elif o["ahead"] <= 0.0:          # beside it already (e.g. it started there): out round it
                     self._pk_go.add(o["g"])
                     o["go"] = True
