@@ -36,7 +36,7 @@ from keisim.expert import LABEL_VERSION  # noqa: E402
 from keisim.realworld import OSM_BOXES  # real towns: name -> box (south, west, north, east)  # noqa: E402
 
 REASONS = {"cruise": 0, "curve": 1, "vehicle": 2, "pedestrian": 3, "red_light": 4, "junction_blocked": 5, "yield": 6,
-           "crossing": 7, "stop_sign": 8, "crosswalk": 9, "bicycle": 10}
+           "crossing": 7, "stop_sign": 8, "crosswalk": 9, "bicycle": 10, "parked": 11}
 WEATHERS = {"noon": 0, "cloudy": 1, "sunset": 2, "fog": 3}
 
 
@@ -206,6 +206,7 @@ def crosswalk_near(env, ahead):
 
 
 BK_FOCUS_AHEAD = 20.0         # m: bicycle_near for the report without --focus_bicycle
+PK_FOCUS_AHEAD = 30.0         # m: parked_near for the report without --focus_parked
 BK_FOCUS_BEHIND = 3.0         # --focus_bicycle: m a rider riding along may be behind the ego's rear and still count
 
 
@@ -224,6 +225,23 @@ def bicycle_near(env, plan, ahead):
     ds = scan["s"] - env.s_ego
     m = scan["along"] & scan["visible"] & (ds > -(hl + BK_FOCUS_BEHIND)) & (ds < hl + ahead)
     return bool(m.any())
+
+
+def parked_near(env, plan, ahead):
+    """--focus_parked: the expert's reason is "parked" (waiting behind a parked car, passing one slowly), a group of
+    parked cars on the route is within `ahead` m of the front bumper (or beside the ego), or a child is running out
+    (TrafficConfig.dart_out) within 30 m."""
+    if plan["reason"] == "parked":
+        return True
+    w = env.world
+    scan = env.expert.last_parked
+    if scan and any(o["ahead"] < ahead and o["behind"] < 1.0 for o in scan):
+        return True
+    pd = w.peds
+    for d in w.darts:
+        if d[3] and pd.mode[d[0]] == pd.CROSS and np.hypot(*(pd.xy[d[0]] - w.ego.xy)) < 30.0:
+            return True
+    return False
 
 
 def ramp_state(env):
@@ -255,7 +273,7 @@ def osm_spec(spec):
 STAT_KEYS = ("steps", "steps_focus", "steps_lead_edge", "frames", "focus", "lead_edge", "lead_edge_vehicle",
              "lead_edge_tl_none", "lead_edge_tl_none_red", "steps_freeze", "freeze", "freezes", "stand_perts",
              "stand_pert", "steps_ramp", "ramp", "ramp_early_dropped",
-             "scene", "crosswalk", "crosswalk_near", "bicycle", "bicycle_near")
+             "scene", "crosswalk", "crosswalk_near", "bicycle", "bicycle_near", "parked", "parked_near")
 FREEZE_REASONS = ("curve", "cruise")    # --freeze_reasons: the expert drives on along the road, no one to wait for
 
 
@@ -345,6 +363,7 @@ def worker(wid, args, quota, out_dir, counter):
     if args.crosswalk_spawn is not None:
         cfg.traffic.crosswalk_spawn = args.crosswalk_spawn
     cfg.traffic.bicycles = args.bicycles
+    cfg.traffic.parked, cfg.traffic.dart_out = args.parked, args.dart_out
     if args.mode == "dagger":
         cfg.blocked_timeout = 40.0
     env = KeiEnv(cfg)
@@ -454,10 +473,11 @@ def worker(wid, args, quota, out_dir, counter):
                 focus = in_scene                    # the guardrail scenes are all in focus
                 cw_near = args.focus_crosswalk > 0 and crosswalk_near(env, args.focus_crosswalk)
                 bk_near = args.focus_bicycle > 0 and bicycle_near(env, plan, args.focus_bicycle)
+                pk_near = args.focus_parked > 0 and parked_near(env, plan, args.focus_parked)
                 if args.focus_yield < 1.0 and not focus:   # mostly frames around junction decisions, model mistakes
                     focus = np.isfinite(plan.get("yield_tta", np.nan)) or plan["reason"] in args.focus_reasons or \
                         (v_model is not None and abs(v_model - plan["target_speed"]) > args.focus_disagree) or edge \
-                        or (args.focus_ramp and near_ramp) or cw_near or bk_near
+                        or (args.focus_ramp and near_ramp) or cw_near or bk_near or pk_near
                     keep = keep and (focus or standing or rng.random() < args.focus_yield)
                 if args.ramp_early_drop and early and keep:
                     keep = False
@@ -479,6 +499,9 @@ def worker(wid, args, quota, out_dir, counter):
                     stats["bicycle"] += int(plan["reason"] == "bicycle")
                     stats["bicycle_near"] += int(bk_near if args.focus_bicycle > 0 else
                                                  env.world.bikes is not None and bicycle_near(env, plan, BK_FOCUS_AHEAD))
+                    stats["parked"] += int(plan["reason"] == "parked")
+                    stats["parked_near"] += int(pk_near if args.focus_parked > 0 else
+                                                env.world.parked is not None and parked_near(env, plan, PK_FOCUS_AHEAD))
                     if edge:
                         stats["lead_edge"] += 1
                         stats["lead_edge_vehicle"] += int(plan["reason"] == "vehicle")
@@ -550,6 +573,10 @@ def report(out_dir):
         print(f"bicycles: {tot['bicycle']} frames ({tot['bicycle'] / fr:.1%}) with the expert's reason bicycle, "
               f"{tot['bicycle_near']} ({tot['bicycle_near'] / fr:.1%}) with a rider about (bicycle_near: the reason, or "
               f"one riding along within --focus_bicycle m, {BK_FOCUS_AHEAD:g} m without it)")
+    if tot.get("parked") or tot.get("parked_near"):
+        print(f"parked cars: {tot['parked']} frames ({tot['parked'] / fr:.1%}) with the expert's reason parked, "
+              f"{tot['parked_near']} ({tot['parked_near'] / fr:.1%}) by parked cars or a child running out "
+              f"(parked_near: within --focus_parked m, {PK_FOCUS_AHEAD:g} m without it)")
     return tot
 
 
@@ -620,6 +647,15 @@ def parse_args(argv=None):
                     help="with --focus_yield < 1, frames are also in focus where the expert's reason is bicycle or a "
                          "rider rides along the route within this many m ahead (bicycle_near): with --bike_visible 1 "
                          "only the riders the camera sees, without it every rider")
+    ap.add_argument("--parked", type=float, default=0.0,
+                    help="parked cars per km of kerb (TrafficConfig.parked, keisim/parked.py; 0: none)")
+    ap.add_argument("--dart_out", type=float, default=0.0,
+                    help="the chance that a parked car the route passes hides a child who runs out when the ego "
+                         "comes near (TrafficConfig.dart_out)")
+    ap.add_argument("--focus_parked", type=float, default=0.0,
+                    help="with --focus_yield < 1, frames are also in focus where the expert's reason is parked, a "
+                         "group of parked cars on the route is within this many m ahead, or a child runs out "
+                         "(parked_near)")
     ap.add_argument("--renderer", default="keisim", choices=["keisim", "keiview"], help="camera renderer")
     ap.add_argument("--keiview_roads", default="plain", choices=["plain", "detail"],
                     help="KeiView road surface: plain (every KeiView dataset so far) or detail (markings, signs, ...)")
@@ -682,6 +718,9 @@ def main():
                **({"bike_visible": 1} if args.bike_visible else {}),
                **({"bike_sweep": 1} if args.bike_sweep else {}),
                **({"focus_bicycle": args.focus_bicycle} if args.focus_bicycle > 0 else {}),
+               **({"parked": args.parked} if args.parked > 0 else {}),
+               **({"dart_out": args.dart_out} if args.dart_out > 0 else {}),
+               **({"focus_parked": args.focus_parked} if args.focus_parked > 0 else {}),
                **({"freeze_reasons": args.freeze_reasons} if args.freeze_takeover > 0 else {}),
                **({"stand_pert": args.stand_pert, "stand_hold": args.stand_hold} if args.stand_pert > 0 else {}),
                **({"via_ramp": args.via_ramp} if args.via_ramp > 0 else {}),

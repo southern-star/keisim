@@ -7,6 +7,9 @@ import numpy as np
 
 from .config import TL_GREEN, TL_RED, TL_YELLOW, TrafficConfig
 from .geometry import box_corners, curvature_of, rays_clear, wrap
+from .parked import (PARKED_OWNER, PK_ACC, PK_BACK, PK_CLEAR, PK_DECIDE, PK_EXIT, PK_GIVE_ROOM, PK_IN, PK_KEEP,
+                     PK_MARGIN, PK_ONCOMING_T, PK_OUT, PK_PASS_V, PK_RATE, PK_SWING_V, PK_WAIT, PK_YIELD_B, PK_YIELD_D,
+                     PK_ZONE)
 from .roadnet import PED_FLASH, PED_GREEN
 from .route import (LC_CHECK, LC_PUSH, LC_PUSH_TO, LC_START_MARGIN, blend_weight, change_room, change_window,
                     lane_moves, link_map, pick_move)
@@ -331,6 +334,11 @@ class Traffic:
         self.shift_v = np.zeros(0)      # m/s: ... and how fast it is moving sideways
         self.shift_tgt = np.zeros(0)    # m: where the shift was heading at the last step (the corridor follows it)
         self._left_wait = {}            # car -> s it has waited before a left turn for a standing bicycle
+        self.parked = None      # the ParkedCars (World, TrafficConfig.parked > 0)
+        self.pk_go = {}         # car -> the parked-car group it has set off to pass over the centre line (_parked_gaps)
+        self.pk_prof = {}       # car -> (s_lo, s_hi, how far out) of the group it moves out round (_shifted_paths)
+        self.ego_pk_go = set()  # the groups the ego has set off to pass (Expert.parked_scan): oncoming cars give way
+        self.pk_wait = {}       # car -> the parked-car group it waits to pass (the oncoming lane is not clear)
 
     # --------------------------------------------------------------- spawning
     def _sample_dims(self):
@@ -374,6 +382,8 @@ class Traffic:
             if avoid_xy is not None and len(avoid_xy) and np.min(np.hypot(*(avoid_xy - p).T)) < avoid_r:
                 continue
             if self.n and np.min(np.hypot(*(self.xy - p).T)) < 11.0:
+                continue
+            if self.parked is not None and self.parked.n and np.min(np.hypot(*(self.parked.xy - p).T)) < 7.0:
                 continue
             self._add(lid, s, p, float(lane.poly.heading(s)))
             placed += 1
@@ -457,6 +467,8 @@ class Traffic:
                 continue
             if self.bikes is not None and self.bikes.n and np.min(np.hypot(*(self.bikes.xy - p).T)) < 8.0:
                 continue
+            if self.parked is not None and self.parked.n and np.min(np.hypot(*(self.parked.xy - p).T)) < 7.0:
+                continue
             self.route[i] = [lid]
             self.ri[i] = 0
             self.s[i] = s
@@ -466,6 +478,7 @@ class Traffic:
             self.stuck[i] = 0.0
             self.ss_done.pop(i, None)
             self.lcp.pop(i, None)
+            self.pk_go.pop(i, None)
             if len(self.shift) == self.n:
                 self.shift[i] = self.shift_v[i] = 0.0
             if len(self.shift_tgt) == self.n:
@@ -1078,14 +1091,22 @@ class Traffic:
         if peds is not None and peds.cw_on:      # crosswalks at signals: give way to the people on them
             self._crosswalk_gaps(stop_gap, hl, peds, t)
         bike_pair = ()
+        pk_target = pk_swing = None
+        if self.parked is not None and self.parked.n:   # parked cars: move out round them, or wait behind them
+            ego = None if ego_yaw is None else (ego_xy, ego_v, ego_yaw, ego_len)
+            pk_target, pk_swing, vmax = self._parked_gaps(stop_gap, hl, vmax, ego)
         if self.bikes is not None and self.bikes.n:     # bicycles: pass them with room to spare, or follow them
-            g_b, v_b, vmax = self._bike_gaps(stop_gap, paths, relc, valid, hl, vmax, dt)
+            g_b, v_b, vmax = self._bike_gaps(stop_gap, paths, relc, valid, hl, vmax, dt, pk_target, pk_swing)
             bike_pair = ((g_b, v_b),)
+        elif pk_target is not None:
+            self._integrate_shift(pk_target, dt, pk_swing)
         lc_pair = ()
         if self.has_lc:              # multi-lane roads: room for lane changes
             ego = None if ego_yaw is None else (ego_xy, ego_v, ego_yaw, ego_len)
             lc_pair = (self._lane_change_gaps(stop_gap, ego, ego_wait, dt),)
-        if self.bikes is not None and len(self.shift) == n and (self.shift > 1e-3).any():
+        if (self.bikes is not None or self.parked is not None) and len(self.shift) == n and (
+                (self.shift > 1e-3).any() or
+                (self.parked is not None and len(self.shift_tgt) == n and (self.shift_tgt > 1e-3).any())):
             paths = self._shifted_paths(paths, relc)        # where the cars that moved over for a bicycle will drive
         # obstacles: other NPCs + external
         cxy, cr, cow = self.circles()
@@ -1097,7 +1118,12 @@ class Traffic:
             cow = np.concatenate([cow, ext_owner])
             csp = np.concatenate([csp, ext_speed])
             cyw = np.concatenate([cyw, ext_yaw])
-        margin = np.where(cow < -1, 0.9, 0.35)
+        if self.parked is not None and self.parked.n:   # parked cars (owners PARKED_OWNER + k)
+            pxy, pr, pow_ = self.parked.circles()
+            cxy, cr, cow = np.concatenate([cxy, pxy]), np.concatenate([cr, pr]), np.concatenate([cow, pow_])
+            csp = np.concatenate([csp, np.zeros(len(pxy))])
+            cyw = np.concatenate([cyw, self.parked.yaw[pow_ - PARKED_OWNER]])
+        margin = np.where(cow < -1, 0.9, np.where(cow >= PARKED_OWNER, PK_MARGIN, 0.35))
         if ped_margin is not None:
             pm = cow < -1
             margin[pm] = ped_margin[-2 - cow[pm]]
@@ -1161,8 +1187,8 @@ class Traffic:
                 poly = lanes[r[k]].poly
                 self.xy[i, 0], self.xy[i, 1] = poly.interp1(si)
                 self.yaw[i] = poly.heading1(si)
-        if self.bikes is not None and len(self.shift) == n and (self.shift > 1e-4).any():
-            # the cars that have moved over to the right for a bicycle
+        if (self.bikes is not None or self.parked is not None) and len(self.shift) == n and (self.shift > 1e-4).any():
+            # the cars that have moved over to the right for a bicycle (or a parked car)
             # (the heading turns about the rear axle, 0.3 of the length behind the centre: the tail does not swing
             # out towards the bicycle)
             dyaw = np.arctan2(self.shift_v, np.maximum(self.v, 2.0))
@@ -1173,7 +1199,142 @@ class Traffic:
         self.stuck = np.where(self.v < 0.1, self.stuck + dt, 0.0)
         self.release_stuck(ego_xy, ego_yaw)
 
-    def _bike_gaps(self, stop_gap, paths, relc, valid, hl, vmax, dt):
+    def _integrate_shift(self, target, dt, swing=None):
+        """Sideways (self.shift, to the right): towards the target at BIKE_RATE at most, gently (BIKE_ACC); back to
+        the lane's centre from the first metre (a car that stood moved over steers back as it starts: BIKE_BACK per
+        metre driven). The cars in `swing` turn out round a parked car: PK_RATE and PK_ACC, and back faster."""
+        rate = np.minimum(BIKE_RATE, 0.15 * np.maximum(self.v - 0.5, 0.0))
+        back = np.minimum(BIKE_RATE, BIKE_BACK * self.v)
+        acc = BIKE_ACC
+        if swing is not None and swing.any():
+            rate = np.where(swing, np.minimum(PK_RATE, 0.5 * np.maximum(self.v - 0.3, 0.0)), rate)
+            back = np.where(swing, np.minimum(PK_RATE, PK_BACK * self.v), back)
+            acc = np.where(swing, PK_ACC, BIKE_ACC)
+        v_t = np.clip((target - self.shift) * 1.6, -back, rate)
+        self.shift_tgt = target
+        self.shift_v = self.shift_v + np.clip(v_t - self.shift_v, -acc * dt, acc * dt)
+        self.shift_v = np.where((self.v < 0.3) | ((target <= 0.0) & (self.shift < 0.01)), 0.0, self.shift_v)
+        self.shift = np.maximum(self.shift + self.shift_v * dt, 0.0)
+
+    def _parked_gaps(self, stop_gap, hl, vmax, ego):
+        """Parked cars (TrafficConfig.parked, keisim/parked.py) -> (how far each car moves out to the right for the
+        parked cars on its lane, the cars doing so, vmax). The nearest group of parked cars ahead (or beside) on the
+        car's lane decides: with room for PK_CLEAR beside it inside the lane (PK_KEEP from its edge) the car just
+        moves over; else it sets off to pass over the centre line once the oncoming lane is clear
+        (parked_oncoming_clear), from PK_DECIDE behind it on (self.pk_go), and waits PK_WAIT behind it until then.
+        The move out ramps in from PK_IN before the group's rear and back from PK_OUT past its front; a car not yet
+        out far enough comes up to the parked car at PK_SWING_V. stop_gap is updated in place."""
+        pk = self.parked
+        n = self.n
+        lanes = self.town.lanes
+        if len(self.shift) != n:
+            self.shift, self.shift_v = np.zeros(n), np.zeros(n)
+        hw = self.dims[:, 1] / 2
+        target = np.zeros(n)
+        swing = np.zeros(n, bool)
+        vmax = vmax.copy()
+        by_lane = None
+        self.pk_prof = {}
+        self.pk_wait = {}
+        for i in range(n):
+            r, k = self.route[i], self.ri[i]
+            gs = pk.lane_groups.get(r[k])
+            go = self.pk_go.get(i)
+            if not gs:
+                if go is not None:
+                    del self.pk_go[i]
+                continue
+            lane = lanes[r[k]]
+            si = float(self.s[i])
+            front, rear = si + hl[i], si - hl[i]
+            for g in gs:
+                G = pk.groups[g]
+                ahead, behind = G["s_lo"] - front, rear - G["s_hi"]
+                if behind > PK_OUT[1]:
+                    if go == g:
+                        del self.pk_go[i]
+                        go = None
+                    continue
+                if ahead > PK_IN[0] + 5.0:
+                    break
+                need = min(G["q"] + PK_CLEAR + hw[i], lane.width - hw[i] - 0.1)
+                if need > lane.width / 2 - hw[i] - PK_KEEP and go != g:        # over the centre line
+                    if ahead > PK_DECIDE:
+                        break
+                    if ahead > 0.0:
+                        if by_lane is None:
+                            by_lane = self.cars_by_lane()
+                        t_me = Traffic._reach(G["s_hi"] + PK_ZONE[1] - rear, float(self.v[i]), PK_PASS_V, 1.5)
+                        if not self.parked_oncoming_clear(lane, G, t_me, by_lane, exclude=i, ego=ego, s_me=si):
+                            stop_gap[i] = min(stop_gap[i], ahead - PK_WAIT)
+                            self.pk_wait[i] = g
+                            break
+                    self.pk_go[i] = go = g
+                if ahead > 0.0:
+                    f = (PK_IN[0] - ahead) / (PK_IN[0] - PK_IN[1])
+                elif behind > 0.0:
+                    f = (PK_OUT[1] - behind) / (PK_OUT[1] - PK_OUT[0])
+                else:
+                    f = 1.0
+                target[i] = max(target[i], need * min(max(f, 0.0), 1.0))
+                swing[i] = True
+                self.pk_prof[i] = (G["s_lo"], G["s_hi"], need)
+                if ahead > -0.5 and self.shift[i] < need - 0.25:     # not out far enough yet
+                    vmax[i] = min(vmax[i], math.sqrt(PK_SWING_V ** 2 + 4.0 * max(ahead - 1.0, 0.0)))
+                break
+        # the cars coming the other way give way to a car passing parked cars on its side: they wait short of the
+        # passing stretch (on their lane) while it is out there (pk_go, ego_pk_go)
+        active = set(self.pk_go.values()) | set(self.ego_pk_go)
+        if active:
+            for i in range(n):
+                lid = self.route[i][self.ri[i]]
+                for g in pk.opp_groups.get(lid, ()):
+                    if g not in active:
+                        continue
+                    lo = pk.groups[g]["opp_zone"][0]
+                    d = lo - (float(self.s[i]) + hl[i])
+                    if 0.0 < d < 40.0:
+                        stop_gap[i] = min(stop_gap[i], d - PK_GIVE_ROOM)
+        return target, swing, vmax
+
+    def parked_oncoming_clear(self, lane, G, t_me, by_lane=None, exclude=None, ego=None, s_me=None):
+        """Is the oncoming lane clear for a pass of parked-car group G (keisim/parked.py) on `lane`, taking t_me s?
+        Nobody (NPCs on the other direction's lane, on the connectors into it and the lanes before those, the ego in
+        it: lane_cars) may be on the passing stretch (PK_ZONE round the group, on that lane), and everyone coming
+        must be able to stop short of it (PK_YIELD_B, PK_YIELD_D: they give way to a car out there) or get there only
+        after t_me + PK_ONCOMING_T; and
+        (s_me: the passing car's position on `lane`) nobody may be ahead of it in its lane up to PK_OUT + PK_EXIT past
+        the group."""
+        O = G["opp"]
+        if O < 0:
+            return True
+        lanes = self.town.lanes
+        lo, hi = G["opp_zone"]
+        by_lane = self.cars_by_lane() if by_lane is None else by_lane
+        cars = self.lane_cars(O, by_lane, exclude=exclude, ego=ego)
+        for c in lanes[O].pred:                      # ... and on the lanes before the connectors into it
+            for p in lanes[c].pred:
+                back = lanes[c].length + lanes[p].length
+                cars += [(float(self.s[j]) - back, float(self.v[j]), float(self.dims[j, 0]))
+                         for j in by_lane.get(p, ()) if j != exclude]
+        for so, vo, ln in cars:
+            if so - ln / 2 > hi:
+                continue                                 # past it
+            if so + ln / 2 >= lo:
+                return False                             # on the stretch
+            d = lo - so - ln / 2                         # it can stop short of the stretch (it gives way: _parked_gaps)
+            if d < vo * vo / (2.0 * PK_YIELD_B) + PK_YIELD_D and d / max(vo, 0.5) < t_me + PK_ONCOMING_T:
+                return False
+        # one at a time, and room to pull back in: nobody in the lane between the car (at s_me) and PK_OUT + a car's
+        # length past the group (no convoys over the centre line: when the first stops, the rest are stuck there)
+        if s_me is not None:
+            end = G["s_hi"] + PK_OUT[1] + PK_EXIT
+            for so, vo, ln in self.lane_cars(lane.id, by_lane, exclude=exclude, ego=ego):
+                if so > s_me and so - ln / 2 < end:
+                    return False
+        return True
+
+    def _bike_gaps(self, stop_gap, paths, relc, valid, hl, vmax, dt, pk_target=None, swing=None):
         """Bicycles (TrafficConfig.bicycles) -> (gap, the bicycle's speed) to follow, and vmax with the passing speed.
         A bicycle rides beside the kerb lane, a car's width or less from the lane's centre line. A car coming up
         behind one on its lane moves over to the right inside its lane (it keeps BIKE_KEEP from the lane's edge:
@@ -1259,15 +1420,9 @@ class Traffic:
             near = (lon > -(reach + BIKE_OUT[0])) & (lon < reach + 2.0) & (lat > 0.0) & (lat < hw[:, None] + 2.2)
             room = np.where(near, np.maximum(room, self.shift[:, None]), room)
             target = np.where(near.any(1), np.maximum(target, self.shift), target)
-        # sideways: towards the target at BIKE_RATE at most, gently (BIKE_ACC); back to the lane's centre from the
-        # first metre (a car that stood moved over steers back as it starts: BIKE_BACK per metre driven)
-        rate = np.minimum(BIKE_RATE, 0.15 * np.maximum(self.v - 0.5, 0.0))
-        back = np.minimum(BIKE_RATE, BIKE_BACK * self.v)
-        v_t = np.clip((target - self.shift) * 1.6, -back, rate)
-        self.shift_tgt = target
-        self.shift_v = self.shift_v + np.clip(v_t - self.shift_v, -BIKE_ACC * dt, BIKE_ACC * dt)
-        self.shift_v = np.where((self.v < 0.3) | ((target <= 0.0) & (self.shift < 0.01)), 0.0, self.shift_v)
-        self.shift = np.maximum(self.shift + self.shift_v * dt, 0.0)
+        if pk_target is not None:                   # parked cars too (_parked_gaps): the larger move out
+            target = np.maximum(target, pk_target)
+        self._integrate_shift(target, dt, swing)
         me = np.full(n, -1)
         less = room[:, bow]
         hwid = self.dims[:, 1] / 2
@@ -1293,6 +1448,15 @@ class Traffic:
         d = np.maximum(relc, 0.0)
         left = np.maximum(sh - (BIKE_BACK - 0.05) * d, sh * np.exp(-1.6 * d / np.maximum(self.v, 1.0)[:, None]))
         o = np.where(tg >= sh - 1e-3, np.maximum(sh, tg), np.maximum(left, tg))
+        if self.pk_prof:                    # passing a parked car: out round it only (_parked_gaps), not beyond
+            for i, (s_lo, s_hi, need) in self.pk_prof.items():
+                hl_i = self.dims[i, 0] / 2
+                sp = self.s[i] + d[i]
+                ahead, behind = s_lo - (sp + hl_i), (sp - hl_i) - s_hi
+                f = np.where(ahead > 0.0, (PK_IN[0] - ahead) / (PK_IN[0] - PK_IN[1]),
+                             np.where(behind > 0.0, (PK_OUT[1] - behind) / (PK_OUT[1] - PK_OUT[0]), 1.0))
+                back_i = np.maximum(sh[i, 0] - PK_BACK * d[i], 0.0)       # (it steers back faster than for a bike)
+                o[i] = np.maximum(need * np.clip(f, 0.0, 1.0), back_i)
         dp = np.gradient(paths, axis=1)
         ln = np.hypot(dp[..., 0], dp[..., 1])
         ok = ln > 1e-6
@@ -1349,7 +1513,7 @@ SKIN = np.array([[150, 180, 220], [120, 160, 205], [90, 125, 170], [60, 90, 130]
 
 
 class Pedestrians:
-    WALK, CROSS, WAIT = 0, 1, 2
+    WALK, CROSS, WAIT, HIDE = 0, 1, 2, 3       # HIDE: a child hiding in front of a parked car (keisim/parked.py)
 
     def __init__(self, town, cfg: TrafficConfig, rng, n, focus_cw=()):
         """n walkers; with TrafficConfig.crosswalks also the corner people of the zebras at signals (crosswalk_spawn
@@ -1419,6 +1583,9 @@ class Pedestrians:
             for side in (0, 1):
                 self.ww_cw[c["ww"][side]].append((ci, side, c["ww_s"][side]))
         self._cw_t = None                      # crosswalk_people's cache (the time it is for)
+        self.dart = np.zeros(n, bool)          # the children who hide and run out (add_hidden, start_dart)
+        self.parked = None                     # the ParkedCars (set_parked)
+        self.ww_block = None                   # 路側帯 walkway -> [(s0, s1)] beside parked cars (set_parked)
         for j, ci in enumerate(corner_cw):
             i = n - len(corner_cw) + j
             self.corner[i] = True
@@ -1499,6 +1666,65 @@ class Pedestrians:
         back = (sgn < 0) & (u >= u0 - CW_PAST) & (u - u1 <= horizon * v)
         return bool(np.any(fwd | back))
 
+    # ------------------------------------------------------------ parked cars (keisim/parked.py)
+    PER_PERSON = ("w", "s", "dir", "speed", "lat", "mode", "c0", "c1", "height", "colors", "phase", "xy", "yaw",
+                  "vel", "cooldown", "cw", "cw_from", "cw_wait", "cw_late", "cw_react", "corner", "cw_back",
+                  "cw_stall", "cw_retreat", "cw_skip", "cw_held", "dart")
+
+    def set_parked(self, pk):
+        """Parked cars stand in the 路側帯: the people walking in it turn back where one stands (ww_block), and
+        nobody sets off across the road through one. People already there move to the nearer end of it."""
+        self.parked = pk
+        ww = self.town.walkways
+        self.ww_block = [[] for _ in ww]
+        for k, w in enumerate(ww):
+            if not w["in_road"]:
+                continue
+            poly = w["poly"]
+            for j in range(pk.n):
+                s_c, lat = poly.project(pk.xy[j])
+                if abs(lat) < pk.dims[j, 1] / 2 + 0.9:
+                    half = pk.dims[j, 0] / 2 + 0.8
+                    self.ww_block[k].append((s_c - half, s_c + half))
+        for i in range(self.n):
+            if self.mode[i] != self.WALK:
+                continue
+            for a, b in self.ww_block[self.w[i]]:
+                if a < self.s[i] < b:
+                    self.s[i] = a if self.s[i] - a < b - self.s[i] else b
+        self._update_pose()
+
+    def add_hidden(self, xy, to, w_to, s_to, lat_to, height, speed, shirt):
+        """A child hiding at `xy` (HIDE) who will run to `to` (on walkway w_to at s_to, lat_to) -> their index."""
+        i = self.n
+        new = {"w": w_to, "s": s_to, "dir": 1.0, "speed": speed, "lat": lat_to, "mode": self.HIDE, "c0": xy,
+               "c1": to, "height": height, "colors": np.stack([shirt, PANTS[0], SKIN[1]]), "phase": 0.0, "xy": xy,
+               "yaw": math.atan2(to[1] - xy[1], to[0] - xy[0]), "vel": 0.0, "cooldown": 30.0, "cw": -1,
+               "cw_from": 0, "cw_wait": 0.0, "cw_late": False, "cw_react": 0.0, "corner": False, "cw_back": np.nan,
+               "cw_stall": 0.0, "cw_retreat": False, "cw_skip": False, "cw_held": False, "dart": True}
+        for name in self.PER_PERSON:
+            a = getattr(self, name)
+            v = np.asarray(new[name], dtype=a.dtype)
+            setattr(self, name, np.concatenate([a, v.reshape((1,) + a.shape[1:])]))
+        self.n += 1
+        return i
+
+    def start_dart(self, i):
+        """Hidden child i runs out across the road (to c1, then walks on there)."""
+        self.mode[i] = self.CROSS
+        self.c0[i] = self.xy[i]
+        self.vel[i] = self.speed[i]
+
+    def _crossing_blocked(self, a, b):
+        """Would a crossing from a to b walk through a parked car?"""
+        pk = self.parked
+        if pk is None or not pk.n:
+            return False
+        near = np.nonzero(np.hypot(*(pk.xy - a).T) < 15.0)[0]
+        if not len(near):
+            return False
+        return not rays_clear(a, np.asarray(b)[None], pk.edges(near))[0]
+
     def _update_pose(self):
         ww = self.town.walkways
         for i in range(self.n):
@@ -1536,6 +1762,8 @@ class Pedestrians:
         if self.cw_on:
             self._update_held(veh_xy, veh_v, veh_yaw)
         for i in range(self.n):
+            if self.mode[i] == self.HIDE:
+                continue
             if self.mode[i] == self.WAIT:
                 self._wait_step(i, dt, t)
                 continue
@@ -1543,6 +1771,12 @@ class Pedestrians:
                 poly = ww[self.w[i]]["poly"]
                 s_prev = float(self.s[i])
                 self.s[i] += self.dir[i] * self.speed[i] * dt
+                if self.ww_block is not None and self.ww_block[self.w[i]]:     # a parked car in the 路側帯
+                    for a, b in self.ww_block[self.w[i]]:
+                        if a < self.s[i] < b and not a < s_prev < b:
+                            self.dir[i] *= -1
+                            self.s[i] = s_prev
+                            break
                 if self.cw_on:
                     b = self.cw_back[i]
                     if b == b and (s_prev - b) * (self.s[i] - b) <= 0.0:      # a corner person turns back
@@ -1556,7 +1790,10 @@ class Pedestrians:
                 self.vel[i] = self.speed[i]
                 want = (rng.random() < self.cfg.cross_rate * dt) or (trigger is not None and trigger[i])
                 if want and self.cooldown[i] <= 0 and 10.0 < self.s[i] < poly.length - 10.0:
-                    if self._safe_to_cross(i, veh_xy, veh_v, veh_yaw):
+                    if self._safe_to_cross(i, veh_xy, veh_v, veh_yaw) and not (
+                            self.parked is not None and self._crossing_blocked(
+                                self.xy[i], ww[self.partner[self.w[i]]]["poly"].interp1(
+                                    ww[self.partner[self.w[i]]]["poly"].project(self.xy[i])[0]))):
                         j = self.partner[self.w[i]]
                         other = ww[j]["poly"]
                         s2, _ = other.project(self.xy[i])

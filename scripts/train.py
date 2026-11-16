@@ -37,6 +37,7 @@ def sample_weights(d, dagger_weight=1.0, kv_weight=1.0):
     w[reason == 8] *= 2.0                       # 止まれ: stopping at the minor road's stop line (real towns)
     w[reason == 9] *= 3.0                       # giving way to people on a zebra (crosswalks at signals), as reason 3
     w[reason == 10] *= 3.0                      # bicycles (following, passing slowly, 巻き込み確認), as reason 3
+    w[reason == 11] *= 2.0                      # parked cars (waiting behind one, passing slowly: keisim/parked.py)
     w[d["tl"] == 1] *= 2.0                      # yellow
     start = (d["v"] < 1.0) & (d["speed"] > 1.0)
     w[start] *= 3.0                             # moving off (anti-inertia)

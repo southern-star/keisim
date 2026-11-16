@@ -28,6 +28,7 @@ import numpy as np
 
 from .config import TL_RED, TL_YELLOW, TrafficConfig
 from .geometry import cumlen, curvature_of, headings_of, wrap
+from .parked import PARKED_OWNER, PK_BIKE_CLEAR
 
 BIKE_LEN, BIKE_W = 1.8, 0.6
 BIKE_R = 0.3                # the circles that cover a bike (NCB of them along it)
@@ -467,6 +468,22 @@ class Bicycles:
         valid = np.zeros((n, P), bool)
         curv = np.zeros((n, P))
         look = 12.0 + 3.0 * self.v
+        out_eff, pk_near = self.out, None
+        pkc = getattr(traffic, "parked", None)
+        if pkc is not None and pkc.n:            # parked cars (keisim/parked.py): out round them, far enough
+            out_eff, pk_near = self.out.copy(), np.zeros(n, bool)
+            for i in range(n):
+                lid = int(self.lane[i])
+                gs = pkc.lane_groups.get(lid)
+                if not gs:
+                    continue
+                for g in gs:
+                    grp = pkc.groups[g]
+                    d = grp["s_lo"] - float(self.lane_s[i])
+                    if -(grp["s_hi"] - grp["s_lo"]) - 2.0 < d <= 25.0:
+                        need = grp["q"] + edge_offset(town, lanes[lid]) + BIKE_W / 2 + PK_BIKE_CLEAR
+                        out_eff[i] = max(out_eff[i], need)
+                        pk_near[i] |= d <= 20.0
         for i in range(n):
             cat = cats[i]
             j0 = int(np.searchsorted(cat.cum, self.u[i]))
@@ -478,7 +495,7 @@ class Bicycles:
             x = np.clip(d / OUT_BLEND, 0.0, 1.0)
             lat = self.lat[i]
             pH[i] = base + nr * (lat * (1.0 - x))[:, None]
-            pO[i] = base + nr * (lat + (self.out[i] - lat) * x)[:, None]
+            pO[i] = base + nr * (lat + (out_eff[i] - lat) * x)[:, None]
             rel[i] = d
             valid[i] = (d <= look[i]) & (j0 + idx < len(cat.cum))
             curv[i] = cat.curv[jj]
@@ -519,6 +536,10 @@ class Bicycles:
                 for tau in (0.8, 1.6):
                     parts.append((peds.xy[ci] + vv * tau, np.full(len(ci), 0.35), -2 - ci, peds.vel[ci],
                                   peds.yaw[ci], np.full(len(ci), MARGIN_CROSS)))
+        if pkc is not None and pkc.n:            # parked cars: obstacles (the riders move out round them)
+            pxy, pr, pow_ = pkc.circles()
+            parts.append((pxy, pr, pow_, np.zeros(len(pxy)), pkc.yaw[pow_ - PARKED_OWNER],
+                          np.full(len(pxy), MARGIN_CAR)))
         oxy, orr, oow, osp, oyw, omg = (np.concatenate([p[k] for p in parts]) for k in range(6))
         margin = np.broadcast_to(omg[None], (n, len(oxy))).copy()
         if n_turn:
@@ -576,13 +597,22 @@ class Bicycles:
             # -- moving out / back in
             home = self.lat_t[i] < 0.01
             lead_slow = math.isfinite(gH[i]) and vH[i] < self.cruise[i] - 0.8 and (oH[i] <= -2 or oH[i] >= BIKE_OWNER)
-            if home:
+            if pk_near is not None and pk_near[i]:
+                # a parked car just ahead or beside: out round it (after the look back), and not back in before past
+                if home and self._rear_clear(i, vxy, vv_):
+                    self.look_t[i] += dt
+                    if self.look_t[i] >= LOOK_BACK:
+                        self.lat_t[i] = out_eff[i]
+                        self.look_t[i] = 0.0
+                elif not home:
+                    self.lat_t[i] = max(self.lat_t[i], out_eff[i])
+            elif home:
                 want = lead_slow and gH[i] < 5.0 + 2.5 * v and gO[i] > gH[i] + 8.0 and cur.kind == "road" \
                     and cat.first - u > 14.0 and u > 3.0
                 if want and self._rear_clear(i, vxy, vv_):
                     self.look_t[i] += dt
                     if self.look_t[i] >= LOOK_BACK:
-                        self.lat_t[i] = self.out[i]
+                        self.lat_t[i] = out_eff[i]
                         self.look_t[i] = 0.0
                 else:
                     self.look_t[i] = max(0.0, self.look_t[i] - 2 * dt)
