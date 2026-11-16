@@ -7,9 +7,9 @@ import numpy as np
 
 from .config import TL_GREEN, TL_RED, TL_YELLOW, TrafficConfig
 from .geometry import box_corners, curvature_of, rays_clear, wrap
-from .parked import (PARKED_OWNER, PK_ACC, PK_BACK, PK_CLEAR, PK_DECIDE, PK_EXIT, PK_GIVE_ROOM, PK_IN, PK_KEEP,
-                     PK_MARGIN, PK_ONCOMING_T, PK_OUT, PK_PASS_V, PK_RATE, PK_SWING_V, PK_WAIT, PK_YIELD_B, PK_YIELD_D,
-                     PK_ZONE)
+from .parked import (PARKED_OWNER, PK_ACC, PK_BACK, PK_CLEAR, PK_CONVOY, PK_CONVOY_GAP, PK_CONVOY_ROOM, PK_DECIDE,
+                     PK_EXIT, PK_GIVE_ROOM, PK_IN, PK_KEEP, PK_MARGIN, PK_ONCOMING_T, PK_OUT, PK_PASS_V, PK_RATE,
+                     PK_SWING_V, PK_WAIT, PK_YIELD_B, PK_YIELD_D, PK_ZONE)
 from .roadnet import PED_FLASH, PED_GREEN
 from .route import (LC_CHECK, LC_PUSH, LC_PUSH_TO, LC_START_MARGIN, blend_weight, change_room, change_window,
                     lane_moves, link_map, pick_move)
@@ -339,6 +339,7 @@ class Traffic:
         self.pk_prof = {}       # car -> (s_lo, s_hi, how far out) of the group it moves out round (_shifted_paths)
         self.ego_pk_go = set()  # the groups the ego has set off to pass (Expert.parked_scan): oncoming cars give way
         self.pk_wait = {}       # car -> the parked-car group it waits to pass (the oncoming lane is not clear)
+        self.pk_convoy = {}     # parked-car group -> the cars (the ego too) that have set off in its convoy (PK_CONVOY)
 
     # --------------------------------------------------------------- spawning
     def _sample_dims(self):
@@ -578,12 +579,22 @@ class Traffic:
             out += [(float(self.s[j]) - cl, float(self.v[j]), float(self.dims[j, 0])) for j in by_lane.get(c, ())
                     if j != exclude]
         out += [(sb, float(self.v[j]), float(self.dims[j, 0])) for j, sb in self.changing_into(lane_id) if j != exclude]
-        if ego is not None:
-            exy, ev, eyaw, elen = ego
-            sb, lat = L.poly.project(np.asarray(exy, float))
-            if abs(lat) < L.width / 2 + 0.3 and sb < L.length and math.cos(eyaw - L.poly.heading1(sb)) > 0.5:
-                out.append((sb, float(ev), float(elen)))
+        sb = self._ego_on(L, ego)
+        if sb is not None:
+            out.append((sb, float(ego[1]), float(ego[3])))
         return out
+
+    @staticmethod
+    def _ego_on(L, ego):
+        """The ego (xy, v, yaw, length) projected onto lane L: its s along it if it is in it (in it, changing into it
+        or about to enter it), else None."""
+        if ego is None:
+            return None
+        exy, eyaw = ego[0], ego[2]
+        sb, lat = L.poly.project(np.asarray(exy, float))
+        if abs(lat) < L.width / 2 + 0.3 and sb < L.length and math.cos(eyaw - L.poly.heading1(sb)) > 0.5:
+            return sb
+        return None
 
     def _lane_change_gaps(self, stop_gap, ego, ego_wait=None, dt=0.05):
         """NPCs about to change lanes need room in the target lane (route.change_room; the ego counts too). Without
@@ -1222,6 +1233,7 @@ class Traffic:
         car's lane decides: with room for PK_CLEAR beside it inside the lane (PK_KEEP from its edge) the car just
         moves over; else it sets off to pass over the centre line once the oncoming lane is clear
         (parked_oncoming_clear), from PK_DECIDE behind it on (self.pk_go), and waits PK_WAIT behind it until then.
+        A car right behind one passing the group follows it, PK_CONVOY in one go at most (parked_follow).
         The move out ramps in from PK_IN before the group's rear and back from PK_OUT past its front; a car not yet
         out far enough comes up to the parked car at PK_SWING_V. stop_gap is updated in place."""
         pk = self.parked
@@ -1236,6 +1248,8 @@ class Traffic:
         by_lane = None
         self.pk_prof = {}
         self.pk_wait = {}
+        live = set(self.pk_go.values()) | set(self.ego_pk_go)            # a convoy ends with its last car
+        self.pk_convoy = {g: c for g, c in self.pk_convoy.items() if g in live}
         for i in range(n):
             r, k = self.route[i], self.ri[i]
             gs = pk.lane_groups.get(r[k])
@@ -1261,15 +1275,20 @@ class Traffic:
                 if need > lane.width / 2 - hw[i] - PK_KEEP and go != g:        # over the centre line
                     if ahead > PK_DECIDE:
                         break
+                    first = True                       # the first of a convoy (else: following one)
                     if ahead > 0.0:
                         if by_lane is None:
                             by_lane = self.cars_by_lane()
                         t_me = Traffic._reach(G["s_hi"] + PK_ZONE[1] - rear, float(self.v[i]), PK_PASS_V, 1.5)
                         if not self.parked_oncoming_clear(lane, G, t_me, by_lane, exclude=i, ego=ego, s_me=si):
-                            stop_gap[i] = min(stop_gap[i], ahead - PK_WAIT)
-                            self.pk_wait[i] = g
-                            break
+                            first = False
+                            if not (self.parked_follow(lane, g, si, hl[i], by_lane, exclude=i, ego=ego) and
+                                    self.parked_oncoming_clear(lane, G, t_me, by_lane, exclude=i, ego=ego)):
+                                stop_gap[i] = min(stop_gap[i], ahead - PK_WAIT)
+                                self.pk_wait[i] = g
+                                break
                     self.pk_go[i] = go = g
+                    self.pk_convoy[g] = 1 if first else self.pk_convoy.get(g, 0) + 1
                 if ahead > 0.0:
                     f = (PK_IN[0] - ahead) / (PK_IN[0] - PK_IN[1])
                 elif behind > 0.0:
@@ -1296,6 +1315,35 @@ class Traffic:
                     if 0.0 < d < 40.0:
                         stop_gap[i] = min(stop_gap[i], d - PK_GIVE_ROOM)
         return target, swing, vmax
+
+    def parked_follow(self, lane, g, s_me, hl_me, by_lane, exclude=None, ego=None):
+        """May a car at s_me on `lane` (its centre; half length hl_me) follow the car right ahead of it past parked-car
+        group g (PK_CONVOY)? That car is passing g (pk_go, or the ego: ego_pk_go) and is no more than PK_CONVOY_GAP
+        ahead of it, fewer than PK_CONVOY cars have set off in this convoy, and nobody else in the lane is up to PK_OUT +
+        PK_EXIT past the group plus a car's length and PK_CONVOY_ROOM per car of the convoy ahead (room for them all to
+        pull back in). (The oncoming lane is checked apart: parked_oncoming_clear without s_me.) ego: the ego (xy, v,
+        yaw, length) when an NPC asks (None when the ego asks)."""
+        if self.pk_convoy.get(g, 0) >= PK_CONVOY:
+            return False
+        cars = [(float(self.s[j]), float(self.dims[j, 0]), self.pk_go.get(j) == g)
+                for j in by_lane.get(lane.id, ()) if j != exclude]
+        cars += [(sb, float(self.dims[j, 0]), False) for j, sb in self.changing_into(lane.id) if j != exclude]
+        sb = self._ego_on(lane, ego)
+        if sb is not None:
+            cars.append((sb, float(ego[3]), g in self.ego_pk_go))
+        ahead = sorted((c for c in cars if c[0] > s_me), key=lambda c: c[0])
+        if not ahead or not ahead[0][2]:
+            return False                                # right ahead of it: a car of the convoy
+        s0, l0, _ = ahead[0]
+        if (s0 - l0 / 2) - (s_me + hl_me) > PK_CONVOY_GAP:
+            return False
+        end = self.parked.groups[g]["s_hi"] + PK_OUT[1] + PK_EXIT
+        for so, ln, member in ahead:
+            if member:
+                end += ln + PK_CONVOY_ROOM
+            elif so - ln / 2 < end:
+                return False
+        return True
 
     def parked_oncoming_clear(self, lane, G, t_me, by_lane=None, exclude=None, ego=None, s_me=None):
         """Is the oncoming lane clear for a pass of parked-car group G (keisim/parked.py) on `lane`, taking t_me s?

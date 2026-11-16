@@ -9,7 +9,9 @@ as it was). They stand still with their lights off. Left-hand traffic only.
 A car that comes up behind one moves over to the right round it (Traffic._parked_gaps, Expert.parked_scan): inside
 its lane when there is room for PK_CLEAR beside the parked car, else over the centre line, which it does only when
 the oncoming lane is clear for the whole pass (the side whose lane is blocked gives way); otherwise it waits PK_WAIT
-behind the parked car. The expert passes them at PK_PASS_V at most (someone may step out from in front of them).
+behind the parked car. The cars right behind one passing follow it (up to PK_CONVOY in one go: a queue behind a
+parked car moves on several at a time, and the oncoming lane gets its turn in between). The expert passes them at
+PK_PASS_V at most (someone may step out from in front of them).
 
 TrafficConfig.dart_out: the chance that a parked car the ego's route passes hides a child in front of it, who runs
 out across the road when the ego comes within DART_TRIGGER of them (World.step). The expert sees them only once the
@@ -29,7 +31,8 @@ PK_FROM = (30.0, 30.0)      # m: no parked car this close to its lane's start (a
 PK_FROM_JUNCTION = 60.0     # m: ... and this close to a junction of 3+ arms (through bends): the queues at it would
                             # stand beside the parked car (in the oncoming lane before it, behind it after it)
 PK_EXIT = 20.0              # m: a car passes parked cars only with nobody in its lane up to PK_OUT + this past them
-                            # (it would stand in the oncoming lane, unable to pull back in)
+                            # (it would stand in the oncoming lane, unable to pull back in), but for the cars of
+                            # the convoy it follows (PK_CONVOY)
 PK_CURVE = 1.0 / 60.0       # 1/m: no parked car where the lane bends more than this, within PK_CURVE_REACH of it
 PK_CURVE_REACH = 15.0
 PK_SPACING = 45.0           # m: between two parked cars on one kerb (bumper to bumper), but for rows: a car that has
@@ -66,7 +69,10 @@ PK_SWING_V = 3.0            # m/s: a car that has not moved out far enough yet c
 PK_RATE = 1.2               # m/s sideways at most (and 0.5 of the speed: a car turns out round a parked car more
 PK_ACC = 2.0                # sharply than it moves over for a bicycle), m/s^2 sideways
 PK_BACK = 0.25              # m sideways per metre driven: back into the lane past it (0.25 of the speed)
-PK_GIVE_ROOM = 6.0          # m: an oncoming car giving way to a car out round parked cars stops this far short of
+PK_CONVOY = 3               # cars at most that pass one group in one go: a car right behind one passing it follows
+PK_CONVOY_GAP = 12.0        # m: ... when no further behind it than this (bumper to bumper), and the lane past the group
+PK_CONVOY_ROOM = 2.0        # m: has room for them all to pull back in (PK_EXIT, then a car's length and this per car)
+PK_GIVE_ROOM = 6.0         # m: an oncoming car giving way to a car out round parked cars stops this far short of
                             # the passing stretch (room for it to pull back in)
 PARKED_OWNER = 2_000_000    # owner ids of their circles (corridor_gaps): this + the parked car's index
 DART_TRIGGER = (10.0, 16.0)  # m: a hidden child runs out when the ego's front bumper is this far before their line
