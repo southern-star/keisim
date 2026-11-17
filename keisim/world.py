@@ -56,11 +56,7 @@ class World:
             if self.parked is not None and self.parked.n:          # nor in or just behind a parked car (room to
                 pk = self.parked                                    # move out round it: 8 m past its ends)
                 pr = pk.dims[:, 0] / 2 + 8.0 - (BIKE_R + 0.45)        # (Bicycles._free adds BIKE_R + 0.45)
-                if __import__("os").environ.get("KS_NOSPAWN"):
-                    pxy, pr2, _ = pk.circles()
-                    cxy, cr = np.concatenate([cxy, pxy]), np.concatenate([cr, pr2])
-                else:
-                    cxy, cr = np.concatenate([cxy, pk.xy]), np.concatenate([cr, pr])
+                cxy, cr = np.concatenate([cxy, pk.xy]), np.concatenate([cr, pr])
             ahead = None
             if route is not None and rng.random() < 0.6:        # one ahead of the ego on its first road
                 first = town.lanes[route.lanes[0]]

@@ -599,7 +599,7 @@ class Bicycles:
             lead_slow = math.isfinite(gH[i]) and vH[i] < self.cruise[i] - 0.8 and (oH[i] <= -2 or oH[i] >= BIKE_OWNER)
             if pk_near is not None and pk_near[i]:
                 # a parked car just ahead or beside: out round it (after the look back), and not back in before past
-                if home and self._rear_clear(i, vxy, vv_, standing_ok=True):
+                if home and self._rear_clear(i, vxy, vv_):
                     self.look_t[i] += dt
                     if self.look_t[i] >= LOOK_BACK:
                         self.lat_t[i] = out_eff[i]
@@ -803,10 +803,8 @@ class Bicycles:
             self.stuck[i] = self.stuck[i] + dt if v_new < 0.1 else 0.0
         self._release(ego_xy, ego_yaw, cxy, cr)
 
-    def _rear_clear(self, i, vxy, vv, standing_ok=False):
-        """No car beside rider i or coming up from behind within the time it takes to move out and pass.
-        standing_ok (out round a parked car): a car standing behind the rider does not count (it waits for the rider,
-        who would else wait for it for ever)."""
+    def _rear_clear(self, i, vxy, vv):
+        """No car beside rider i or coming up from behind within the time it takes to move out and pass."""
         if len(vxy) == 0:
             return True
         yaw = self.yaw[i]
@@ -814,10 +812,7 @@ class Bicycles:
         lon = d[:, 0] * math.cos(yaw) + d[:, 1] * math.sin(yaw)
         right = d[:, 0] * math.sin(yaw) - d[:, 1] * math.cos(yaw)
         reach = 6.0 + 3.5 * np.maximum(vv - self.v[i], 0.0) + 0.5 * vv
-        m = (lon < 3.0) & (lon > -reach) & (right > -1.0) & (right < 3.6)
-        if standing_ok and not __import__("os").environ.get("KS_NOREAR"):
-            m &= ~((np.asarray(vv) < 0.3) & (lon < -3.0))
-        if np.any(m):
+        if np.any((lon < 3.0) & (lon > -reach) & (right > -1.0) & (right < 3.6)):
             return False
         # the other riders: one beside on the right, or a faster one coming up within a few metres
         d = self.xy - self.xy[i]
