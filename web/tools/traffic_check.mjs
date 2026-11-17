@@ -91,7 +91,10 @@ for (let k = 1, t = 0; k <= Math.round(sec / DT); k++) {
       if (along > 0 && Math.abs(lat) < (c.W + 1.85) / 2 + 0.2) free = Math.min(free, along - (c.L + 4.5) / 2);
     }
     if (traffic.riders.length) {                            // … or a bicycle on its way ahead: it does not pass them;
-      const way = Array.from({ length: 31 }, (_, i) => nav.slice(egoS + i, egoS + i + 0.01)[0]);
+      const way = Array.from({ length: 31 }, (_, i) => {   // (its line, moved out round a parked car as far as it is)
+        const w = nav.slice(egoS + i, egoS + i + 0.6), h = Math.atan2(w[w.length - 1][1] - w[0][1], w[w.length - 1][0] - w[0][0]);
+        return [w[0][0] + Math.sin(h) * egoOff, w[0][1] - Math.cos(h) * egoOff];
+      });
       for (const r of traffic.riders) {
         if (Math.hypot(r.x - ego.x, r.y - ego.y) > 34) continue;
         // one crossing its way that has stopped for it counts only when it is right in the way (else both would wait)

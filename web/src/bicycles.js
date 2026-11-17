@@ -342,6 +342,7 @@ export function createBicycles(data, lanes, env, { perKm = 0, seed = 1, max = 60
     const c = Math.cos(r.yaw), s = Math.sin(r.yaw);
     const car = (x, y, v) => {
       const dx = x - r.x, dy = y - r.y, lon = dx * c + dy * s, right = dx * s - dy * c;
+      if (r.pkNear && v < 0.3 && lon < -3) return false;   // (out round a parked car: not for a car standing behind)
       return lon < 3 && lon > -(6 + 3.5 * Math.max(v - r.v, 0) + 0.5 * v) && right > -1 && right < 3.6;
     };
     for (const o of env.cars) if (car(o.xy[0], o.xy[1], o.v)) return false;
