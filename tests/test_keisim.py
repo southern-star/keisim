@@ -2148,3 +2148,178 @@ def test_junction_passes_window():
     assert j0["stood_s"] == 3.0 and j0["needless_s"] == 1.0 and j0["expert_stop"]
     assert j0["s_first_stop"] == 46.0
     assert not j1["reached"] and j1["kind"] == "signalised"
+
+
+def _expert_steps_hash(style, town, ep, route_length, crosswalks=0.0, max_steps=1300, **cfg_kw):
+    """An expert episode (KeiSim, jam fixes, no rendering) -> (sha256 of its per-step ego pose, speed and target speed
+    rounded to 0.1 mm (mm/s) and of its reasons, 16 hex digits; steps; status; the ego's front bumper (route s) at
+    each step it stood with the reason "yield"; the env). cfg_kw: EnvConfig fields."""
+    import hashlib
+
+    from keisim.config import town_config
+
+    cfg = EnvConfig()
+    cfg.render_rgb = cfg.render_seg = False
+    cfg.town = town_config(style)
+    cfg.traffic.box_rule = cfg.traffic.release_hidden = True
+    cfg.traffic.crosswalks = crosswalks
+    for k, v in cfg_kw.items():
+        setattr(cfg, k, v)
+    env = KeiEnv(cfg)
+    env.reset(town_seed=town, episode_seed=ep, route_length=route_length, render=False)
+    rows, reasons, stands = [], [], []
+    for _ in range(max_steps):
+        e, p = env.world.ego, env.plan
+        rows.append((e.x, e.y, e.yaw, e.v, p["target_speed"]))
+        reasons.append(p["reason"])
+        if p["reason"] == "yield" and e.v < 0.05:
+            stands.append(env.s_ego + e.LENGTH / 2)
+        _, _, done, info = env.step(env.expert_action())
+        if done:
+            break
+    rows = np.round(np.array(rows), 4) + 0.0                        # (+ 0.0: no -0.0)
+    h = hashlib.sha256(rows.tobytes() + "|".join(reasons).encode()).hexdigest()[:16]
+    return h, len(rows), info["status"], stands, env
+
+
+# expert episodes through turns that give way, hashed on the base branch of EnvConfig.expert_wait_back
+# (round13rt-standoffs, 0603ba8): a two-phase signal's right turn; a suburban town's narrow bend (its wait point lies
+# 3.25 m before the connector); a suburban signal's right turn with zebras (crosswalk holds)
+WAIT_BACK_GOLDEN = [(("twophase", 1013, 1, 400.0), "5358d0609531daaa", 870),
+                    (("suburban", 2000, 1, 500.0), "ec7b0e443bb7331c", 1236),
+                    (("suburban", 2008, 1, 500.0, 0.7), "a8f92f6e17df5225", 1061)]
+
+
+def test_expert_wait_back_off_replays_the_base_branch():
+    """EnvConfig.expert_wait_back is off by default, and off the expert drives as before the option, step for step
+    (WAIT_BACK_GOLDEN). A change to the simulator that alters these episodes must record them anew."""
+    assert EnvConfig().expert_wait_back == 0.0
+    for spec, want, n in WAIT_BACK_GOLDEN:
+        h, steps, status, stands, _ = _expert_steps_hash(*spec)
+        assert (h, steps, status) == (want, n, "success"), spec
+        assert stands, spec                                         # each stands for a yield
+
+
+def test_expert_wait_back_moves_the_wait_point():
+    """EnvConfig.expert_wait_back: the expert waits that much further back on a connector that gives way, not before
+    its start, and a wait point before the start already (a narrow bend's) stays (Expert.wait_point); the NPCs keep
+    Lane.wait_s (the Town does not change). Which rule applies still goes by Lane.wait_s: from the expert's own point
+    up to it a car due within YIELD_GAP s stops the expert at once, though the late check past a wait point would let
+    it go on; past Lane.wait_s the late check (LATE_COMMIT) as before. A right turn's hold for its exit's zebra moves
+    with the wait point. In an episode the expert stands 2 m further back for its yield, and the narrow bend's episode
+    stays the same."""
+    from types import SimpleNamespace as NS
+
+    from keisim.config import town_config
+    from keisim.expert import LATE_MARGIN, Expert, clear_time, stop_profile
+    from keisim.traffic import CW_REACH, YIELD_GAP
+
+    ex = KeiEnv(EnvConfig()).expert
+    assert ex.wait_point(NS(wait_s=6.0)) == 6.0                         # off: Lane.wait_s
+    ex.env.cfg.expert_wait_back = 2.0
+    assert ex.wait_point(NS(wait_s=6.0)) == 4.0
+    assert ex.wait_point(NS(wait_s=1.2)) == 0.0                         # not before the connector's start
+    assert ex.wait_point(NS(wait_s=-3.25)) == -3.25                     # before it already: stays
+
+    cfg = EnvConfig()
+    cfg.render_rgb = cfg.render_seg = False
+    cfg.town = town_config("twophase")
+    cfg.traffic.max_vehicles = cfg.traffic.max_peds = 0
+    cfg.traffic.crosswalks, cfg.traffic.crosswalk_spawn = 0.7, 0.0      # zebras, nobody on them
+    cfg.expert_wait_back = 2.0
+    env = KeiEnv(cfg)
+    for ep in range(60):                        # a right turn that gives way, with a zebra at its exit
+        env.reset(town_seed=1012, episode_seed=ep, route_length=600.0)
+        town = env.world.town
+        jn = next((j for j in env.route.junctions if town.lanes[j["lane"]].yields), None)
+        zebra = jn and next((c for c in env.route.crossings if c[5] > 0 and env.route.lanes[c[5] - 1] == jn["lane"]),
+                            None)
+        if zebra is not None:
+            break
+    assert zebra is not None
+    conn = town.lanes[jn["lane"]]
+    plain = Town(1012, town_config("twophase"))
+    assert [L.wait_s for L in town.lanes] == [L.wait_s for L in plain.lanes]
+    tr, pd, ego, hl = env.world.traffic, env.world.peds, env.world.ego, env.world.ego.LENGTH / 2
+    assert pd.cw_on and pd.n == 0
+    calls = []
+
+    def plan_at(s_front, tta, v=1.0, zebra_taken=False):
+        # tta: the first crossing's car (or the earliest of all, before the wait point); none at the later crossings
+        tr.min_arrival = lambda c, t, on_lane, moving_only=False, yields=None: calls.append(moving_only) or (
+            tta if yields is None or yields[0] == c.yields[0] else float("inf"))
+        # the zebra: taken for the hold's longer reach only (someone gets there by the time the turn would)
+        pd.crosswalk_blocked = lambda ci, u0, u1, t, horizon=CW_REACH: zebra_taken and horizon > CW_REACH
+        ego.v = v
+        s = s_front - hl
+        p0, p1 = env.route.poly.interp(np.array([s, s + 0.5]))
+        ego.x, ego.y, ego.yaw = float(p0[0]), float(p0[1]), float(np.arctan2(p1[1] - p0[1], p1[0] - p0[0]))
+        return env.expert.plan(pose=(ego.x, ego.y, ego.yaw), s=s)
+
+    s_old, s_new = jn["s_in"] + conn.wait_s, jn["s_in"] + env.expert.wait_point(conn)
+    s_cross = jn["s_in"] + conn.yields[0][1]
+    assert abs(s_old - s_new - 2.0) < 1e-9 and conn.wait_s > 2.0
+    inf = float("inf")
+    p = plan_at(s_new - 3.0, 3.0, v=5.0)                    # coming up to its own point: a stop there
+    assert p["reason"] == "yield" and p["target_speed"] <= stop_profile(3.0, Expert.B_COMF) + 1e-6
+    p = plan_at(s_new + 0.2, 3.0)
+    assert p["reason"] == "yield" and p["target_speed"] == 0.0 and calls[-1] is False
+    # between its own point and Lane.wait_s: a car due within YIELD_GAP s stops it at once, where the late check
+    # alone would let it commit to the turn
+    tta = 4.5
+    assert clear_time(s_cross - (s_old - 0.6), 1.0, ego.LENGTH) + LATE_MARGIN < tta < YIELD_GAP
+    p = plan_at(s_old - 0.6, tta)
+    assert p["reason"] == "yield" and p["target_speed"] == 0.0 and calls[-1] is False
+    p = plan_at(s_old - 0.6, inf)                           # nobody coming: on
+    assert p["reason"] != "yield" and p["target_speed"] > 0.5
+    # past Lane.wait_s (+ 0.5 m): the late check, as without the option
+    p = plan_at(s_old + 1.0, 1.5)
+    assert p["reason"] == "yield" and p["target_speed"] == 0.0 and calls[-1] is True
+    p = plan_at(s_old + 1.0, tta)
+    assert p["reason"] != "yield" and p["target_speed"] > 0.5
+    # the zebra hold: at the expert's own point, up to Lane.wait_s
+    p = plan_at(s_new - 3.0, inf, v=5.0, zebra_taken=True)
+    assert p["reason"] == "crosswalk" and p["target_speed"] <= stop_profile(3.0, Expert.B_COMF) + 1e-6
+    p = plan_at(s_old - 0.6, inf, zebra_taken=True)
+    assert p["reason"] == "crosswalk" and p["target_speed"] == 0.0
+    p = plan_at(s_old + 1.0, inf, zebra_taken=True)         # past it: only someone on its stretch stops it
+    assert p["reason"] != "crosswalk" and p["target_speed"] > 0.5
+
+    # episodes (WAIT_BACK_GOLDEN): the expert stands about 2 m further back at the two-phase right turn
+    spec = WAIT_BACK_GOLDEN[0][0]
+    _, _, status0, stands0, env0 = _expert_steps_hash(*spec)
+    h2, _, status2, stands2, _ = _expert_steps_hash(*spec, expert_wait_back=2.0)
+    j = next(j for j in env0.route.junctions if env0.world.town.lanes[j["lane"]].yields)
+    s_old = j["s_in"] + env0.world.town.lanes[j["lane"]].wait_s
+    assert status0 == status2 == "success" and h2 != WAIT_BACK_GOLDEN[0][1]
+    assert stands0 and stands2 and max(abs(x - s_old) for x in stands0) < 0.3
+    assert max(abs(x - (s_old - 2.0)) for x in stands2) < 0.3
+    # the narrow bend's wait point stays, and so does its episode
+    spec, want, n = WAIT_BACK_GOLDEN[1]
+    assert _expert_steps_hash(*spec, expert_wait_back=2.0)[:3] == (want, n, "success")
+
+
+def test_expert_delay_fifo():
+    """evaluate.py --expert_delay: the throttle and brake of the expert's actions reach the car that many control
+    steps late (ActionDelay, a FIFO; the car holds its brake until the first one arrives), the steering at once; off
+    nothing changes. In run_route the delayed expert drives the route differently, and still completes it."""
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
+    from evaluate import ActionDelay, run_route
+
+    acts = [np.array([0.1 * k, 0.05 * k, 1.0 - 0.1 * k]) for k in range(7)]
+    before = [a.copy() for a in acts]
+    d = ActionDelay(3)
+    out = [d(a) for a in acts]
+    for k, (a, o) in enumerate(zip(acts, out)):
+        assert o[0] == a[0]                                            # steering: at once
+        assert tuple(o[1:]) == (tuple(acts[k - 3][1:]) if k >= 3 else ActionDelay.HOLD)
+    assert all((a == b).all() for a, b in zip(acts, before))         # (the inputs are left as they were)
+    assert all((ActionDelay(0)(a) == a).all() for a in acts)
+
+    args = {"agent": "expert", "route_length": 250.0, "weather": "noon", "videos": 0, "max_steps": 3000}
+    m0 = run_route(((1003, 2), dict(args), 0))
+    m_off = run_route(((1003, 2), dict(args, expert_delay=0.0), 0))
+    m4 = run_route(((1003, 2), dict(args, expert_delay=0.4), 0))
+    assert m0["status"] == m_off["status"] == m4["status"] == "success"
+    assert (m0["steps"], m0["avg_speed"]) == (m_off["steps"], m_off["avg_speed"])
+    assert m4["avg_speed"] != m0["avg_speed"]

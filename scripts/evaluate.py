@@ -13,6 +13,12 @@ A real town imported from OpenStreetMap (keisim/realworld.py, scripts/import_osm
 
 The town is rebuilt from the Overpass cache data/osm/<name>.json, routes get the episode seeds 100.. (the same as
 import_osm.py's expert drives) and the results go to runs/eval/<name>/ (never over the suites' JSON).
+
+The expert waiting 2 m further back at right turns, with its throttle and brake 0.4 s late (a stand-in for a model's
+late yield decisions; runs/eval/wait_back/):
+
+  python scripts/evaluate.py --agent expert --suite suburban --expert_wait_back 2 --expert_delay 0.4 \\
+      --out runs/eval/wait_back/expert_wb2_delay0.4_suburban.json
 """
 from __future__ import annotations
 
@@ -23,6 +29,7 @@ import multiprocessing as mp
 import os
 import sys
 import time
+from collections import deque
 
 import numpy as np
 
@@ -122,6 +129,26 @@ for _k in ("crosswalks", "crosswalks_sub", "bigjunction"):
 _ENV = None
 
 
+class ActionDelay:
+    """--expert_delay: the throttle and brake of each action reach the car `steps` control steps late (a FIFO); until
+    the first one arrives the car holds its brake (routes start standing). A stand-in for a driving model's late
+    decisions (it yields 0.3-0.5 s after the expert and stops 1-2 m further on). The steering goes through at once:
+    pure pursuit 0.4 s late weaves at speed (+-5 m at 40 km/h on suburban 2000/1, then a collision), and the
+    models steer on time."""
+    HOLD = (0.0, 1.0)                    # throttle, brake
+
+    def __init__(self, steps):
+        self.steps = int(steps)
+        self.q = deque()
+
+    def __call__(self, action):
+        a = np.array(action, float)
+        if self.steps > 0:
+            self.q.append(a[1:].copy())
+            a[1:] = self.q.popleft() if len(self.q) > self.steps else self.HOLD
+        return a
+
+
 def run_route(job):
     global _ENV
     (town, ep), args, idx = job
@@ -149,6 +176,7 @@ def run_route(job):
     cfg.expert_yield_visible = bool(args.get("yield_visible", False))
     cfg.expert_bike_visible = bool(args.get("bike_visible", False))
     cfg.expert_bike_sweep = bool(args.get("bike_sweep", False))
+    cfg.expert_wait_back = float(args.get("expert_wait_back", 0.0))
     cfg.traffic.ego_patience_s = float(args.get("ego_patience", 0.0))
     cfg.traffic.light_past_line = int(args.get("npc_past_line", 0)) >= 1
     cfg.traffic.past_line_light_only = int(args.get("npc_past_line", 0)) >= 2
@@ -198,6 +226,9 @@ def run_route(job):
             env.cfg.render_rgb = env.cfg.render_seg = True
             obs = env._obs()
     dt = cfg.dt * cfg.action_repeat
+    delay = None
+    if agent is None and args.get("expert_delay", 0.0) > 0.0:
+        delay = ActionDelay(round(args["expert_delay"] / dt))
     done = False
     steps = 0
     t0 = time.time()
@@ -207,6 +238,8 @@ def run_route(job):
         e = env.world.ego
         if agent is None:
             action = env.expert_action()
+            if delay is not None:
+                action = delay(action)
             mp_ = None
         else:
             action, mp_ = agent.act(obs.get("rgbs", obs["rgb"]), obs["command"], obs["target_point"], e.v, dt,
@@ -493,7 +526,24 @@ def main():
                          "(TrafficConfig.dart_out); suffix _do<P>")
     ap.add_argument("--only", nargs="+", default=None, metavar="TOWN:EP",
                     help="only these routes of the suite (e.g. 1018:9400), for checks on picked routes; give --out")
+    ap.add_argument("--expert_wait_back", type=float, default=0.0, metavar="M",
+                    help="the expert waits this many m further back on a connector that gives way (a right turn's wait "
+                         "point; EnvConfig.expert_wait_back, the NPCs keep theirs): --agent expert, and the expert's "
+                         "reasons in the logs; tag suffix _wb<M>")
+    ap.add_argument("--expert_delay", type=float, default=0.0, metavar="S",
+                    help="--agent expert: its throttle and brake reach the car S s late (ActionDelay, a FIFO; the "
+                         "steering at once), a stand-in for a model's late decisions; a multiple of the 0.1 s control "
+                         "step; tag suffix _delay<S>")
     args = ap.parse_args()
+    if args.expert_wait_back < 0.0:
+        ap.error("--expert_wait_back: m back from the wait point, >= 0")
+    if args.expert_delay:
+        if args.agent != "expert":
+            ap.error("--expert_delay: --agent expert only")
+        from keisim.config import EnvConfig
+        step = EnvConfig().dt * EnvConfig().action_repeat
+        if args.expert_delay < 0.0 or abs(args.expert_delay / step - round(args.expert_delay / step)) > 1e-6:
+            ap.error(f"--expert_delay: a multiple of the control step ({step:g} s), >= 0")
     if args.rig is None:
         from keipilot.agent import checkpoint_rig
         args.rig = checkpoint_rig(args.ckpt) if args.agent == "model" else "front"
@@ -531,6 +581,10 @@ def main():
         tag += "_yh" + "".join(f"_{x:g}" for x in args.yield_hold)
     if args.yield_visible:
         tag += "_yv"
+    if args.expert_wait_back:
+        tag += f"_wb{args.expert_wait_back:g}"
+    if args.expert_delay:
+        tag += f"_delay{args.expert_delay:g}"
     if args.osm_town:
         jobs = [(args.osm_town, args.episode0 + e) for e in range(args.routes)]
     else:
@@ -570,7 +624,8 @@ def main():
          "rig": args.rig, "ego_patience": args.ego_patience, "via_ramp": bool(args.via_ramp),
          "npc_past_line": int(args.npc_past_line), "crosswalks": args.crosswalks, "bicycles": args.bicycles,
          "bike_visible": bool(args.bike_visible), "bike_sweep": bool(args.bike_sweep), "parked": args.parked,
-         "dart_out": args.dart_out, "cap_scale": int(args.cap_scale)}
+         "dart_out": args.dart_out, "cap_scale": int(args.cap_scale), "expert_wait_back": args.expert_wait_back,
+         "expert_delay": args.expert_delay}
     t0 = time.time()
     ctx = mp.get_context("spawn")
     with ctx.Pool(args.workers) as pool:

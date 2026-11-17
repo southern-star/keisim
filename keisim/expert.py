@@ -654,6 +654,7 @@ class Expert:
                 return tr.yield_tables(visible=tr.visible_from(cam, yaw, half, c.max_dist, w.town),
                                        bikes_visible=None if w.bikes is None else
                                        w.bikes.visible_from(cam, yaw, half, c.max_dist, w.town))
+            wb = env.cfg.expert_wait_back
             for jn in route.junctions:
                 if jn["s_out"] < s_front:
                     continue
@@ -663,9 +664,13 @@ class Expert:
                 if conn.yields:
                     d_wait = jn["s_in"] + conn.wait_s - s_front
                     d_cross = jn["s_in"] + conn.yields[0][1] - s_front
+                    # EnvConfig.expert_wait_back: the expert stops at its own wait point (d_stop), further back. Which
+                    # rule applies still goes by the Town's (d_wait): from its own point up to the Town's, a car due
+                    # within YIELD_GAP s stops it at once, where the late check below would let it commit to the turn
+                    d_stop = jn["s_in"] + self.wait_point(conn) - s_front if wb else d_wait
                     if d_wait >= -0.5:
                         if not jn["signalized"] and len(w.town.junctions[jn["junction"]].arms) >= 3:
-                            v_x = math.sqrt(CROSSING_V ** 2 + 2 * CROSSING_B * max(d_wait, 0.0))
+                            v_x = math.sqrt(CROSSING_V ** 2 + 2 * CROSSING_B * max(d_stop, 0.0))
                             lin = w.town.lanes[conn.pred[0]]            # the approach: its 止まれ line, if any
                             if lin.stop_sign_s is not None and s_front >= (jn["s_in"] - lin.length + lin.stop_sign_s
                                                                            - STOP_SIGN_MARGIN - STOP_SIGN_ZONE):
@@ -675,7 +680,7 @@ class Expert:
                         tta = tr.min_arrival(conn, w.t, tables())
                         yield_tta = min(tta, YIELD_TTA_MAX)
                         if tta < YIELD_GAP:
-                            v_y = stop_profile(max(d_wait, 0.0), self.B_COMF)
+                            v_y = stop_profile(max(d_stop, 0.0), self.B_COMF)
                             if v_y < target:
                                 target, reason = v_y, "yield"
                     elif not jn["signalized"]:
@@ -711,6 +716,8 @@ class Expert:
         # while the zebra of its exit is taken within CW_REACH s plus the drive on to it, so that it does not stand
         # across the oncoming lanes. Past the zebra's start (committed) the corridor check alone stops for someone
         # in the way. Independent of the ego speed: part of target_nolight.
+        # EnvConfig.expert_wait_back: the turn holds at the expert's own wait point (d_stop), as for the cars above,
+        # and the hold applies up to the Town's (d_wait)
         if peds.cw_on and route.crossings:
             s_front = s + hl
             for s0c, _, ci, u0, u1, kc in route.crossings:
@@ -723,8 +730,10 @@ class Expert:
                 conn = w.town.lanes[route.lanes[kc - 1]] if kc > 0 else None
                 if conn is not None and conn.kind == "conn" and conn.yields and conn.wait_s is not None:
                     d_wait = route.offsets[kc - 1] + conn.wait_s - route.s0[kc - 1] - s_front
-                    if d_wait >= -0.5 and peds.crosswalk_blocked(ci, u0, u1, w.t, CW_REACH + (d - d_wait) / 3.0):
-                        stop_at = max(d_wait, 0.0)
+                    d_stop = (route.offsets[kc - 1] + self.wait_point(conn) - route.s0[kc - 1] - s_front
+                              if env.cfg.expert_wait_back else d_wait)
+                    if d_wait >= -0.5 and peds.crosswalk_blocked(ci, u0, u1, w.t, CW_REACH + (d - d_stop) / 3.0):
+                        stop_at = max(d_stop, 0.0)
                 if stop_at is None and peds.crosswalk_blocked(ci, u0, u1, w.t):
                     stop_at = d - CW_MARGIN
                 if stop_at is not None:
@@ -818,6 +827,16 @@ class Expert:
         return {"path": path, "target_speed": float(target), "tl_state": int(tl), "reason": reason,
                 "gap": g, "lead_owner": int(lead_o[0]), "target_nolight": float(target_nolight),
                 "yield_tta": float(yield_tta), "ss_d": float(ss_d), "ss_go": float(ss_go), "ss_creep": ss_creep, **lt}
+
+    def wait_point(self, conn):
+        """Where the expert's front bumper waits on the connector `conn` that gives way (its s): Lane.wait_s moved
+        EnvConfig.expert_wait_back m back, but not before the connector's start, the junction's entry (the stop line
+        and the light's rules are a few metres before it). A wait point already before the start (a narrow bend's,
+        Town._narrow_wait) stays where it is: clamping it to the start would move it forward."""
+        wb = self.env.cfg.expert_wait_back
+        if not wb:
+            return conn.wait_s
+        return min(conn.wait_s, max(conn.wait_s - wb, 0.0))
 
     def blocked_at(self, route, s_stop):
         """Don't block the box: True if the exit beyond the junction of the route's stop line at `s_stop` has no

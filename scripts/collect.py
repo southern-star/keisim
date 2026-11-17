@@ -350,6 +350,7 @@ def worker(wid, args, quota, out_dir, counter):
     cfg.expert_yield_visible = bool(args.yield_visible)
     cfg.expert_bike_visible = bool(args.bike_visible)
     cfg.expert_bike_sweep = bool(args.bike_sweep)
+    cfg.expert_wait_back = args.expert_wait_back
     if args.ego_cross_rate is not None:
         cfg.traffic.ego_cross_rate = args.ego_cross_rate
     if args.ped_spacing is not None:
@@ -666,6 +667,9 @@ def parse_args(argv=None):
     ap.add_argument("--jam_fixes", type=int, default=0, choices=[0, 1], help="box rule + hidden jam release (long2/3)")
     ap.add_argument("--yield_visible", type=int, default=0, choices=[0, 1],
                     help="the expert gives way only to cars the camera sees (EnvConfig.expert_yield_visible)")
+    ap.add_argument("--expert_wait_back", type=float, default=0.0, metavar="M",
+                    help="the expert waits this many m further back on a connector that gives way (a right turn's wait "
+                         "point; EnvConfig.expert_wait_back, the NPCs keep theirs); the labels change with it")
     ap.add_argument("--osm_towns", nargs="*", default=[], metavar="NAME[:S,W,N,E]",
                     help="drive real towns (keisim/realworld.py; boxes of OSM_BOXES or given) instead of procedural "
                          "ones; a town is picked per --episodes_per_town episodes. Use --jam_fixes 1 as evaluate.py does")
@@ -698,6 +702,8 @@ def parse_args(argv=None):
             ap.error(f"--ckpt drives with the camera rig {checkpoint_rig(args.ckpt)}: pass it as --rig")
     if not 0.0 <= args.curve_scenes <= 1.0:
         ap.error("--curve_scenes is a probability")
+    if args.expert_wait_back < 0.0:
+        ap.error("--expert_wait_back: m back from the wait point, >= 0")
     return args
 
 
@@ -709,6 +715,7 @@ def main():
                **({"osm_towns": args.osm_towns, "osm_seed0": args.osm_seed0} if args.osm_towns else {}),
                **({"keiview_roads": args.keiview_roads} if args.keiview_roads != "plain" else {}),
                **({"yield_visible": 1} if args.yield_visible else {}),
+               **({"expert_wait_back": args.expert_wait_back} if args.expert_wait_back else {}),
                **({"ego_patience": args.ego_patience} if args.ego_patience else {}),
                **({"npc_past_line": args.npc_past_line} if args.npc_past_line else {}),
                **({"crosswalks": args.crosswalks} if args.crosswalks > 0 else {}),

@@ -333,6 +333,14 @@ class EnvConfig:
     # corner hit a rider standing at the start of the exit road with 0.53 m beside the path (bigjunction 3004/9801).
     # Off: as before (the bicycle evaluations of PR #35).
     expert_bike_sweep: bool = False
+    # m: the expert waits this much further back on a connector that gives way (Expert.wait_point): Lane.wait_s, the
+    # furthest front-bumper position whose front circle keeps YIELD_CLEAR (2.4 m) from the paths it yields to, is
+    # only about 0.15 m outside the corridor the oncoming cars check (about 2.25 m), so a driver that stops a metre
+    # or two late (a model's late yield decision) stands in their way, and they stop in front of it for good. Not
+    # before the connector's start (a wait point already before it, at a narrow bend, stays). Which rule applies still
+    # goes by Lane.wait_s: up to it a car due within YIELD_GAP s stops the expert (at once past its own point), and
+    # only past it does the late check (LATE_COMMIT) take over. The NPCs keep Lane.wait_s. 0: as before.
+    expert_wait_back: float = 0.0
 
     @property
     def cameras(self):
