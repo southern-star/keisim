@@ -2196,12 +2196,14 @@ def test_expert_wait_back():
 
 
 def test_action_delay():
-    """evaluate.py --expert_delay: the actions reach the car n control steps late, braking until the first arrives;
-    n = 0 passes each action through."""
-    from keisim.control import ActionDelay
-    d = ActionDelay(3)
+    """evaluate.py --expert_delay: the decisions reach the car n control steps late, `fill` until the first arrives;
+    n = 0 passes each one through."""
+    from keisim.control import Delay
+    d = Delay(3, np.array([0.0, 0.0, 1.0]))
     out = [d(np.array([0.1 * k, 0.5, 0.0])) for k in range(6)]
     assert all(np.array_equal(o, [0.0, 0.0, 1.0]) for o in out[:3])
     assert [round(float(o[0]), 3) for o in out[3:]] == [0.0, 0.1, 0.2]
+    v = Delay(4, 0.0)
+    assert [v(float(k)) for k in range(1, 7)] == [0.0, 0.0, 0.0, 0.0, 1.0, 2.0]
     a = np.array([0.3, 0.2, 0.0])
-    assert ActionDelay(0)(a) is a
+    assert Delay(0, 0.0)(a) is a

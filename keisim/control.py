@@ -91,18 +91,17 @@ class PlanFollower:
         return np.array([steer, thr, brk])
 
 
-class ActionDelay:
-    """A FIFO of `n` control steps between a driver's actions and the car (evaluate.py --expert_delay: the expert's
-    actions arrive as late as a driving model's decisions). Until the first action comes through the car brakes."""
 
-    BRAKE = (0.0, 0.0, 1.0)
+class Delay:
+    """A FIFO of `n` control steps between a driver's decisions and the car (evaluate.py --expert_delay: the expert's
+    decisions arrive as late as a driving model's). Until the first one comes through it gives `fill`."""
 
-    def __init__(self, n):
+    def __init__(self, n, fill):
         self.n = int(n)
-        self.q = collections.deque(np.array(self.BRAKE) for _ in range(self.n))
+        self.q = collections.deque(fill for _ in range(self.n))
 
-    def __call__(self, action):
+    def __call__(self, x):
         if not self.n:
-            return action
-        self.q.append(action)
+            return x
+        self.q.append(x)
         return self.q.popleft()
