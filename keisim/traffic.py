@@ -1410,6 +1410,7 @@ class Traffic:
         for j in range(nb):
             by_lane.setdefault(int(bk.lane[j]), []).append(j)
         room = np.zeros((n, nb))            # how far car i can move over where bicycle j is
+        pk_any = self.parked is not None and self.parked.n > 0
         target = np.zeros(n)
         half_b = 0.9                        # half a bicycle's length
         hl = np.asarray(hl, float)
@@ -1437,14 +1438,16 @@ class Traffic:
                 if behind < BIKE_OUT[0]:
                     s_done += vb * (BIKE_OUT[0] - behind) / max(max(self.v[i], vb + BIKE_PASS_DV) - vb, 1.0)
                 c = cap * min(max((lane.length - s_done - BIKE_END[0]) / (BIKE_END[1] - BIKE_END[0]), 0.0), 1.0)
+                rc = c
                 if pkp is not None and sj < pkp[1] + PK_OUT[0]:
                     a = pkp[0] - (sj + hl[i])          # the car's front bumper to the parked cars, with it at the rider
                     f = (PK_IN[0] - a) / (PK_IN[0] - PK_IN[1]) if a > 0.0 else 1.0
+                    rc = max(c, pkp[2] * min(max(f, 0.0), 1.0))
+                if pk_any:
                     # room is checked on the unshifted path, so it only holds for a rider left of it: one out round
-                    # the parked cars itself (or moving out) is on the car's line, and gets less than none
-                    sd = float(bk.side[j]) - max(float(bk.lat_t[j] - bk.lat[j]), 0.0)
-                    c = max(c, pkp[2] * min(max(f, 0.0), 1.0) + 2.0 * min(sd, 0.0))
-                room[i, j] = c
+                    # a parked car itself (or moving out) is on or right of the car's line, and gets less than none
+                    rc += 2.0 * min(float(bk.side[j]) - max(float(bk.lat_t[j] - bk.lat[j]), 0.0), 0.0)
+                room[i, j] = rc
                 want = min(max(hw[i] + 0.3 + BIKE_FREE + 0.05 - bk.side[j], 0.0), c)
                 if ahead > 0.0:
                     f = (BIKE_IN[0] - ahead) / (BIKE_IN[0] - BIKE_IN[1])
@@ -1480,7 +1483,10 @@ class Traffic:
             lat = rel[..., 1] * u[:, None, 0] - rel[..., 0] * u[:, None, 1]
             reach = (hl + half_b)[:, None]
             near = (lon > -(reach + BIKE_OUT[0])) & (lon < reach + 2.0) & (lat > 0.0) & (lat < hw[:, None] + 2.2)
-            room = np.where(near, np.maximum(room, self.shift[:, None]), room)
+            hold = self.shift[:, None]
+            if pk_any:                              # (as above: only as far as the rider is left of the unshifted line)
+                hold = hold + 2.0 * np.minimum(lat - np.maximum(bk.lat_t - bk.lat, 0.0)[None] - hold, 0.0)
+            room = np.where(near, np.maximum(room, hold), room)
             target = np.where(near.any(1), np.maximum(target, self.shift), target)
         if pk_target is not None:                   # parked cars too (_parked_gaps): the larger move out
             target = np.maximum(target, pk_target)
