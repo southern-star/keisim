@@ -400,7 +400,7 @@ class Expert:
         crossing the route are obstacles with BIKE_MIN beside them, and so is where they will be within 2.4 s.
         In and into a junction, and before a left turn, the ego passes none ahead of it at all (bike_scan "nopass": it
         follows them, BIKE_GAP0 behind at a stand; one standing for BIKE_LEFT_WAIT s while the ego stands is passed
-        after all).
+        after all), and in the junction it stops for one beside it, level with it or ahead (it goes first).
         巻き込み確認: before a left turn (the front bumper within BIKE_LEFT of the lane's end and not past it) the ego
         stops at its stop line (or the lane's end) while a bicycle beside or behind it would reach the turn before
         the ego has cleared it plus BIKE_LEFT_MARGIN; one standing beside goes first (for BIKE_LEFT_WAIT s at most).
@@ -437,16 +437,23 @@ class Expert:
         # (巻き込み: roadtypes 1013/9900 with parked cars) and ran into one on its right turn and on a bent "straight"
         # connector (suburban 2007/9900, 2001/9900). One standing there for good is passed after all (BIKE_LEFT_WAIT,
         # as one standing beside the ego below)
+        # In the junction, one level with the ego or ahead of it beside it goes first: the ego stops (it came up on
+        # the left of the ego and turns across it: roadtypes 1017/9900 with parked cars, the ego slow behind another)
         stand = False                   # a rider standing beside or ahead of the ego before its left turn
+        in_jn = town.lanes[route.lanes[route.lane_index_at(s)]].kind == "conn"
         for j in np.nonzero(bikes["nopass"] & bikes["along"] & bikes["visible"])[0]:
             ds = bikes["s"][j] - s
             if ds < hl + hb + 1.0:
-                continue                                    # beside or behind the ego: the 巻き込み確認 below
+                if ds < 0.0 or not (in_jn or town.lanes[route.lanes[route.lane_index_at(bikes["s"][j])]].kind == "conn"):
+                    continue                                # behind the ego, or before the junction: 巻き込み確認 below
+                gap = 0.0                                   # level with it in the junction: let it go first
+            else:
+                gap = ds - hl - hb - BIKE_GAP0
             if float(bk.v[j]) < 0.3:
                 stand = True
                 if self._bk_wait > BIKE_LEFT_WAIT:
                     continue
-            target = min(target, stop_profile(ds - hl - hb - BIKE_GAP0, self.B_COMF))
+            target = min(target, stop_profile(gap, self.B_COMF))
         # 巻き込み確認
         s_front = s + hl
         for jn in route.junctions:
