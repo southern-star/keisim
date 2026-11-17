@@ -37,8 +37,11 @@ if (PILOT) {                                      // the intro board describes t
     <ul><li>推論は onnxruntime-web（WebGPU、なければ WASM）。運転モデル（30 MB）を読み込みます。${PILOT_MC
       ? 'カメラ 1 枚の版より推論は約 2 倍、モデル用の描画は約 3 倍の重さです。' : ''}</li>
     <li>← ↑ → 次の交差点で曲がる方向　Space 一時停止　R 最初から　T 周りの車（画面のボタンでも操作できます）</li>
-    <li>ピンクはモデルが描いた走行経路、水色はナビのルート。右下はモデルへの入力画像と、モデルの領域分割です。</li>
+    <li>${params.get('overlay') === 'line' ? 'ピンクはモデルが描いた走行経路、水色はナビのルート。'
+      : '水色の帯はモデルの計画です（幅は車幅の 1.85 m、長さは 3 秒で進む距離。安全層が速度を抑えているあいだは赤）。緑の線はナビのルート。'}右下はモデルへの入力画像と、モデルの領域分割です。</li>
     <li>周りの車は「周りの車」ボタン、T キー、<code>?traffic=0</code> で消せます（描画が重いとき。選んだ設定はこのブラウザに残ります）。</li>
+    <li>右上の「路面」で路上駐車を選べます（<code>?parked=4</code>）。周りの車は、対向車が来ないときに中央線を越えて追い越します。
+    モデルは路上駐車をまだ学習していないので、駐車車両の後ろで止まって待つことがあります。</li>
     <li>町は右上のメニューで選べます。town 1015 と 1018 は日本でふつうの二段階の信号で、右折は交差点の中で対向車の切れ目を待ちます。
     「札幌」と「西大井」は OpenStreetMap から作った実在の町です。札幌（東区の 1 km 角）はほとんどの交差点に信号がなく、細い道の車が優先道路に譲ります。
     西大井（品川区）は一方通行と止まれの多い東京の住宅地で、モデルは東京のデータなしで走ります（ゼロショット）。
@@ -376,7 +379,17 @@ function wireMenus() {
     });
   }
   const rsel = $('roadsel');
-  if (rsel) {
+  if (rsel && PILOT) {
+    // pilot: not the detailed roads (the model knows the plain ones), but parked cars (?parked=N, src/parked.js)
+    rsel.innerHTML = '<option value="plain">路面: 標準</option><option value="parked">路面: 路上駐車</option>';
+    rsel.setAttribute('aria-label', 'Parked cars');
+    rsel.value = Number(params.get('parked')) > 0 ? 'parked' : 'plain';
+    rsel.addEventListener('change', () => {
+      const u = new URL(location.href);
+      if (rsel.value === 'parked') u.searchParams.set('parked', '4'); else u.searchParams.delete('parked');
+      location.href = u.toString();
+    });
+  } else if (rsel) {
     rsel.value = ROADS;
     rsel.addEventListener('change', () => { const u = new URL(location.href); u.searchParams.set('roads', rsel.value); location.href = u.toString(); });
   }

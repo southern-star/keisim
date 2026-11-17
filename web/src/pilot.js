@@ -15,9 +15,14 @@
 // wide camera stitched from three pinhole faces and a 50 deg narrow one, both 320x160, while the main view stays the
 // 100 deg car camera of ?pilot=1. Models with the yield head also get keipilot/agent.py's YieldHold, set as in the
 // multi-camera evaluations.
+// Over the main view, the model's plan is drawn as a band of the car's width (1.85 m), as long as the car gets in
+// 3 s with that plan, cyan while the car drives by the model's own target speed and red while a safety layer holds
+// the target lower (?overlay=swept: also the ground the car's body passes over in those 3 s; ?overlay=line: the
+// path as a line, as before the band). The geometry is src/overlay.js.
 // Keys: ← ↑ → turn at the next junction, Space pause, R back to the start, T other cars (or the buttons).
 import * as THREE from 'three';
 import { buildLanes, createNavigator } from './nav.js';
+import { bandEdges, densify, locate, splitAt, sweptHulls } from './overlay.js';
 import { makeRemap, rigShots, shotPose } from './rig.js';
 import { createTraffic } from './traffic.js';
 
@@ -55,7 +60,7 @@ function standFeatures(m) {
 }
 
 // ------------------------------------------------------------------ vehicle and controllers (keisim)
-const VEH = { L: 2.7, LF: 1.35, LR: 1.35, MAX_STEER: 0.6, STEER_TAU: 0.12, A_MAX: 3.5, B_MAX: 8.0 };
+const VEH = { L: 2.7, LF: 1.35, LR: 1.35, MAX_STEER: 0.6, STEER_TAU: 0.12, A_MAX: 3.5, B_MAX: 8.0, LENGTH: 4.5, WIDTH: 1.85 };
 const maxAccel = (v) => VEH.A_MAX * Math.max(0.25, 1 - v / 25);
 const resistance = (v) => (v > 0.05 ? 0.12 : 0) + 0.02 * v + 0.0015 * v * v;
 
@@ -111,6 +116,24 @@ function createSpeedController() {
       return need >= 0 ? [clamp(need / maxAccel(v), 0, 1), 0] : [0, clamp(-need / VEH.B_MAX, 0, 1)];
     },
   };
+}
+
+/** Where the car goes if it follows a plan for T s: the controllers and the vehicle model above on a copy of the
+ *  car {x, y, yaw, v, steer}, the path (KeiSim points [[x, y], ...]) and the target speed fixed, no new model frames.
+ *  Returns the poses [[x, y, yaw], ...] every dt and the distance driven: the band's length (?overlay) and the
+ *  ground the body passes over. */
+export function rollout(car, path, target, T = 3.0, dt = DT) {
+  const c = { x: car.x, y: car.y, yaw: car.yaw, v: car.v, steer: car.steer }, speed = createSpeedController();
+  const poses = [[c.x, c.y, c.yaw]];
+  let dist = 0;
+  for (let k = Math.round(T / dt); k > 0; k--) {
+    const co = Math.cos(c.yaw), si = Math.sin(c.yaw), x0 = c.x, y0 = c.y;
+    const ego = path.map(([x, y]) => [co * (x - x0) + si * (y - y0), -si * (x - x0) + co * (y - y0)]);
+    stepVehicle(c, [purePursuit(ego, c.v), ...speed.control(target, c.v, dt)], dt);
+    dist += Math.hypot(c.x - x0, c.y - y0);
+    poses.push([c.x, c.y, c.yaw]);
+  }
+  return { poses, dist };
 }
 
 /** keipilot/agent.py BrakeHold (no throttle burst right after firm braking) and RedHold. */
@@ -276,6 +299,13 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
   const yieldHold = session.outputNames.includes('yield_tta') ? createYieldHold() : null;
 
   // ---------------------------------------------------------------- page elements
+  // ?overlay=band (the default): the model's plan as a band of the car's width; swept: also the ground the car's
+  // body passes over; line: the path as a line, as before the band (drawOverlay below)
+  const OVERLAYS = ['line', 'band', 'swept'];
+  let overlayMode = OVERLAYS.includes(params.get('overlay')) ? params.get('overlay') : 'band';
+  const LEGEND = { line: 'ピンク: モデルが描いた走行経路　水色: ナビの経路',
+    band: '水色の帯: モデルの計画（3 秒先まで）　赤: 安全層が減速　緑: ナビの経路',
+    swept: '水色の帯: モデルの計画（3 秒先まで）　赤: 安全層が減速<br>橙: その 3 秒に車体が通る範囲　緑: ナビの経路' };
   const overlay = document.createElement('canvas');
   overlay.id = 'pilot-overlay';
   document.body.appendChild(overlay);
@@ -291,7 +321,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     <div class="btns"><button data-turn="left">← 左折</button><button data-turn="straight">↑ 直進</button><button data-turn="right">右折 →</button><button data-act="pause">一時停止</button><button data-act="reset">最初から</button><button data-act="traffic">周りの車</button></div>
     <div class="traffic" data-k="traffic"></div>
     <div class="msg" data-k="msg"></div>
-    <div class="keys">ピンク: モデルが描いた走行経路　水色: ナビの経路<br>キー ← ↑ →: 次の交差点で曲がる方向 · Space: 一時停止 · R: 最初から · T: 周りの車</div>`;
+    <div class="keys"><span data-k="legend">${LEGEND[overlayMode]}</span><br>キー ← ↑ →: 次の交差点で曲がる方向 · Space: 一時停止 · R: 最初から · T: 周りの車</div>`;
   document.body.appendChild(hud);
   const el = {};
   for (const e of hud.querySelectorAll('[data-k]')) el[e.dataset.k] = e;
@@ -394,6 +424,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     if (!plan) { action = [0, 0, 1]; return; }
     plan.target = safety.apply(plan.raw, car.v, CONTROL_DT, plan.tl);
     if (yieldHold && plan.tta !== undefined) plan.target = Math.min(plan.target, yieldHold.apply(plan.raw, car.v, plan.tta, CONTROL_DT, plan.tl, standM));
+    plan.held = plan.target < plan.raw - 1e-3;              // a safety layer holds the target below the model's own (the band turns red)
     action = [purePursuit(egoPath(plan), car.v), ...speedCtl.control(plan.target, car.v, CONTROL_DT)];
   }
 
@@ -638,7 +669,8 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
       for (let i = 0; i < sp.length; i++) raw += sp[i] * i;     // expectation over the 0..11 m/s bins
       if (sp[0] > 0.5) raw = 0;
       if (g === gen) {
-        plan = { path: Array.from(out.path.data), raw, target: plan ? plan.target : raw, tl: Array.from(out.tl_probs.data), pose, inp,
+        // target and held: the last plan's until the next control step (a new raw target against the old target is no hold)
+        plan = { path: Array.from(out.path.data), raw, target: plan ? plan.target : raw, held: !!plan && plan.held, tl: Array.from(out.tl_probs.data), pose, inp,
           tta: out.yield_tta ? out.yield_tta.data[0] : undefined };
         drawSeg(out.seg.data);
       }
@@ -683,8 +715,87 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     o2d.strokeStyle = style; o2d.lineWidth = width; o2d.lineJoin = 'round'; o2d.lineCap = 'round';
     o2d.stroke();
   }
+  /** A polygon on the ground (KeiSim points) in overlay pixels, cut off just in front of the camera. */
+  function groundPoly(points, h) {
+    const cam = points.map(([x, y]) => camPt(x, y, h)), out = [];
+    for (let i = 0; i < cam.length; i++) {
+      const p = cam[i], q = cam[(i + 1) % cam.length], pin = p.z <= -NEAR;
+      if (pin) out.push(toPx(p));
+      if (pin !== (q.z <= -NEAR)) out.push(toPx(p.clone().lerp(q, (p.z + NEAR) / (p.z - q.z))));
+    }
+    return out;
+  }
+  const addPoly = (path, px) => { px.forEach(([x, y], i) => (i ? path.lineTo(x, y) : path.moveTo(x, y))); if (px.length) path.closePath(); };
+
+  // the band: as wide as the car, as long as the car gets in HORIZON s; it fades in between FADE m ahead of the car's
+  // centre (the road comes into view about 2.5 m ahead); colours RGB
+  const HORIZON = 3.0, FADE = [2.5, 4.0], PLAN_H = 0.04;
+  const BAND = { model: [40, 220, 255], held: [255, 60, 60], swept: [255, 170, 0], edge: [255, 255, 255] };
+  const rgba = ([r, g, b], a) => `rgba(${r}, ${g}, ${b}, ${a})`;
+  const drawn = { horizon: null, held: false, ms: 0 };       // the last overlay (tests)
+  let scratch = null;
+
+  /** The plan's path, KeiSim points from the pose its frame was taken at on. */
+  function planPoints() {
+    const { pose } = plan, c = Math.cos(pose.yaw), s = Math.sin(pose.yaw);
+    const pts = [[pose.x, pose.y]];
+    for (let i = 0; i < plan.path.length; i += 2) pts.push([pose.x + c * plan.path[i] - s * plan.path[i + 1], pose.y + s * plan.path[i] + c * plan.path[i + 1]]);
+    return pts;
+  }
+
+  /** The plan as a band of the car's width. Its length is how far the car gets in 3 s if it follows this plan (path
+   *  and target speed, after the safety layers) with its controllers: the band shrinks before a stop, and beyond its
+   *  end only the edges go on to the end of the path. Cyan: the model's own target speed; red: a safety layer holds
+   *  the target lower (then the edges are red too: a car held at a stand has no band left). The path is smoothed and
+   *  the edges are made on the ground, before the camera; the band is filled as one shape (pieces filled one by one
+   *  show their seams). swept: under it, the ground the car's body passes over in those 3 s, which leaves the band in
+   *  turns (the front swings out, the rear cuts in). */
+  function drawPlan(swept) {
+    const pts = planPoints();
+    const roll = rollout(car, pts.slice(1), plan.target, HORIZON), held = plan.held;
+    const line = densify(pts);
+    const k = splitAt(line, locate(line, car.x, car.y) + roll.dist);     // the car is on the path already (the plan is a few frames old)
+    const { L, R } = bandEdges(line.P, VEH.WIDTH / 2);
+    const cy = Math.cos(car.yaw), sy = Math.sin(car.yaw);
+    const row = (d) => toPx(camPt(car.x + cy * d, car.y + sy * d, PLAN_H))[1];
+    const y0 = row(FADE[0]), y1 = row(FADE[1]);
+    const fade = (rgb, a) => {                              // the ground's rows are its distances ahead: a gradient down the screen
+      const g = o2d.createLinearGradient(0, y1, 0, y0);
+      g.addColorStop(0, rgba(rgb, a)); g.addColorStop(1, rgba(rgb, 0));
+      return g;
+    };
+    const lw = Math.max(1, overlay.width / 640);
+    if (swept) {
+      // the pieces all turn the same way: filled as one path they are their union
+      const area = new Path2D();
+      for (const h of sweptHulls(roll.poses, VEH.LENGTH, VEH.WIDTH)) addPoly(area, groundPoly(h, PLAN_H));
+      o2d.fillStyle = rgba(BAND.swept, 0.18);
+      o2d.fill(area);
+      // the union's outline: the outlines of the pieces, with everything inside the union taken out again
+      if (!scratch) scratch = document.createElement('canvas');
+      if (scratch.width !== overlay.width || scratch.height !== overlay.height) { scratch.width = overlay.width; scratch.height = overlay.height; }
+      const g = scratch.getContext('2d');
+      g.globalCompositeOperation = 'source-over';
+      g.clearRect(0, 0, scratch.width, scratch.height);
+      g.strokeStyle = rgba(BAND.swept, 0.95); g.lineWidth = 3 * lw; g.lineJoin = 'round';
+      g.stroke(area);
+      g.globalCompositeOperation = 'destination-out';
+      g.fill(area);
+      o2d.drawImage(scratch, 0, 0);
+    }
+    if (k > 0) {
+      const band = new Path2D();
+      addPoly(band, groundPoly([...L.slice(0, k + 1), ...R.slice(0, k + 1).reverse()], PLAN_H));
+      o2d.fillStyle = fade(held ? BAND.held : BAND.model, 0.38);
+      o2d.fill(band);
+      drawGround(line.P.slice(0, k + 1), PLAN_H, fade(BAND.edge, 0.9), lw);
+    }
+    if (k < line.P.length - 1) for (const e of [L, R]) drawGround(e.slice(k), PLAN_H, fade(held ? BAND.held : BAND.edge, held ? 0.85 : 0.6), held ? 1.5 * lw : lw);
+    drawn.horizon = roll.dist; drawn.held = held;
+  }
 
   function drawOverlay() {
+    const t0 = performance.now();
     const r = renderer.domElement.getBoundingClientRect();
     if (overlay.width !== Math.round(r.width) || overlay.height !== Math.round(r.height)) {
       overlay.width = Math.round(r.width); overlay.height = Math.round(r.height);
@@ -693,13 +804,15 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     overlay.style.width = `${r.width}px`; overlay.style.height = `${r.height}px`;
     o2d.clearRect(0, 0, overlay.width, overlay.height);
     const w = Math.max(2, overlay.width / 320);
-    drawGround(nav.slice(nav.s, nav.s + 80), 0.02, 'rgba(110, 200, 255, 0.55)', w);
-    if (plan) {
-      const { pose } = plan, c = Math.cos(pose.yaw), s = Math.sin(pose.yaw);
-      const pts = [[pose.x, pose.y]];
-      for (let i = 0; i < plan.path.length; i += 2) pts.push([pose.x + c * plan.path[i] - s * plan.path[i + 1], pose.y + s * plan.path[i] + c * plan.path[i + 1]]);
-      drawGround(pts, 0.04, '#ff4fd8', 1.5 * w);
+    if (overlayMode === 'line') {
+      drawGround(nav.slice(nav.s, nav.s + 80), 0.02, 'rgba(110, 200, 255, 0.55)', w);
+      if (plan) drawGround(planPoints(), PLAN_H, '#ff4fd8', 1.5 * w);
+      drawn.horizon = null; drawn.held = false;
+    } else {
+      drawGround(nav.slice(nav.s, nav.s + 80), 0.02, 'rgba(110, 255, 140, 0.55)', 0.75 * w);   // green (the band is cyan), under the band's white centre line
+      if (plan) drawPlan(overlayMode === 'swept');
     }
+    drawn.ms = performance.now() - t0;
   }
 
   function drawHud() {
@@ -747,8 +860,11 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     traffic, lanes, nav,                                    // for tests (tools/pilot_check.mjs --yields)
     rig: rig ? rig.map((r) => r.cam.name) : null,
     images: () => ins.map((i) => i.img),                   // the model's last input images (tests: tools/pilot_check.mjs)
+    // the overlay's kind, or another one from now on ('line', 'band', 'swept': tests compare them in the same frame)
+    overlay: (mode) => { if (OVERLAYS.includes(mode)) { overlayMode = mode; el.legend.innerHTML = LEGEND[mode]; } return overlayMode; },
     state: () => ({ car: { ...car }, plan, s: nav.s, inputs: nav.inputs(), inferMs, nInfer, captureMs, readMs, captured, deviation, resets, t: ctx.time, standM, useStand,
       cams: K, yieldHold: !!yieldHold, holding: !!yieldHold && yieldHold.holding(), slow, pacing,
+      overlay: { mode: overlayMode, ...drawn },             // band: how far the car gets in 3 s (m), held by a safety layer, ms to draw
       traffic: trafficOn ? { n: traffic.n, contacts: traffic.contacts, npcContacts: traffic.npcContacts, twoPhase: traffic.twoPhase,
         stopSignStops: traffic.stopSignStops, laneChanges: traffic.laneChanges, rampPassages: traffic.rampPassages,
         ...(traffic.bikes ? { bikes: { n: traffic.bikes, contacts: traffic.bikeContacts, carContacts: traffic.carBikeContacts,
