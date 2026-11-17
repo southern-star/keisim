@@ -1425,6 +1425,9 @@ class Traffic:
             si = float(self.s[i])
             changing = self.has_lc and i in self.lcp
             cap = 0.0 if changing else max(0.0, lane.width / 2 - hw[i] - BIKE_KEEP)
+            # out round parked cars on this lane (_parked_gaps): as far out where a rider waits behind them or rides
+            # beside them, on the way out (the riders queued behind a parked car are passed with it, not followed)
+            pkp = self.pk_prof.get(i) if swing is not None and swing[i] else None
             for j in js:
                 sj, vb = float(bk.lane_s[j]), float(bk.v[j])
                 ahead = sj - si - hl[i] - half_b            # the car's front bumper to the bicycle's rear wheel
@@ -1434,6 +1437,13 @@ class Traffic:
                 if behind < BIKE_OUT[0]:
                     s_done += vb * (BIKE_OUT[0] - behind) / max(max(self.v[i], vb + BIKE_PASS_DV) - vb, 1.0)
                 c = cap * min(max((lane.length - s_done - BIKE_END[0]) / (BIKE_END[1] - BIKE_END[0]), 0.0), 1.0)
+                if pkp is not None and sj < pkp[1] + PK_OUT[0]:
+                    a = pkp[0] - (sj + hl[i])          # the car's front bumper to the parked cars, with it at the rider
+                    f = (PK_IN[0] - a) / (PK_IN[0] - PK_IN[1]) if a > 0.0 else 1.0
+                    # room is checked on the unshifted path, so it only holds for a rider left of it: one out round
+                    # the parked cars itself (or moving out) is on the car's line, and gets less than none
+                    sd = float(bk.side[j]) - max(float(bk.lat_t[j] - bk.lat[j]), 0.0)
+                    c = max(c, pkp[2] * min(max(f, 0.0), 1.0) + 2.0 * min(sd, 0.0))
                 room[i, j] = c
                 want = min(max(hw[i] + 0.3 + BIKE_FREE + 0.05 - bk.side[j], 0.0), c)
                 if ahead > 0.0:
