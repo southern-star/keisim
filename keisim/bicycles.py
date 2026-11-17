@@ -55,6 +55,8 @@ TAU_V = 1.1                 # s: how fast the rider closes in on the speed they 
 OUT = 0.85                  # m: how far a rider moves out to the right round someone in their way
 OUT_RATE = 0.7              # m/s sideways (and at most 0.22 of the speed)
 OUT_BLEND = 6.0             # m along the road for the planned sideways move
+OUT_WALK = 0.3              # m/s sideways at a stand: a rider that set off out round a parked car and stands with only
+                            # that car in the way of the line out (too close behind it) walks the bicycle out
 MARGIN_CAR = 0.2            # m beside a car (filtering past a queue needs this much room)
 MARGIN_BIKE = 0.25
 MARGIN_WALK = 0.25          # someone walking along the road
@@ -623,6 +625,8 @@ class Bicycles:
                     self.lat_t[i] = 0.0
             out = self.lat_t[i] > 0.01
             gap, lead_v, lead_o = (gO[i], vO[i], oO[i]) if out else (gH[i], vH[i], oH[i])
+            walk = pk_near is not None and pk_near[i] and self.lat_t[i] > self.lat[i] + 0.05 and \
+                oO[i] >= PARKED_OWNER and self._side_clear(i, vxy)
             # -- the speed the rider wants
             v_t = min(self.cruise[i], cur.speed_limit)
             b = T["b"]
@@ -758,6 +762,8 @@ class Bicycles:
             self.lane[i] = r[k]
             # -- sideways: the move out and back, and the wobble (larger when slow, none when standing)
             rate = min(OUT_RATE, 0.22 * v_new)
+            if walk and v_new < 0.3:
+                rate = OUT_WALK
             dl = float(np.clip(self.lat_t[i] - self.lat[i], -rate * dt, rate * dt))
             self.lat[i] += dl
             self.wob[i] += 2 * math.pi * self.wob_f[i] * dt * min(1.0, v_new / 1.0)
@@ -803,6 +809,16 @@ class Bicycles:
             self.look[i] += float(np.clip(look_t - self.look[i], -dt / 0.2, dt / 0.25))
             self.stuck[i] = self.stuck[i] + dt if v_new < 0.1 else 0.0
         self._release(ego_xy, ego_yaw, cxy, cr)
+
+    def _side_clear(self, i, vxy):
+        """No car level with rider i on its right, where it would walk its bicycle out to."""
+        if len(vxy) == 0:
+            return True
+        yaw = self.yaw[i]
+        d = vxy - self.xy[i]
+        lon = d[:, 0] * math.cos(yaw) + d[:, 1] * math.sin(yaw)
+        right = d[:, 0] * math.sin(yaw) - d[:, 1] * math.cos(yaw)
+        return not np.any((np.abs(lon) < 3.5) & (right > -1.0) & (right < 3.6))
 
     def _rear_clear(self, i, vxy, vv, ahead=3.0):
         """No car beside rider i (its centre up to `ahead` m ahead) or coming up from behind within the time it

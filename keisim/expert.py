@@ -274,7 +274,9 @@ class Expert:
         "want": how far it does move over (BIKE_FREE beside the bicycle, if there is that much room); "beside": alongside the ego with its rear wheel not yet past the front
         bumper, and clear of its side (nothing to stop for: the ego keeps its line); "visible": seen by the camera
         (EnvConfig.expert_bike_visible; else all); "behind_unseen": not seen, behind the ego's front and faster than
-        it (left out of everything above and of bike_rules)}. No state: the path of a
+        it (left out of everything above and of bike_rules); "nopass": not to be passed at all, in a junction or where
+        the pass would end within BIKE_END[0] of one (BIKE_END_LEFT[0] of a left turn) (bike_rules)}. No state: the
+        path of a
         displaced camera (collect.py) uses it too."""
         env = self.env
         w = env.world
@@ -284,7 +286,7 @@ class Expert:
         out = {"along": np.zeros(n, bool), "beside": np.zeros(n, bool), "s": np.zeros(n), "d": np.zeros(n),
                "room": np.zeros(n), "want": np.zeros(n), "cap": np.zeros(n), "s0": np.zeros(n),
                "visible": self.bikes_seen(pose) if env.cfg.expert_bike_visible else np.ones(n, bool),
-               "behind_unseen": np.zeros(n, bool)}
+               "behind_unseen": np.zeros(n, bool), "nopass": np.zeros(n, bool)}
         lat = route.poly.project(np.array([pose[0], pose[1]], float), s - 8.0, s + 8.0)[1]
         p0 = route.poly.interp(s)
         for j in np.nonzero(np.hypot(*(bk.xy - p0).T) < 60.0)[0]:
@@ -311,13 +313,24 @@ class Expert:
                 if behind < BIKE_OUT[0]:
                     s_done += vb * (BIKE_OUT[0] - behind) / max(max(v, vb + BIKE_PASS_DV) - vb, 1.0)
                 nxt = town.lanes[route.lanes[k + 1]] if k + 1 < len(route.lanes) else None
-                e0, e1 = BIKE_END_LEFT if nxt is not None and nxt.kind == "conn" and nxt.turn == "left" else BIKE_END
+                turn = nxt.turn if nxt is not None and nxt.kind == "conn" else None
+                e0, e1 = BIKE_END_LEFT if turn == "left" else BIKE_END
                 cap = max(0.0, lane.width / 2 - hw - BIKE_KEEP) * min(max((lane.length - s_done - e0) / (e1 - e0), 0.0), 1.0)
+                # ... and no passing it at all, not even inside the lane (bike_rules), where the pass would not end
+                # before the junction (it would go on in it, below), and BIKE_END_LEFT[0] before a left turn (the ego
+                # would turn left across it: 巻き込み)
+                out["nopass"][j] = turn is not None and \
+                    lane.length - s_done < (BIKE_END_LEFT[0] if turn == "left" else BIKE_END[0])
                 # the move over begins on the bicycle's road (path_local): less of it beside one that has just
                 # entered. A path moved over for a bicycle on the road after a right turn ran through the junction
                 # 0.5 m to the right, and the ego waiting there for oncoming cars stood in their way (long3c
                 # 1012/9400: the oncoming car and the ego blocked each other for good)
                 c = cap * min(max((s_j - s0) / BIKE_START, 0.0), 1.0)
+            if lane.kind == "conn":
+                # in a junction (on the route's connector): the rider's line and the ego's are not side by side there
+                # (suburban 2007/9900: the ego caught up with a rider on its right turn and ran into it; 2001/9900: it
+                # passed one into a bent "straight" connector and cut into it there)
+                out["nopass"][j] = True
             ds = s_j - s
             if -(hl + hb + BIKE_OUT[0]) < ds < hl + hb + 2.0:
                 hold = min(max(-lat, 0.0), 0.8)
@@ -385,6 +398,9 @@ class Expert:
         than BIKE_MIN beside it on the path bike_scan allows) it follows, BIKE_GAP0 behind at a stand. Passing
         with less than BIKE_FREE beside one: at BIKE_PASS_V, or BIKE_PASS_DV faster than the bicycle. Bicycles
         crossing the route are obstacles with BIKE_MIN beside them, and so is where they will be within 2.4 s.
+        In and into a junction, and before a left turn, the ego passes none ahead of it at all (bike_scan "nopass": it
+        follows them, BIKE_GAP0 behind at a stand; one standing for BIKE_LEFT_WAIT s while the ego stands is passed
+        after all), and in the junction it stops for one beside it, level with it or ahead (it goes first).
         巻き込み確認: before a left turn (the front bumper within BIKE_LEFT of the lane's end and not past it) the ego
         stops at its stop line (or the lane's end) while a bicycle beside or behind it would reach the turn before
         the ego has cleared it plus BIKE_LEFT_MARGIN; one standing beside goes first (for BIKE_LEFT_WAIT s at most).
@@ -416,9 +432,30 @@ class Expert:
                 target = min(target, math.sqrt(v_p ** 2 + 2 * 1.6 * max(float(g[0]), 0.0)))
             else:
                 target = min(target, stop_profile(float(g[0]) - BIKE_GAP0, self.B_COMF))
+        # no passing in or into a junction, nor before a left turn (bike_scan "nopass"): a rider ahead there is
+        # followed (BIKE_GAP0 behind it at a stand), not passed inside the lane. The ego turned left across one
+        # (巻き込み: roadtypes 1013/9900 with parked cars) and ran into one on its right turn and on a bent "straight"
+        # connector (suburban 2007/9900, 2001/9900). One standing there for good is passed after all (BIKE_LEFT_WAIT,
+        # as one standing beside the ego below)
+        # In the junction, one level with the ego or ahead of it beside it goes first: the ego stops (it came up on
+        # the left of the ego and turns across it: roadtypes 1017/9900 with parked cars, the ego slow behind another)
+        stand = False                   # a rider standing beside or ahead of the ego before its left turn
+        in_jn = town.lanes[route.lanes[route.lane_index_at(s)]].kind == "conn"
+        for j in np.nonzero(bikes["nopass"] & bikes["along"] & bikes["visible"])[0]:
+            ds = bikes["s"][j] - s
+            if ds < hl + hb + 1.0:
+                if ds < 0.0 or not (in_jn or town.lanes[route.lanes[route.lane_index_at(bikes["s"][j])]].kind == "conn"):
+                    continue                                # behind the ego, or before the junction: 巻き込み確認 below
+                gap = 0.0                                   # level with it in the junction: let it go first
+            else:
+                gap = ds - hl - hb - BIKE_GAP0
+            if float(bk.v[j]) < 0.3:
+                stand = True
+                if self._bk_wait > BIKE_LEFT_WAIT:
+                    continue
+            target = min(target, stop_profile(gap, self.B_COMF))
         # 巻き込み確認
         s_front = s + hl
-        stand = False                   # a rider standing beside the ego before its left turn
         for jn in route.junctions:
             if jn["s_in"] - s_front > BIKE_LEFT:
                 break
