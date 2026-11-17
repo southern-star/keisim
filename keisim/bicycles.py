@@ -598,8 +598,11 @@ class Bicycles:
             home = self.lat_t[i] < 0.01
             lead_slow = math.isfinite(gH[i]) and vH[i] < self.cruise[i] - 0.8 and (oH[i] <= -2 or oH[i] >= BIKE_OWNER)
             if pk_near is not None and pk_near[i]:
-                # a parked car just ahead or beside: out round it (after the look back), and not back in before past
-                if home and self._rear_clear(i, vxy, vv_):
+                # a parked car just ahead or beside: out round it (after the look back, and with the way out clear
+                # ahead: not into a car standing there to pass it; the parked car itself does not count, the line
+                # out from right behind it clips its corner), and not back in before past
+                clear = gO[i] > max(9.0, 2.5 * v) or oO[i] >= PARKED_OWNER
+                if home and clear and self._rear_clear(i, vxy, vv_):
                     self.look_t[i] += dt
                     if self.look_t[i] >= LOOK_BACK:
                         self.lat_t[i] = out_eff[i]
