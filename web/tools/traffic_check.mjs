@@ -8,6 +8,9 @@
 //                                [--ego 0] [--rseed 12345] [--quiet]   (rseed: the ego's route)
 //                                [--why]   (each new contact: where the two cars are on their routes)
 //                                [--bikes 8]   (bicycles, riders per road km: src/bicycles.js; adds their numbers)
+//                                [--parked 4]  (parked cars per km of kerb: src/parked.js; adds the passes, convoys and
+//                                               contacts with them; the stand-in ego passes them when it is the first
+//                                               behind one and nobody comes the other way within 70 m, else it waits)
 //                                [--watch ID --from T0 --to T1]   (rider ID and the cars near it at every step)
 import fs from 'node:fs';
 import path from 'node:path';
@@ -32,8 +35,8 @@ const lanes = buildLanes(data);
 const nav = createNavigator(data, lanes);
 const roadKm = lanes.reduce((a, l) => a + l.len, 0) / 1000;
 const count = Number(args.cars) || Math.min(40, Math.round(roadKm * 12));
-const nBikes = Number(args.bikes || 0);
-const traffic = createTraffic(data, lanes, { count, seed: Number(args.seed || 7), bikes: nBikes });
+const nBikes = Number(args.bikes || 0), nParked = Number(args.parked || 0);
+const traffic = createTraffic(data, lanes, { count, seed: Number(args.seed || 7), bikes: nBikes, ...(nParked ? { parked: nParked } : {}) });
 
 const DT = 0.05;
 const p0 = nav.start();
@@ -41,10 +44,13 @@ const ego = { x: p0.x, y: p0.y, yaw: p0.yaw, v: 0 };
 let egoS = nav.s;
 traffic.reset(useEgo ? ego : null);
 const egoChanges = new Set();
-console.log(`town ${town}: ${lanes.length} lanes, ${traffic.n} cars${nBikes ? `, ${traffic.bikes} bicycles` : ''}${useEgo ? ', stand-in ego' : ''}`);
-console.log(`    t   cars  ego/npc contacts  lane changes  ramps   ego: s  km/h  next turn${nBikes ? '   bicycles: ego/car contacts  km/h  standing' : ''}`);
+console.log(`town ${town}: ${lanes.length} lanes, ${traffic.n} cars${nBikes ? `, ${traffic.bikes} bicycles` : ''}${nParked ? `, ${traffic.parked} parked cars` : ''}${useEgo ? ', stand-in ego' : ''}`);
+console.log(`    t   cars  ego/npc contacts  lane changes  ramps   ego: s  km/h  next turn${nBikes ? '   bicycles: ego/car contacts  km/h  standing' : ''}` +
+  `${nParked ? '   parked: passes/follows  out  ego/npc contacts' : ''}`);
 let bikeV = 0, bikeN = 0, shiftMax = 0, passes = 0;
 const beside = new Set();
+let egoOff = 0, egoPasses = 0;                              // the stand-in ego out round parked cars: m to the right
+const egoPass = new Set();                                  // … the ones it has set off to pass
 for (let k = 1, t = 0; k <= Math.round(sec / DT); k++) {
   t += DT;
   if (useEgo) {
@@ -56,6 +62,33 @@ for (let k = 1, t = 0; k <= Math.round(sec / DT); k++) {
       const dx = c.xy[0] - ego.x, dy = c.xy[1] - ego.y;
       const along = dx * Math.cos(yaw) + dy * Math.sin(yaw), lat = -dx * Math.sin(yaw) + dy * Math.cos(yaw);
       if (along > 0 && Math.abs(lat) < 1.9) free = Math.min(free, along - (c.L + 4.5) / 2);
+    }
+    // … or a parked car: within 25 m it goes out round it (to its right, 0.5 m beside it) if nobody comes the other way
+    // within 70 m, else it waits behind it; out there it comes back once 8 m past it
+    let want = 0;
+    const inWindow = new Set();
+    for (const c of traffic.parkedCars) {
+      const dx = c.x - a[0], dy = c.y - a[1];                // (from its line, not from where it is)
+      const along = dx * Math.cos(yaw) + dy * Math.sin(yaw), lat = -dx * Math.sin(yaw) + dy * Math.cos(yaw);
+      if (along < -(c.L / 2 + 2.25 + 8) || along > 25 || Math.abs(lat) > 2.5) continue;
+      inWindow.add(c);
+      const need = 0.925 + 0.5 + c.W / 2 - lat;
+      if (!egoPass.has(c) && along > c.L / 2 + 2.25 && free > along - (c.L + 4.5) / 2 - 0.5) {   // (first in the queue)
+        const coming = traffic.cars.some((o) => {
+          const ex = o.xy[0] - ego.x, ey = o.xy[1] - ego.y, al = ex * Math.cos(yaw) + ey * Math.sin(yaw);
+          const la = -ex * Math.sin(yaw) + ey * Math.cos(yaw);
+          return al > -5 && al < 70 && la < 0 && la > -6 && Math.cos(o.yaw - yaw) < -0.5;
+        });
+        if (!coming) { egoPass.add(c); egoPasses++; }
+      }
+      if (egoPass.has(c)) want = Math.max(want, need);
+    }
+    for (const c of [...egoPass]) if (!inWindow.has(c)) egoPass.delete(c);
+    egoOff += Math.max(-1.0 * DT, Math.min(1.0 * DT, want - egoOff));
+    const ux = Math.cos(yaw), uy = Math.sin(yaw);
+    for (const c of traffic.parkedCars) {                  // in its way where it is now (out round it or not)
+      const dx = c.x - ego.x, dy = c.y - ego.y, along = dx * ux + dy * uy, lat = -dx * uy + dy * ux;
+      if (along > 0 && Math.abs(lat) < (c.W + 1.85) / 2 + 0.2) free = Math.min(free, along - (c.L + 4.5) / 2);
     }
     if (traffic.riders.length) {                            // … or a bicycle on its way ahead: it does not pass them;
       const way = Array.from({ length: 31 }, (_, i) => nav.slice(egoS + i, egoS + i + 0.01)[0]);
@@ -73,13 +106,13 @@ for (let k = 1, t = 0; k <= Math.round(sec / DT); k++) {
     ego.v += Math.max(-6, Math.min(2, (vt - ego.v) / 0.5)) * DT;
     ego.v = Math.max(0, ego.v);
     egoS += ego.v * DT;
-    const q = nav.slice(egoS, egoS + 0.5), q0 = q[0], q1 = q[q.length - 1];
-    Object.assign(ego, { x: q0[0], y: q0[1], yaw: Math.atan2(q1[1] - q0[1], q1[0] - q0[0]) });
+    const q = nav.slice(egoS, egoS + 0.5), q0 = q[0], q1 = q[q.length - 1], qy = Math.atan2(q1[1] - q0[1], q1[0] - q0[0]);
+    Object.assign(ego, { x: q0[0] + Math.sin(qy) * egoOff, y: q0[1] - Math.cos(qy) * egoOff, yaw: qy });
     nav.track(ego.x, ego.y);
     for (const ch of nav.changes ? nav.changes() : []) if (ch.s1 < egoS) egoChanges.add(`${ch.from}>${ch.to}@${ch.s0.toFixed(0)}`);
   }
   const before = [traffic.contacts, traffic.npcContacts];
-  const beforeB = [traffic.bikeContacts, traffic.carBikeContacts];
+  const beforeB = [traffic.bikeContacts, traffic.carBikeContacts, traffic.bikeParkedContacts];
   traffic.step(DT, t, useEgo ? ego : null, useEgo ? { s: nav.s, decision: nav.nextDecision() } : null);
   if (nBikes) {
     for (const r of traffic.riders) { bikeV += r.v; bikeN++; }
@@ -94,6 +127,14 @@ for (let k = 1, t = 0; k <= Math.round(sec / DT); k++) {
       }
     }
     if (args.why && (traffic.bikeContacts > beforeB[0] || traffic.carBikeContacts > beforeB[1])) explainBikes(t);
+    if (args.why && nParked && traffic.bikeParkedContacts > beforeB[2]) {   // a rider touching a parked car
+      for (const r of traffic.riders) for (const c of traffic.parkedCars) {
+        if (Math.hypot(c.x - r.x, c.y - r.y) > 6) continue;
+        const ux = Math.cos(r.yaw), uy = Math.sin(r.yaw), dx = c.x - r.x, dy = c.y - r.y;
+        console.log(`t=${t.toFixed(2)} rider ${r.id} v=${r.v.toFixed(1)} ${r.piece.turn ? 'conn' : `lane ${r.piece.id}`} at ${r.laneS.toFixed(1)} out=${r.lat.toFixed(2)}>${r.latT.toFixed(2)} (wants ${(r.outEff ?? 0).toFixed(2)}, near ${r.pkNear}) ` +
+          `parked ${c.id} on lane ${c.lane.id} at ${c.s.toFixed(1)} side ${c.side.toFixed(2)} W ${c.W.toFixed(2)}: ${(dx * ux + dy * uy).toFixed(1)} ahead ${(-dx * uy + dy * ux).toFixed(2)} left`);
+      }
+    }
     if (args.watch !== undefined && t >= Number(args.from || 0) && t <= Number(args.to || sec)) watch(t, traffic.riders[Number(args.watch)]);
   }
   if (args.why && (traffic.contacts > before[0] || traffic.npcContacts > before[1])) explain(t);
@@ -102,7 +143,8 @@ for (let k = 1, t = 0; k <= Math.round(sec / DT); k++) {
     console.log(`${t.toFixed(0).padStart(5)} ${String(traffic.n).padStart(6)} ${`${traffic.contacts}/${traffic.npcContacts}`.padStart(17)}` +
       ` ${String(traffic.laneChanges ?? '-').padStart(13)} ${String(traffic.rampPassages ?? '-').padStart(6)}` +
       `  ${useEgo ? `${nav.s.toFixed(0).padStart(7)} ${(ego.v * 3.6).toFixed(0).padStart(5)}  ${(inp.turn || 'straight').padEnd(9)}` : ''.padEnd(24)}` +
-      (nBikes ? `   ${`${traffic.bikeContacts}/${traffic.carBikeContacts}`.padStart(17)} ${(traffic.riders.reduce((a, r) => a + r.v, 0) / Math.max(traffic.bikes, 1) * 3.6).toFixed(1).padStart(5)} ${String(traffic.riders.filter((r) => r.v < 0.1).length).padStart(9)}` : ''));
+      (nBikes ? `   ${`${traffic.bikeContacts}/${traffic.carBikeContacts}`.padStart(17)} ${(traffic.riders.reduce((a, r) => a + r.v, 0) / Math.max(traffic.bikes, 1) * 3.6).toFixed(1).padStart(5)} ${String(traffic.riders.filter((r) => r.v < 0.1).length).padStart(9)}` : '') +
+      (nParked ? `   ${`${traffic.pkPasses}/${traffic.pkFollows}`.padStart(22)} ${String(traffic.pkOut).padStart(4)} ${`${traffic.parkedContacts}/${traffic.npcParkedContacts}`.padStart(16)}` : ''));
   }
 }
 /** The corners of a body, and whether two of them overlap. */
@@ -173,8 +215,20 @@ console.log(`contacts ${traffic.contacts} (ego) / ${traffic.npcContacts} (betwee
   `${traffic.laneChanges !== undefined ? `, lane changes ${traffic.laneChanges}, ramp passages ${traffic.rampPassages}` : ''}` +
   `${useEgo ? `, ego lane changes ${egoChanges.size}` : ''}`);
 console.log(`ego route: ${nav.changes().length} lane changes, ${nav.changes().filter((c) => c.ramp).length / 2} ramps planned`);
+if (nParked) {
+  console.log(`parked cars ${traffic.parked}: passes over the centre line ${traffic.pkPasses} (first of a convoy) + ${traffic.pkFollows} (following one), ` +
+    `contacts ${traffic.parkedContacts} (ego) / ${traffic.npcParkedContacts} (cars)${nBikes ? ` / ${traffic.bikeParkedContacts} (bicycles)` : ''}` +
+    `${useEgo ? `, the stand-in ego went out round ${egoPasses}` : ''}`);
+}
 const stuck = traffic.cars.filter((c) => c.stuck > 60);
 console.log(`standing for over 60 s now: ${stuck.length}${stuck.length ? ` (${stuck.map((c) => `car ${c.id} ${c.stuck.toFixed(0)} s`).join(', ')})` : ''}`);
+if (args.why && nParked) {                                // where they stand, from the ego (ahead, to its left)
+  for (const c of stuck) {
+    const g = c.route.segs[c.seg], dx = c.xy[0] - ego.x, dy = c.xy[1] - ego.y;
+    console.log(`  car ${c.id} ${g.kind === 'lane' ? `lane ${g.lane.id} at ${(g.lo + c.s - g.s0).toFixed(1)}/${g.lane.len.toFixed(0)}` : g.kind}` +
+      ` passing ${c.pkGo}${useEgo ? `, from the ego ${(dx * Math.cos(ego.yaw) + dy * Math.sin(ego.yaw)).toFixed(1)} ahead ${(-dx * Math.sin(ego.yaw) + dy * Math.cos(ego.yaw)).toFixed(1)} left (ego ${(ego.v * 3.6).toFixed(0)} km/h)` : ''}`);
+  }
+}
 if (nBikes) {
   const st = traffic.riders.filter((r) => r.stuck > 60);
   console.log(`bicycles ${traffic.bikes}: contacts ${traffic.bikeContacts} (ego) / ${traffic.carBikeContacts} (cars), mean ${(bikeV / Math.max(bikeN, 1) * 3.6).toFixed(1)} km/h, ` +
