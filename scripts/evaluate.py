@@ -149,6 +149,7 @@ def run_route(job):
     cfg.expert_yield_visible = bool(args.get("yield_visible", False))
     cfg.expert_bike_visible = bool(args.get("bike_visible", False))
     cfg.expert_bike_sweep = bool(args.get("bike_sweep", False))
+    cfg.expert_wait_back = float(args.get("expert_wait_back", 0.0))
     cfg.traffic.ego_patience_s = float(args.get("ego_patience", 0.0))
     cfg.traffic.light_past_line = int(args.get("npc_past_line", 0)) >= 1
     cfg.traffic.past_line_light_only = int(args.get("npc_past_line", 0)) >= 2
@@ -203,10 +204,22 @@ def run_route(job):
     t0 = time.time()
     speeds = []
     log = []            # per-step decisions, saved around failures (runs/failures/)
+    # --expert_delay: the expert's decisions reach the car this many control steps late, standing in for a driving
+    # model's late decisions (a FIFO). Mode "speed": its target speed (0 until the first arrives; the controller
+    # follows it and the expert's path live, as it does a model's plan). Mode "action": the whole action, steering
+    # too (full brake until the first arrives)
+    from keisim.control import Delay
+    n_delay = round(float(args.get("expert_delay", 0.0)) / dt) if agent is None else 0
+    delay_action = args.get("expert_delay_mode", "speed") == "action"
+    delay = Delay(n_delay, np.array([0.0, 0.0, 1.0]) if delay_action else 0.0)
     while not done and steps < args["max_steps"]:
         e = env.world.ego
         if agent is None:
-            action = env.expert_action()
+            if n_delay and not delay_action:
+                plan = env.plan
+                action = env.follower(plan["path"], delay(plan["target_speed"]), e.v, dt)
+            else:
+                action = delay(env.expert_action())
             mp_ = None
         else:
             action, mp_ = agent.act(obs.get("rgbs", obs["rgb"]), obs["command"], obs["target_point"], e.v, dt,
@@ -491,9 +504,20 @@ def main():
     ap.add_argument("--dart_out", type=float, default=None,
                     help="the chance that a parked car the route passes hides a child who runs out "
                          "(TrafficConfig.dart_out); suffix _do<P>")
+    ap.add_argument("--expert_wait_back", type=float, default=0.0, metavar="M",
+                    help="the expert waits M m short of each yielding connector's wait point (EnvConfig."
+                         "expert_wait_back; NPCs unchanged); suffix _wb<M>")
+    ap.add_argument("--expert_delay", type=float, default=0.0, metavar="S",
+                    help="--agent expert only: its decisions reach the car S s late (a FIFO, for a model's late "
+                         "decisions; evaluation only; see --expert_delay_mode); suffix _delay<S>")
+    ap.add_argument("--expert_delay_mode", default="speed", choices=["speed", "action"],
+                    help="--expert_delay: delay the expert's target speed (its path and the controller live, as for a "
+                         "model) or its whole action, steering too (suffix _act)")
     ap.add_argument("--only", nargs="+", default=None, metavar="TOWN:EP",
                     help="only these routes of the suite (e.g. 1018:9400), for checks on picked routes; give --out")
     args = ap.parse_args()
+    if args.expert_delay and args.agent != "expert":
+        ap.error("--expert_delay is for --agent expert only")
     if args.rig is None:
         from keipilot.agent import checkpoint_rig
         args.rig = checkpoint_rig(args.ckpt) if args.agent == "model" else "front"
@@ -554,7 +578,10 @@ def main():
         ("" if int(args.bike_sweep) == suite_bs else ("_bs" if args.bike_sweep else "_nobs")) + \
         ("" if args.parked == suite_pk else f"_pk{args.parked:g}") + \
         ("" if args.dart_out == suite_do else f"_do{args.dart_out:g}") + \
-        ("" if int(args.cap_scale) == suite_cap else f"_cap{args.cap_scale}")
+        ("" if int(args.cap_scale) == suite_cap else f"_cap{args.cap_scale}") + \
+        (f"_wb{args.expert_wait_back:g}" if args.expert_wait_back else "") + \
+        (f"_delay{args.expert_delay:g}" if args.expert_delay else "") + \
+        ("_act" if args.expert_delay and args.expert_delay_mode == "action" else "")
     if args.osm_town:
         suffix = suffix.replace("_twophase", "")
         fail_dir = os.path.join("runs", "failures", args.osm_town, f"{tag}{suffix}")
@@ -570,7 +597,10 @@ def main():
          "rig": args.rig, "ego_patience": args.ego_patience, "via_ramp": bool(args.via_ramp),
          "npc_past_line": int(args.npc_past_line), "crosswalks": args.crosswalks, "bicycles": args.bicycles,
          "bike_visible": bool(args.bike_visible), "bike_sweep": bool(args.bike_sweep), "parked": args.parked,
-         "dart_out": args.dart_out, "cap_scale": int(args.cap_scale)}
+         "dart_out": args.dart_out, "cap_scale": int(args.cap_scale),
+         **({"expert_wait_back": args.expert_wait_back} if args.expert_wait_back else {}),
+         **({"expert_delay": args.expert_delay, "expert_delay_mode": args.expert_delay_mode}
+            if args.expert_delay else {})}
     t0 = time.time()
     ctx = mp.get_context("spawn")
     with ctx.Pool(args.workers) as pool:

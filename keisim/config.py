@@ -327,6 +327,11 @@ class EnvConfig:
     # (Expert.bike_scan). Riders the ego is passing (slower than it: it saw them ahead) keep their room, and the
     # corridor rules ahead (follow, pass slowly) keep every rider, as for the cars. Off: every rider counts.
     expert_bike_visible: bool = False
+    # The expert waits this many metres short of each yielding connector's wait point (Lane.wait_s, Town._make_yields:
+    # the front circle YIELD_CLEAR from the paths it gives way to, ~0.15 m from the edge of the oncoming corridor that
+    # the NPCs check), clamped at the connector's start; the NPCs keep Lane.wait_s. Past the shifted point the expert
+    # keeps its give-way rule up to the old one, so it never commits sooner than with 0 (Expert.plan). 0: Lane.wait_s.
+    expert_wait_back: float = 0.0
     # Bicycles: the expert's room beside a rider ahead (Expert.bike_rules) counts how far its front corner sticks out
     # of the path when the car points off it (half its length x sin(heading - path heading), e.g. coming out of a
     # turn before it has turned all the way), as the path alone did not: coming out of a right turn the front left
