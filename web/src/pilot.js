@@ -241,10 +241,12 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
   const lanes = buildLanes(T.data);
   const nav = createNavigator(T.data, lanes);
   // surrounding traffic (src/traffic.js): on by default, off with ?traffic=0 or the HUD button / T (the choice is
-  // remembered in this browser); ?cars=N cars; ?bikes=N bicycles per road km (src/bicycles.js; none without it)
+  // remembered in this browser); ?cars=N cars; ?bikes=N bicycles per road km (src/bicycles.js; none without it);
+  // ?parked=N parked cars per km of the kerbs they may stand at (src/parked.js; none without it; they go with the cars)
   const roadKm = lanes.reduce((a, l) => a + l.len, 0) / 1000;
   const traffic = createTraffic(T.data, lanes, { count: Number(params.get('cars')) || Math.min(40, Math.round(roadKm * 12)), seed: 7,
-    bikes: Math.max(0, Math.min(Number(params.get('bikes')) || 0, 30)) });
+    bikes: Math.max(0, Math.min(Number(params.get('bikes')) || 0, 30)),
+    parked: Math.max(0, Math.min(Number(params.get('parked')) || 0, 20)) });
   const drawActors = () => ctx.services.actors.update(traffic.drawList(car.x, car.y), [], traffic.bikeList(car.x, car.y));
   const TRAFFIC_KEY = 'keipilot.traffic';
   let stored = null;
@@ -724,8 +726,9 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     for (const b of hud.querySelectorAll('[data-turn]')) b.classList.toggle('on', !!j && b.dataset.turn === j.turn);
     hud.querySelector('[data-act="pause"]').classList.toggle('on', paused);
     hud.querySelector('[data-act="traffic"]').classList.toggle('on', trafficOn);
-    const hits = traffic.contacts + traffic.bikeContacts;
-    el.traffic.textContent = trafficOn ? `周りの車 ${traffic.n} 台${traffic.bikes ? ` · 自転車 ${traffic.bikes} 台` : ''}${hits ? ` · 接触 ${hits} 回` : ''}` : '周りの車なし';
+    const hits = traffic.contacts + traffic.bikeContacts + traffic.parkedContacts;
+    el.traffic.textContent = trafficOn ? `周りの車 ${traffic.n} 台${traffic.bikes ? ` · 自転車 ${traffic.bikes} 台` : ''}` +
+      `${traffic.parked ? ` · 駐車 ${traffic.parked} 台` : ''}${hits ? ` · 接触 ${hits} 回` : ''}` : '周りの車なし';
   }
 
   /** After the main view is drawn. */
@@ -749,6 +752,9 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
       traffic: trafficOn ? { n: traffic.n, contacts: traffic.contacts, npcContacts: traffic.npcContacts, twoPhase: traffic.twoPhase,
         stopSignStops: traffic.stopSignStops, laneChanges: traffic.laneChanges, rampPassages: traffic.rampPassages,
         ...(traffic.bikes ? { bikes: { n: traffic.bikes, contacts: traffic.bikeContacts, carContacts: traffic.carBikeContacts,
-          near: Math.min(...traffic.riders.map((r) => Math.hypot(r.x - car.x, r.y - car.y))) } } : {}) } : null }),
+          near: Math.min(...traffic.riders.map((r) => Math.hypot(r.x - car.x, r.y - car.y))) } } : {}),
+        ...(traffic.parked ? { parked: { n: traffic.parked, contacts: traffic.parkedContacts, carContacts: traffic.npcParkedContacts,
+          passes: traffic.pkPasses, follows: traffic.pkFollows,
+          near: Math.min(...traffic.parkedCars.map((c) => Math.hypot(c.x - car.x, c.y - car.y))) } } : {}) } : null }),
   };
 }
