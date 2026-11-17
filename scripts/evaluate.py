@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import multiprocessing as mp
 import os
 import sys
@@ -78,6 +79,12 @@ SUITES = {
     # (dart_out 0.6: 飛び出し), in the road-types towns (residential roads and alleys), long3's town seeds with
     # episodes no other suite uses; 2.5 km routes
     "parked": [(t, 9950 + e) for t in range(1010, 1020) for e in range(2)],
+    # fresh 片側2車線 routes (round 13 went after the right-turn standoffs of mc13 on suburban, ramps and ramp_routes,
+    # so a model's gain there is partly the luck of those routes): their towns with episodes no suite uses
+    "suburban2": [(t, 9820 + e) for t in range(2000, 2010) for e in range(2)],
+    "ramps2": [(t, 9820 + e) for t in range(2000, 2010) for e in range(2)],
+    "ramp_routes2": [(t, 9920 + e) for t in (2000, 2001, 2002, 2003, 2005, 2008, 2010, 2011, 2012, 2014)
+                     for e in range(3)],
 }
 CAP_SCALE = {"classic": 1, "varied": 2, "twophase": 2, "roadtypes": 2, "suburban": 2, "ramps": 2, "bigjunction": 2}      # NPC count caps per town style
 # per-suite defaults for arguments left unset on the command line
@@ -105,6 +112,8 @@ SUITE_DEFAULTS["bigjunction"] = {**SUITE_DEFAULTS["long3"], "town_style": "bigju
 # waiting to pass parked cars and the oncoming queues standing beside them lock up a junction now and then)
 SUITE_DEFAULTS["parked"] = {**SUITE_DEFAULTS["long3"], "town_style": "roadtypes", "parked": 4.0, "dart_out": 0.6,
                             "cap_scale": 1}
+for _s in ("suburban", "ramps", "ramp_routes"):
+    SUITE_DEFAULTS[_s + "2"] = SUITE_DEFAULTS[_s]
 for _k in ("crosswalks", "crosswalks_sub", "bigjunction"):
     SUITE_DEFAULTS[f"{_k}_bk8"] = {**SUITE_DEFAULTS[_k], "bicycles": 8.0, "bike_visible": 1, "npc_past_line": 2,
                                      "bike_sweep": 1}
@@ -261,6 +270,11 @@ def run_route(job):
     m["junction_passes"] = junction_passes(env, log, dt)
     if m["status"] in ("blocked", "timeout") and log:
         m["blocked_by"] = blocked_cause(log[-int(cfg.blocked_timeout / dt):], dt)
+        so = standoff(env)
+        if so is not None:
+            m["blocked_by"]["standoff"] = so
+            if m["blocked_by"]["cause"] == "traffic" and so["in_junction"]:
+                m["blocked_by"]["cause"] = "standoff"
     if (m["status"] != "success" or m["infractions"]) and args.get("fail_dir"):
         keys = ("t", "s", "v", "reason", "tl_gt", "tl_pred", "target_model", "target_expert")
         spans = [(i["t"] - 12.0, i["t"] + 3.0) for i in m["infractions"]]
@@ -278,14 +292,14 @@ def junction_passes(env, log, dt, approach=15.0):
     whether the expert wanted a stop there ("yield" at a priority crossing, a red light, ...), whether the ego actually
     stood (v < 0.1), for how long, and for how long of that the expert would have driven on (a needless stop).
     s is relative to the route start, like the infractions' s. Routes the ego never reached are listed with
-    reached=False."""
+    reached=False. (Before round 13 the windows were s_start too far back and s_first_stop was absolute.)"""
     s0 = env.route.s_start
     rows = [r for r in log]
     out = []
     for j in env.route.junctions:
         J = env.world.town.junctions[j["junction"]]
         a, b = j["s_in"] - approach, j["s_out"]
-        win = [r for r in rows if a <= r[1] + s0 <= b]
+        win = [r for r in rows if a <= r[1] <= b]        # the log's s is env.s_ego: absolute, as the junctions' s
         kind = "signalised" if j["signalized"] else ("priority" if len(J.arms) >= 3 else "bend")
         rec = {"junction": int(j["junction"]), "kind": kind, "arms": len(J.arms), "turn": j["turn"],
                "s_in": round(j["s_in"] - s0, 1), "s_out": round(j["s_out"] - s0, 1),
@@ -298,7 +312,7 @@ def junction_passes(env, log, dt, approach=15.0):
             rec.update({"expert_reasons": reasons, "expert_stop": any(r[-1] < 0.3 for r in win),
                         "v_min": round(min(r[2] for r in win), 2), "stood_s": round(len(stood) * dt, 1),
                         "needless_s": round(sum(1 for r in stood if r[-1] > 1.0) * dt, 1),
-                        "s_first_stop": None if not stood else round(stood[0][1], 1)})
+                        "s_first_stop": None if not stood else round(stood[0][1] - s0, 1)})
         out.append(rec)
     return out
 
@@ -306,7 +320,9 @@ def junction_passes(env, log, dt, approach=15.0):
 def blocked_cause(win, dt, go_s=3.0):
     """Who kept the ego standing? "model" if, while it stood, the expert wanted to drive on (target > 1 m/s) for
     at least `go_s` seconds in a row - e.g. a green it did not take, even when the red around it was long -
-    else "traffic" (the expert would have waited too). win: log rows (t, s, v, reason, ..., target_expert)."""
+    else "traffic" (the expert would have waited too). win: log rows (t, s, v, reason, ..., target_expert).
+    run_route() turns "traffic" into "standoff" where the ego stood inside a junction in the way of a car that waited
+    for it (standoff())."""
     run = best = 0
     reasons = {}
     for r in win:
@@ -318,6 +334,43 @@ def blocked_cause(win, dt, go_s=3.0):
             run = 0
     return {"cause": "model" if best * dt >= go_s else "traffic", "expert_go_s": round(best * dt, 1),
             "expert_reasons": reasons}
+
+
+def standoff(env, near=6.0):
+    """Is the standing ego in the way of cars that wait for it? The ego and a car that wait for each other inside a
+    junction (the ego stood too deep into a right turn, its nose in the oncoming lane, and the oncoming car stopped
+    before it) stand for ever: the simulator breaks no standoff, and blocked_cause() calls it "traffic" (where the
+    ego stands, the expert would wait too). run_route() then gives the cause "standoff" instead.
+    The cars: standing (v < 0.1) with the ego as the first obstacle in their corridor within `near` m at the last
+    step (Traffic.lead_gap / lead_owner), but not those behind the ego on its own lanes or heading within 45 degrees
+    of it (they queue behind it). None if the ego moves or no car waits for it, else {"cars": [[car, lane, gap m,
+    heading off the ego's (degrees)], ...], "in_junction": the ego's centre or front on a junction connector,
+    "junction": the route's junction there or None, "mutual": the ego's own first obstacle (the expert's plan) is one
+    of the cars, "reason": the expert's reason}."""
+    w = env.world
+    tr, e = w.traffic, w.ego
+    g, o = getattr(tr, "lead_gap", None), getattr(tr, "lead_owner", None)
+    if e.v >= 0.1 or tr.n == 0 or g is None or len(g) != tr.n or len(o) != tr.n:
+        return None
+    route, lanes = env.route, w.town.lanes
+    k = route.lane_index_at(env.s_ego)
+    mine = set(route.lanes[:k + 1])
+    cars = []
+    for i in np.nonzero(np.isfinite(g) & (o == -1) & (tr.v < 0.1) & (g < near))[0]:
+        lid = int(tr.route[i][tr.ri[i]])
+        dyaw = abs((math.degrees(float(tr.yaw[i]) - e.yaw) + 180.0) % 360.0 - 180.0)
+        if lid in mine or dyaw < 45.0:
+            continue
+        cars.append([int(i), lid, round(float(g[i]), 1), int(round(dyaw))])
+    if not cars:
+        return None
+    s_front = min(env.s_ego + e.LENGTH / 2, route.s_end)
+    in_j = any(lanes[route.lanes[x]].kind == "conn" for x in {k, route.lane_index_at(s_front)})
+    jn = next((int(j["junction"]) for j in route.junctions
+               if j["s_in"] <= s_front and env.s_ego - e.LENGTH / 2 <= j["s_out"]), None)
+    plan = env.plan or {}
+    return {"cars": cars, "in_junction": bool(in_j), "junction": jn,
+            "mutual": int(plan.get("lead_owner", -1)) in {c[0] for c in cars}, "reason": plan.get("reason")}
 
 
 def summarize(results):
@@ -359,6 +412,10 @@ def summarize(results):
             causes[r["blocked_by"]["cause"]] = causes.get(r["blocked_by"]["cause"], 0) + 1
     if causes:
         s["blocked_by"] = causes
+    so = [r["blocked_by"]["standoff"] for r in results if "standoff" in r.get("blocked_by", {})]
+    if so:       # the routes whose ego stood in the way of a car waiting for it (standoff())
+        s["standoffs"] = {"routes": len(so), "in_junction": int(sum(x["in_junction"] for x in so)),
+                          "mutual": int(sum(x["mutual"] for x in so))}
     return s
 
 

@@ -325,6 +325,9 @@ class Traffic:
         self.xy = np.zeros((0, 2))
         self.yaw = np.zeros(0)
         self.stuck = np.zeros(0)
+        self.lead_gap = np.zeros(0)          # each car's first obstacle in its corridor at the last step: gap (m,
+        self.lead_owner = np.zeros(0, int)   # inf: none) and whose (>= 0 a car, PARKED_OWNER + k a parked one, -1 the
+                                             # ego, <= -2 a person)
         self.target_n = n
         self.has_yields = any(getattr(l, "yields", None) for l in town.lanes)
         self.has_lc = any(getattr(l, "links", None) for l in town.lanes)    # multi-lane roads, ramps: lane changes
@@ -1139,8 +1142,9 @@ class Traffic:
             pm = cow < -1
             margin[pm] = ped_margin[-2 - cow[pm]]
         margin = margin[None, :]
-        gap, lead_v, _ = corridor_gaps(paths, relc, valid, self.xy, self.yaw, hl, self.dims[:, 1] / 2,
-                                       cxy, cr, cow, csp, cyw, np.arange(n), margin)
+        gap, lead_v, lead_o = corridor_gaps(paths, relc, valid, self.xy, self.yaw, hl, self.dims[:, 1] / 2,
+                                            cxy, cr, cow, csp, cyw, np.arange(n), margin)
+        self.lead_gap, self.lead_owner = gap, lead_o      # kept for evaluate.py's standoffs only
         if pass_xy is not None and len(pass_xy):    # slow down to pass people walking beside the lane
             m = len(pass_xy)
             g_pass, _, _ = corridor_gaps(paths, relc, valid, self.xy, self.yaw, hl, self.dims[:, 1] / 2, pass_xy,

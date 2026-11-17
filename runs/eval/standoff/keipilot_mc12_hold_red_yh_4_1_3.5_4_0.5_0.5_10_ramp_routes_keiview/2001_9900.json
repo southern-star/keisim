@@ -1,0 +1,166 @@
+{
+ "summary": {
+  "routes": 1,
+  "DS": 0.08746826078629467,
+  "RC": 0.08746826078629467,
+  "IS": 1.0,
+  "success_rate": 0.0,
+  "km": 0.0441,
+  "avg_speed_kmh": 0.7369500714497641,
+  "lights_passed": 1,
+  "infractions_per_km": {},
+  "infraction_counts": {},
+  "status": {
+   "blocked": 1
+  },
+  "blocked_by": {
+   "standoff": 1
+  },
+  "standoffs": {
+   "routes": 1,
+   "in_junction": 1,
+   "mutual": 1
+  }
+ },
+ "results": [
+  {
+   "status": "blocked",
+   "RC": 0.08746826078629467,
+   "IS": 1.0,
+   "DS": 0.08746826078629467,
+   "infractions": [],
+   "time": 215.25,
+   "distance": 44.1,
+   "route_length": 504.8,
+   "off_lane_ratio": 0.0,
+   "town": 2001,
+   "episode": 9900,
+   "steps": 2153,
+   "wall": 293.7126989364624,
+   "avg_speed": 0.20470835318049002,
+   "weather": "noon",
+   "lights_passed": 1,
+   "lane_changes": 0,
+   "ramps": 0,
+   "keiview_ms": {
+    "town": 20097.0,
+    "frames": 2153,
+    "mean": 66.67547607988853,
+    "p90": 81.1
+   },
+   "junction_passes": [
+    {
+     "junction": 6,
+     "kind": "signalised",
+     "arms": 3,
+     "turn": "right",
+     "s_in": 38.6,
+     "s_out": 62.4,
+     "reached": false,
+     "yields": true
+    },
+    {
+     "junction": 5,
+     "kind": "priority",
+     "arms": 4,
+     "turn": "left",
+     "s_in": 112.7,
+     "s_out": 229.5,
+     "reached": true,
+     "yields": false,
+     "expert_reasons": {
+      "cruise": 10,
+      "curve": 14,
+      "red_light": 268,
+      "yield": 74,
+      "vehicle": 1765
+     },
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 204.6,
+     "needless_s": 0.1,
+     "s_first_stop": 122.5
+    },
+    {
+     "junction": 9,
+     "kind": "signalised",
+     "arms": 3,
+     "turn": "right",
+     "s_in": 368.1,
+     "s_out": 386.3,
+     "reached": false,
+     "yields": false
+    }
+   ],
+   "blocked_by": {
+    "cause": "standoff",
+    "expert_go_s": 0.0,
+    "expert_reasons": {
+     "yield": 33,
+     "vehicle": 1765
+    },
+    "standoff": {
+     "cars": [
+      [
+       11,
+       82,
+       2.5,
+       162
+      ]
+     ],
+     "in_junction": true,
+     "junction": 6,
+     "mutual": true,
+     "reason": "vehicle"
+    }
+   }
+  }
+ ],
+ "args": {
+  "agent": "model",
+  "ckpt": "runs/keipilot_mc12/last.pt",
+  "suite": "ramp_routes",
+  "workers": 1,
+  "route_length": 600.0,
+  "weather": "random",
+  "max_steps": 6000,
+  "videos": 0,
+  "video_dir": "runs/videos",
+  "tag": null,
+  "dense": false,
+  "renderer": "keiview",
+  "keiview_roads": "plain",
+  "out": "runs/eval/standoff/keipilot_mc12_hold_red_yh_4_1_3.5_4_0.5_0.5_10_ramp_routes_keiview/2001_9900.json",
+  "yield_visible": 0,
+  "brake_hold": true,
+  "red_hold": true,
+  "yield_hold": [
+   4.0,
+   1.0,
+   3.5,
+   4.0,
+   0.5,
+   0.5,
+   10.0
+  ],
+  "town_style": "ramps",
+  "blocked_timeout": 180.0,
+  "jam_fixes": true,
+  "osm_town": null,
+  "osm_bbox": null,
+  "routes": 20,
+  "episode0": 100,
+  "via_ramp": 1,
+  "rig": "wide_narrow",
+  "ego_patience": 0.0,
+  "npc_past_line": 0,
+  "crosswalks": 0.0,
+  "bicycles": 0.0,
+  "bike_visible": 0,
+  "bike_sweep": 0,
+  "only": [
+   "2001:9900"
+  ]
+ },
+ "time": 321.3304135799408
+}

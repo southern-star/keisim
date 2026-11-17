@@ -1,0 +1,232 @@
+{
+ "summary": {
+  "routes": 1,
+  "DS": 0.05580832267643157,
+  "RC": 0.05580832267643157,
+  "IS": 1.0,
+  "success_rate": 0.0,
+  "km": 0.0344,
+  "avg_speed_kmh": 0.6210698591724083,
+  "lights_passed": 0,
+  "infractions_per_km": {},
+  "infraction_counts": {},
+  "status": {
+   "blocked": 1
+  },
+  "blocked_by": {
+   "standoff": 1
+  },
+  "standoffs": {
+   "routes": 1,
+   "in_junction": 1,
+   "mutual": 1
+  }
+ },
+ "results": [
+  {
+   "status": "blocked",
+   "RC": 0.05580832267643157,
+   "IS": 1.0,
+   "DS": 0.05580832267643157,
+   "infractions": [],
+   "time": 199.45,
+   "distance": 34.4,
+   "route_length": 618.2,
+   "off_lane_ratio": 0.0,
+   "town": "osm_sapporo",
+   "episode": 719,
+   "steps": 1995,
+   "wall": 180.9460620880127,
+   "avg_speed": 0.17251940532566898,
+   "weather": "noon",
+   "lights_passed": 0,
+   "lane_changes": 0,
+   "ramps": 0,
+   "junction_passes": [
+    {
+     "junction": 115,
+     "kind": "priority",
+     "arms": 4,
+     "turn": "right",
+     "s_in": 30.7,
+     "s_out": 46.2,
+     "reached": true,
+     "yields": true,
+     "expert_reasons": {
+      "vehicle": 1816,
+      "stop_sign": 25,
+      "crossing": 11,
+      "yield": 101,
+      "curve": 15
+     },
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 188.4,
+     "needless_s": 0.1,
+     "s_first_stop": 32.3
+    },
+    {
+     "junction": 119,
+     "kind": "priority",
+     "arms": 3,
+     "turn": "right",
+     "s_in": 108.0,
+     "s_out": 123.5,
+     "reached": false,
+     "yields": true
+    },
+    {
+     "junction": 104,
+     "kind": "priority",
+     "arms": 3,
+     "turn": "straight",
+     "s_in": 161.7,
+     "s_out": 177.7,
+     "reached": false,
+     "yields": false
+    },
+    {
+     "junction": 92,
+     "kind": "priority",
+     "arms": 3,
+     "turn": "right",
+     "s_in": 213.3,
+     "s_out": 228.2,
+     "reached": false,
+     "yields": true
+    },
+    {
+     "junction": 88,
+     "kind": "priority",
+     "arms": 3,
+     "turn": "left",
+     "s_in": 290.9,
+     "s_out": 301.1,
+     "reached": false,
+     "yields": true
+    },
+    {
+     "junction": 71,
+     "kind": "priority",
+     "arms": 4,
+     "turn": "left",
+     "s_in": 342.7,
+     "s_out": 353.1,
+     "reached": false,
+     "yields": true
+    },
+    {
+     "junction": 77,
+     "kind": "priority",
+     "arms": 3,
+     "turn": "left",
+     "s_in": 415.3,
+     "s_out": 425.6,
+     "reached": false,
+     "yields": true
+    },
+    {
+     "junction": 92,
+     "kind": "priority",
+     "arms": 3,
+     "turn": "left",
+     "s_in": 466.7,
+     "s_out": 476.9,
+     "reached": false,
+     "yields": false
+    },
+    {
+     "junction": 88,
+     "kind": "priority",
+     "arms": 3,
+     "turn": "right",
+     "s_in": 539.6,
+     "s_out": 554.5,
+     "reached": false,
+     "yields": true
+    },
+    {
+     "junction": 102,
+     "kind": "priority",
+     "arms": 3,
+     "turn": "straight",
+     "s_in": 590.2,
+     "s_out": 606.2,
+     "reached": false,
+     "yields": false
+    }
+   ],
+   "blocked_by": {
+    "cause": "standoff",
+    "expert_go_s": 0.0,
+    "expert_reasons": {
+     "vehicle": 1796
+    },
+    "standoff": {
+     "cars": [
+      [
+       157,
+       1548,
+       1.4,
+       166
+      ]
+     ],
+     "in_junction": true,
+     "junction": 115,
+     "mutual": true,
+     "reason": "vehicle"
+    }
+   }
+  }
+ ],
+ "args": {
+  "agent": "model",
+  "ckpt": "runs/keipilot_mc13/last.pt",
+  "suite": "osm",
+  "workers": 1,
+  "route_length": 600.0,
+  "weather": "random",
+  "max_steps": 4000,
+  "videos": 0,
+  "video_dir": "runs/videos",
+  "tag": null,
+  "dense": false,
+  "renderer": "keisim",
+  "keiview_roads": "plain",
+  "out": "/tmp/claude-1000/-home-star-workspace-ClaudeDesktop-20260923-NewSim/928b5d79-0ae1-406b-bcd0-c406e801ef92/scratchpad/so_check/sap719.json",
+  "yield_visible": 0,
+  "brake_hold": true,
+  "red_hold": true,
+  "yield_hold": [
+   4.0,
+   1.0,
+   3.5,
+   4.0,
+   0.5,
+   0.5,
+   10.0
+  ],
+  "town_style": "twophase",
+  "blocked_timeout": 180.0,
+  "jam_fixes": true,
+  "osm_town": "osm_sapporo",
+  "osm_bbox": [
+   43.088,
+   141.36,
+   43.097,
+   141.372
+  ],
+  "routes": 1,
+  "episode0": 719,
+  "via_ramp": 0,
+  "rig": "wide_narrow",
+  "ego_patience": 3.0,
+  "npc_past_line": 0,
+  "crosswalks": 0.0,
+  "bicycles": 0.0,
+  "bike_visible": 0,
+  "bike_sweep": 0,
+  "only": null
+ },
+ "time": 208.99878907203674
+}
