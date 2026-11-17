@@ -5,10 +5,12 @@
 // past cars standing close beside it and moves out round a slower rider after a look over the shoulder. The speed
 // comes from forces (what the legs give, rolling and air drag, the brakes), with gears, coasting, a foot on the
 // ground at a stop, the lean in bends and the wobble at low speed, as in KeiSim. There are no pedestrians in the
-// browser demo, so the riders' rules for zebras and people are left out. Off by default: without riders nothing here
-// runs and the cars' random numbers are untouched. All coordinates are KeiSim's (x east, y north, yaw
-// counter-clockwise).
+// browser demo, so the riders' rules for zebras and people are left out. With parked cars (src/parked.js) the riders
+// move out round them in time (after the look over the shoulder) and stay out until past them, as in KeiSim. Off by
+// default: without riders nothing here runs and the cars' random numbers are untouched. All coordinates are KeiSim's
+// (x east, y north, yaw counter-clockwise).
 import { wrap } from './nav.js';
+import { PK } from './parked.js';
 
 export const BIKE_LEN = 1.8, BIKE_W = 0.6, BIKE_R = 0.3;
 const NCB = 3;                    // circles along a bike
@@ -107,7 +109,7 @@ function interp(x, xs, ys) {
 
 /**
  * env (from src/traffic.js): {cars, stopLine(lane) -> arc length of its signal's stop line or null, light(lane, t),
- * mustYield(conn, t)}. opts: {perKm: riders per km of road, seed, max}.
+ * mustYield(conn, t), parked (src/parked.js, or null)}. opts: {perKm: riders per km of road, seed, max}.
  */
 export function createBicycles(data, lanes, env, { perKm = 0, seed = 1, max = 60 } = {}) {
   let st = (seed * 2654435761) >>> 0 || 1;
@@ -270,6 +272,7 @@ export function createBicycles(data, lanes, env, { perKm = 0, seed = 1, max = 60
   function free(p, ego, avoid, skip) {
     if (ego && Math.hypot(p[0] - ego.x, p[1] - ego.y) < avoid) return false;
     for (const c of env.cars) if (Math.hypot(c.xy[0] - p[0], c.xy[1] - p[1]) < c.L / 2 + BIKE_R + 0.45 + 0.5) return false;
+    if (env.parked) for (const c of env.parked.cars) if (Math.hypot(c.x - p[0], c.y - p[1]) < c.L / 2 + 8) return false;   // (room to move out)
     for (const o of riders) if (o !== skip && Math.hypot(o.x - p[0], o.y - p[1]) < 9) return false;
     return true;
   }
@@ -339,6 +342,7 @@ export function createBicycles(data, lanes, env, { perKm = 0, seed = 1, max = 60
     const c = Math.cos(r.yaw), s = Math.sin(r.yaw);
     const car = (x, y, v) => {
       const dx = x - r.x, dy = y - r.y, lon = dx * c + dy * s, right = dx * s - dy * c;
+      if (r.pkNear && v < 0.3 && lon < -3) return false;   // (out round a parked car: not for a car standing behind)
       return lon < 3 && lon > -(6 + 3.5 * Math.max(v - r.v, 0) + 0.5 * v) && right > -1 && right < 3.6;
     };
     for (const o of env.cars) if (car(o.xy[0], o.xy[1], o.v)) return false;
@@ -363,7 +367,7 @@ export function createBicycles(data, lanes, env, { perKm = 0, seed = 1, max = 60
       const q = at(cat, Math.min(r.u + d, total));
       if (p && Math.cos(q[2] - r.yaw) < -0.3) break;          // an imported lane that folds back: its line ends here
       const x = clamp(d / OUT_BLEND, 0, 1), nx = Math.sin(q[2]), ny = -Math.cos(q[2]);
-      const a = r.lat * (1 - x), b = r.lat + (r.out - r.lat) * x;
+      const a = r.lat * (1 - x), b = r.lat + (r.outEff - r.lat) * x;
       pHx[n] = q[0] + nx * a; pHy[n] = q[1] + ny * a; pOx[n] = q[0] + nx * b; pOy[n] = q[1] + ny * b;
       vBend = Math.min(vBend, Math.sqrt(r.alat / Math.max(Math.abs(q[3]), 1e-3) + 2 * 0.9 * d));   // braking gently into bends
       n++;
@@ -400,7 +404,7 @@ export function createBicycles(data, lanes, env, { perKm = 0, seed = 1, max = 60
     const mAll = (o) => {
       if (o.car) { const l = single(o); if (l !== null) return l > SINGLE_AHEAD ? MARGIN_SINGLE : Math.min(o.m, 0); }
       // the ego standing beside or behind a rider that has stood for a while: it is waiting for the rider, who goes on
-      if (o.car && !o.own.route && o.v < 0.3 && r.egoGo > 0 && (o.own.x - r.x) * ux + (o.own.y - r.y) * uy < 1) return Math.min(o.m, 0);
+      if (o.car && !o.parked && !o.own.route && o.v < 0.3 && r.egoGo > 0 && (o.own.x - r.x) * ux + (o.own.y - r.y) * uy < 1) return Math.min(o.m, 0);
       return o.cx === undefined ? o.m : (o.cx - r.x) * ux + (o.cy - r.y) * uy > -1.5 ? o.m : -Infinity;
     };
     const mIgn = (o) => (o.bike && ign.has(o.own) ? -Infinity : mAll(o));
@@ -425,13 +429,21 @@ export function createBicycles(data, lanes, env, { perKm = 0, seed = 1, max = 60
     let cat = r.cat;
     const cur = r.route[r.ri], onRoad = cur.kind === 'road';
     const front = r.u + BIKE_LEN / 2;
-    // -- moving out round a slower rider (after a look back) / back in
-    if (r.latT < 0.01) {
+    // -- moving out round a slower rider (after a look back) / back in; round a parked car just ahead or beside it:
+    // out (after the look back), and not back in before it is past
+    if (r.pkNear) {
+      if (r.latT < 0.01) {
+        if (rearClear(r, ego)) {
+          r.lookT += dt;
+          if (r.lookT >= LOOK_BACK) { r.latT = r.outEff; r.lookT = 0; }
+        }
+      } else r.latT = Math.max(r.latT, r.outEff);
+    } else if (r.latT < 0.01) {
       const leadSlow = g.H.gap < Infinity && g.H.v < r.cruise - 0.8 && !!g.H.o.bike;
       const want = leadSlow && g.H.gap < 5 + 2.5 * v && g.O.gap > g.H.gap + 8 && onRoad && cat.first - r.u > 14 && r.u > 3;
       if (want && rearClear(r, ego)) {
         r.lookT += dt;
-        if (r.lookT >= LOOK_BACK) { r.latT = r.out; r.lookT = 0; }
+        if (r.lookT >= LOOK_BACK) { r.latT = r.outEff; r.lookT = 0; }
       } else r.lookT = Math.max(0, r.lookT - 2 * dt);
     } else {
       r.lookT = 0;
@@ -591,6 +603,20 @@ export function createBicycles(data, lanes, env, { perKm = 0, seed = 1, max = 60
       for (const p of egoPred || []) all.push({ x: p[0], y: p[1], r: 0.95, v: ego.v, yaw: ego.yaw, own: ego, car: true, m: MARGIN_TURN, cx: ego.x, cy: ego.y });
     }
     for (const r of riders) circlesOf(all, r);
+    const pk = env.parked && env.parked.n ? env.parked : null;
+    if (pk) pk.circles(all, MARGIN_CAR);                     // parked cars: obstacles (the riders move out round them)
+    for (const r of riders) {                                // … far enough: keisim out_eff, pk_near
+      r.outEff = r.out; r.pkNear = false;
+      const gs = pk && r.piece.kind === 'road' ? pk.laneGroups.get(r.piece.id) : null;
+      if (!gs) continue;
+      for (const gid of gs) {
+        const G = pk.groups[gid], d = G.sLo - r.laneS;
+        if (d > -(G.sHi - G.sLo) - 2 && d <= 25) {
+          r.outEff = Math.max(r.outEff, G.q + edgeOffset(r.piece) + BIKE_W / 2 + PK.BIKE_CLEAR);
+          if (d <= 20) r.pkNear = true;
+        }
+      }
+    }
     for (let i = 0; i < riders.length; i++) sense(i, all);
     for (const r of riders) move(r, dt, t, ego);
     for (const r of riders) if (r.stuck > STUCK_S) release(r, ego);

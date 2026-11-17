@@ -20,11 +20,16 @@
 // roads' speed limits and the lanes trucks may use. With the option `bikes` (riders per road km, 0 by default: nothing
 // below changes) bicycles ride the left edge of the roads (src/bicycles.js), and the cars treat them like keisim's
 // Traffic._bike_gaps: they move right inside their lane to pass one, stay behind it where the lane is too narrow, and
-// let a rider beside them go first before a left turn. All coordinates are KeiSim's (x east, y north, yaw
+// let a rider beside them go first before a left turn. With the option `parked` (parked cars per km of the kerbs
+// they may stand at, 0 by default: nothing below changes) cars stand at the kerb of two-way roads (src/parked.js), and
+// the cars pass them like keisim's Traffic._parked_gaps: inside their lane where there is room, else over the centre
+// line once the oncoming lane is clear (several right behind one another in a convoy), waiting behind them until then;
+// the oncoming cars give way to a car out there. All coordinates are KeiSim's (x east, y north, yaw
 // counter-clockwise).
 import { heading, pointOn, wrap } from './nav.js';
 import { LC, Path, changeRoom, changeWindow, changedInto, laneHeading, laneMoves, linkMap, pickMove, projectOn } from './lanes.js';
 import { BIKE_LEN, BIKE_W, SINGLE_AHEAD, corridorGap, createBicycles } from './bicycles.js';
+import { PK, createParked } from './parked.js';
 
 const TL = { RED: 0, YELLOW: 1, GREEN: 2 };
 const IDM = { a: 2.0, b: 3.0, T: 1.2, s0: 2.5 };            // keisim TrafficConfig
@@ -164,7 +169,7 @@ function wideLanes(lanes) {
  * n, twoPhase}. ego: {x, y, yaw, v} (centre), 4.5 x 1.85 m. egoNav (optional): {s, decision} from src/nav.js (the
  * ego's route position and next signalised junction), so the other cars know which lane or connector the ego is on.
  */
-export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesPerKm = 0 } = {}) {
+export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesPerKm = 0, parked: parkedPerKm = 0 } = {}) {
   let st = seed >>> 0 || 1;
   const rnd = () => ((st = (st * 1664525 + 1013904223) >>> 0) / 4294967296);
   const junctions = new Map(data.junctions.map((j) => [j.id, j]));
@@ -201,6 +206,13 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
   const cars = [];
   let contacts = 0, lastContact = -1e9, npcContacts = 0, stopSignStops = 0, laneChanges = 0, rampPassages = 0;
   const touching = new Set();
+  // parked cars (src/parked.js; off: null, and nothing else in here changes): who passes which group (c.pkGo), the
+  // convoys (group -> cars set off in it), the groups the ego is out round, contacts with them, passes (tests)
+  const parked = parkedPerKm > 0 ? createParked(data, lanes, { perKm: parkedPerKm, seed: seed + 200 }) : null;
+  const pkConvoy = new Map();
+  let egoPkGo = new Set(), pkCircles = [], pkContacts = 0, lastPkContact = -1e9, npcPkContacts = 0, pkPasses = 0, pkFollows = 0;
+  let bikePkContacts = 0;
+  const pkTouching = new Set();
   // bicycles (src/bicycles.js; off: null, and nothing else in here changes): what the riders ask about the cars
   let lastOcc = null, bikeContacts = 0, lastBikeContact = -1e9, carBikeContacts = 0;
   const bikeTouching = new Set();
@@ -216,6 +228,7 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
     },
     ahead: (c, d) => c.route.pointAt(c.s + d),
     single: (c, r) => single(c, r),
+    parked,
   }, { perKm: bikesPerKm, seed: seed + 100 }) : null;
 
   /** keisim Town._make_yields: inside every signalised junction, a connector yields to the connectors of the other
@@ -373,9 +386,11 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
       if (ego && Math.hypot(p[0] - ego.x, p[1] - ego.y) < avoidEgo) continue;
       if (cars.some((c) => c !== car && c.xy && Math.hypot(c.xy[0] - p[0], c.xy[1] - p[1]) < 12)) continue;
       if (bikes && bikes.riders.some((r) => Math.hypot(r.x - p[0], r.y - p[1]) < 10)) continue;
+      if (parked && parked.cars.some((q) => Math.hypot(q.x - p[0], q.y - p[1]) < 7)) continue;
       route.extend(s + 80, s);
       Object.assign(car, { route, s, seg: route.segAt(s), xy: p, yaw: route.headingAt(s), stuck: 0, ssDone: null, lcp: null,
-        shift: 0, shiftV: 0, shiftTgt: 0, leftWait: 0 });        // moved right inside its lane for a bicycle (m)
+        shift: 0, shiftV: 0, shiftTgt: 0, leftWait: 0,           // moved right inside its lane for a bicycle (m)
+        pkGo: null, pkProf: null });                              // passing parked cars (group id, its stretch)
       return true;
     }
     return false;
@@ -495,12 +510,11 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
         o.ends = [[o.xy[0] - ux, o.xy[1] - uy], [o.xy[0] + ux, o.xy[1] + uy]];
       }
     }
-    const moved = bikes && (c.shift > 1e-3 || c.shiftTgt > 1e-3);   // right of its line for a bicycle
+    const moved = (bikes || parked) && (c.shift > 1e-3 || c.shiftTgt > 1e-3 || !!c.pkProf);   // right of its line
     for (let a = 1.0; a <= LOOK; a += 1.5) {
       const p = c.route.pointAt(c.s + a);
       if (moved) {                                            // keisim Traffic._shifted_paths: the line it will drive
-        const back = Math.max(c.shift - 0.10 * a, c.shift * Math.exp(-1.6 * a / Math.max(c.v, 1)));
-        const o = c.shiftTgt >= c.shift - 1e-3 ? Math.max(c.shift, c.shiftTgt) : Math.max(back, c.shiftTgt);
+        const o = shiftAt(c, a);
         const h = c.route.headingAt(c.s + a);
         p[0] += Math.sin(h) * o; p[1] -= Math.cos(h) * o;
       }
@@ -679,8 +693,9 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
 
   /** keisim Traffic._bike_gaps for one car -> {gap, vl: the bicycle it follows (gap Infinity: none), vcap: the speed
    *  to pass one at, stop: the gap to its stop for a rider beside it before a left turn}. It also moves the car's
-   *  shift (how far right of its line it drives). bc: the riders' circles, with where they will be shortly. */
-  function bikeRules(c, dt, bc) {
+   *  shift (how far right of its line it drives). bc: the riders' circles, with where they will be shortly. pk: the
+   *  parked cars' rules for it (parkedRules: how far out round them; or null). */
+  function bikeRules(c, dt, bc, pk = null) {
     const res = { gap: Infinity, vl: 0, vcap: Infinity, stop: Infinity };
     const hl = c.L / 2, hw = c.W / 2, g = c.route.segs[c.seg], clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
     const near = bikes.riders.filter((r) => Math.abs(r.x - c.xy[0]) < 60 && Math.abs(r.y - c.xy[1]) < 60);
@@ -720,22 +735,22 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
     }
     if (!mine.length || (!held && c.v > 1)) c.leftWait = 0;
     if (c.shift > 0) {                                        // beside a bicycle, wherever it is by now: stay over
+      // (with parked cars: no further out than inside its lane, not on over the centre line once past them)
+      const hold = parked && g.kind === 'lane' && g.lane.kind === 'road' && !(pk && pk.swing)
+        ? Math.min(c.shift, Math.max(bikes.halfWidth(g.lane) - hw - BIKE.KEEP, 0)) : c.shift;
       const ux = Math.cos(c.yaw), uy = Math.sin(c.yaw);
       for (const r of near) {
         const dx = r.x - c.xy[0], dy = r.y - c.xy[1], lon = dx * ux + dy * uy, lat = dy * ux - dx * uy;
         if (lon > -(hl + BIKE.HALF + BIKE.OUT[0]) && lon < hl + BIKE.HALF + 2 && lat > 0 && lat < hw + 2.2) {
           room.set(r, Math.max(room.get(r) || 0, c.shift));
-          target = Math.max(target, c.shift);
+          target = Math.max(target, hold);
         }
       }
     }
-    // sideways: towards the target at RATE at most, gently; back to its line as it drives on (BACK per metre)
-    const rate = Math.min(BIKE.RATE, 0.15 * Math.max(c.v - 0.5, 0)), back = Math.min(BIKE.RATE, BIKE.BACK * c.v);
-    c.shiftTgt = target;
-    c.shiftV += clamp(clamp((target - c.shift) * 1.6, -back, rate) - c.shiftV, -BIKE.ACC * dt, BIKE.ACC * dt);
-    if (c.v < 0.3) c.shiftV = 0;
-    c.shift = Math.max(c.shift + c.shiftV * dt, 0);
-    if (target <= 0 && c.shift < 0.01) { c.shift = 0; c.shiftV = 0; }
+    // sideways: towards the target at RATE at most, gently; back to its line as it drives on (BACK per metre); out
+    // round parked cars too (the larger of the two, at their rates)
+    if (pk) target = Math.max(target, pk.target);
+    integrateShift(c, target, dt, !!(pk && pk.swing));
     if (!near.length) return res;
     const obs = bc.filter((o) => Math.abs(o.x - c.xy[0]) < 60 && Math.abs(o.y - c.xy[1]) < 60);
     // riders on its path: with less than MIN beside them the car follows, with less than FREE it passes slowly
@@ -757,6 +772,211 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
     return res;
   }
 
+  // ------------------------------------------------------------------ parked cars (option parked: src/parked.js)
+  const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
+
+  /** How far right of its line car c will drive a m ahead (keisim Traffic._shifted_paths): round the parked cars it
+   *  passes (c.pkProf: path positions of their rear and front, how far out) only, back in at PK.BACK per metre past
+   *  them; else all of its shift while it moves over or holds beside a rider, what is left of it on the way back. */
+  function shiftAt(c, a) {
+    const P = c.pkProf;
+    if (P) {
+      const sp = c.s + a, ahead = P.lo - (sp + c.L / 2), behind = (sp - c.L / 2) - P.hi;
+      const f = ahead > 0 ? (PK.IN[0] - ahead) / (PK.IN[0] - PK.IN[1]) : behind > 0 ? (PK.OUT[1] - behind) / (PK.OUT[1] - PK.OUT[0]) : 1;
+      return Math.max(P.need * clamp(f, 0, 1), Math.max(c.shift - PK.BACK * a, 0));
+    }
+    const back = Math.max(c.shift - 0.10 * a, c.shift * Math.exp(-1.6 * a / Math.max(c.v, 1)));
+    return c.shiftTgt >= c.shift - 1e-3 ? Math.max(c.shift, c.shiftTgt) : Math.max(back, c.shiftTgt);
+  }
+
+  /** keisim Traffic._integrate_shift for one car: sideways towards the target at BIKE.RATE at most, gently, back to
+   *  its line at BIKE.BACK per metre driven; swing (out round a parked car): at PK.RATE and PK.ACC, back faster. */
+  function integrateShift(c, target, dt, swing) {
+    const rate = swing ? Math.min(PK.RATE, 0.5 * Math.max(c.v - 0.3, 0)) : Math.min(BIKE.RATE, 0.15 * Math.max(c.v - 0.5, 0));
+    const back = swing ? Math.min(PK.RATE, PK.BACK * c.v) : Math.min(BIKE.RATE, BIKE.BACK * c.v);
+    const acc = swing ? PK.ACC : BIKE.ACC;
+    c.shiftTgt = target;
+    c.shiftV += clamp(clamp((target - c.shift) * 1.6, -back, rate) - c.shiftV, -acc * dt, acc * dt);
+    if (c.v < 0.3) c.shiftV = 0;
+    c.shift = Math.max(c.shift + c.shiftV * dt, 0);
+    if (target <= 0 && c.shift < 0.01) { c.shift = 0; c.shiftV = 0; }
+  }
+
+  /** The cars on every lane for the parked-car rules, taken before anyone moves: lane id -> [{c, s (lane-local
+   *  centre), v, L, conn (on a connector into the lane, s < 0)}]. */
+  function pkIndex() {
+    const m = new Map();
+    for (const c of cars) {
+      const g = c.route.segs[c.seg];
+      if (g.kind === 'lane') push(m, g.lane.id, { c, s: g.lo + c.s - g.s0, v: c.v, L: c.L, conn: false });
+      else if (g.kind === 'change') {
+        const a = c.route.localOn(g, c.s);
+        push(m, g.from.id, { c, s: a, v: c.v, L: c.L, conn: false });
+        push(m, g.to.id, { c, s: linkMap(g.from, g.to, a), v: c.v, L: c.L, conn: false });
+      } else push(m, g.conn.to.id, { c, s: c.s - g.s0 - g.conn.len, v: c.v, L: c.L, conn: true });
+    }
+    return m;
+  }
+
+  /** keisim Traffic._ego_on: the ego's arc length on lane L if it is in it (heading along it; also out to the right
+   *  of it, round a parked car), else null. */
+  function egoOn(L, ego) {
+    if (!ego) return null;
+    const pr = projectOn(L, [ego.x, ego.y]);
+    const w = parked.width(L);
+    return pr.lat < w / 2 + 0.3 && -pr.lat < w / 2 + 2.5 && pr.s < L.len && Math.cos(ego.yaw - laneHeading(L, pr.s)) > 0.5 ? pr.s : null;
+  }
+
+  /** The groups of parked cars the ego is out round (it is driven by the model, so its intent is read from where it
+   *  is): from 40 m before the group (it may go out past the cars waiting behind it) to PK.OUT past it, heading
+   *  along its lane, its right side over the centre line. */
+  function egoPassing(ego) {
+    const out = new Set();
+    if (!ego) return out;
+    for (const G of parked.groups) {
+      const L = G.lane, c0 = G.cars[0];
+      if (Math.abs(c0.x - ego.x) > 50 || Math.abs(c0.y - ego.y) > 50) continue;
+      const pr = projectOn(L, [ego.x, ego.y]), w = parked.width(L);
+      if (pr.s < G.sLo - 40 || pr.s > G.sHi + PK.OUT[1] + EGO.L / 2) continue;
+      if (Math.cos(ego.yaw - laneHeading(L, pr.s)) < 0.5) continue;
+      const right = -pr.lat;                                  // (lat: + to the left)
+      if (right + EGO.W / 2 > w / 2 + 0.05 && right < w / 2 + 3) out.add(G.id);
+    }
+    return out;
+  }
+
+  /** keisim Traffic.parked_oncoming_clear: nobody (the cars on the other direction's lane, on the connectors into it
+   *  and the lanes before those, the ego) on the passing stretch of group G, and everyone coming can stop short of
+   *  it (PK.YIELD_B, PK.YIELD_D: they give way) or gets there only after tMe + PK.ONCOMING_T; with sMe (the car's
+   *  position on L), nobody ahead of it in L up to PK.OUT + PK.EXIT past the group (one at a time, room to pull in).
+   *  The ego is driven by the model, which may not give way: it has to get there only after tMe + PK.ONCOMING_T
+   *  (unlike keisim's NPCs, which count on the expert stopping short). */
+  function oncomingClear(L, G, tMe, idx, self, ego, sMe) {
+    const O = G.opp;
+    if (O) {
+      const [lo, hi] = G.oppZone;
+      const list = (idx.get(O.id) || []).filter((o) => o.c !== self);
+      for (const conn of O.pred) {
+        const P = conn.from, back = conn.len + P.len;
+        for (const o of idx.get(P.id) || []) if (o.c !== self && !o.conn) list.push({ s: o.s - back, v: o.v, L: o.L });
+      }
+      let se = egoOn(O, ego);
+      if (se === null && ego) {                              // (or on the lane before the junction behind it)
+        for (const conn of O.pred) {
+          const s2 = egoOn(conn.from, ego);
+          if (s2 !== null) { se = s2 - conn.from.len - conn.len; break; }
+        }
+      }
+      if (se !== null) list.push({ s: se, v: ego.v, L: EGO.L, ego: true });
+      for (const o of list) {
+        if (o.s - o.L / 2 > hi) continue;                    // past it
+        if (o.s + o.L / 2 >= lo) return false;               // on the stretch
+        const d = lo - o.s - o.L / 2;
+        const late = d / Math.max(o.v, 0.5) >= tMe + PK.ONCOMING_T;
+        if (o.ego ? !late : d < o.v * o.v / (2 * PK.YIELD_B) + PK.YIELD_D && !late) return false;
+      }
+    }
+    if (sMe !== null) {
+      const end = G.sHi + PK.OUT[1] + PK.EXIT;
+      for (const o of idx.get(L.id) || []) if (o.c !== self && o.s > sMe && o.s - o.L / 2 < end) return false;
+      const se = egoOn(L, ego);
+      if (se !== null && se > sMe && se - EGO.L / 2 < end) return false;
+    }
+    return true;
+  }
+
+  /** keisim Traffic.parked_follow: may a car at sMe on L follow the car right ahead of it past group G (a convoy)?
+   *  That car is passing G no more than PK.CONVOY_GAP ahead, fewer than PK.CONVOY cars have set off in this convoy,
+   *  and the lane past the group has room for them all to pull back in. */
+  function follow(L, G, sMe, hlMe, idx, self, ego) {
+    if ((pkConvoy.get(G.id) || 0) >= PK.CONVOY) return false;
+    const list = (idx.get(L.id) || []).filter((o) => o.c !== self && !o.conn).map((o) => ({ s: o.s, L: o.L, m: o.c.pkGo === G.id }));
+    const se = egoOn(L, ego);
+    if (se !== null) list.push({ s: se, L: EGO.L, m: egoPkGo.has(G.id) });
+    const ahead = list.filter((o) => o.s > sMe).sort((a, b) => a.s - b.s);
+    if (!ahead.length || !ahead[0].m) return false;
+    if ((ahead[0].s - ahead[0].L / 2) - (sMe + hlMe) > PK.CONVOY_GAP) return false;
+    let end = G.sHi + PK.OUT[1] + PK.EXIT;
+    for (const o of ahead) {
+      if (o.m) end += o.L + PK.CONVOY_ROOM;
+      else if (o.s - o.L / 2 < end) return false;
+    }
+    return true;
+  }
+
+  /** keisim Traffic._parked_gaps for one car -> {target (how far out to the right), swing, gap (to its stop), vmax}.
+   *  The nearest group of parked cars ahead or beside on its lane decides: with room for PK.CLEAR beside it inside
+   *  the lane the car just moves over; else it sets off over the centre line from PK.DECIDE behind it on once the
+   *  oncoming lane is clear (or right behind a car passing it: a convoy), and waits PK.WAIT behind it until then. */
+  function parkedRules(c, idx, ego) {
+    const res = { target: 0, swing: false, gap: Infinity, vmax: Infinity };
+    c.pkProf = null;
+    const g = c.route.segs[c.seg];
+    const gs = g.kind === 'lane' ? parked.laneGroups.get(g.lane.id) : null;
+    if (!gs) { c.pkGo = null; return res; }
+    const L = g.lane, w = parked.width(L), hw = c.W / 2, hl = c.L / 2;
+    const si = g.lo + (c.s - g.s0), front = si + hl, rear = si - hl;
+    for (const gid of gs) {
+      const G = parked.groups[gid];
+      const ahead = G.sLo - front, behind = rear - G.sHi;
+      if (behind > PK.OUT[1]) { if (c.pkGo === gid) c.pkGo = null; continue; }
+      if (ahead > PK.IN[0] + 5) break;
+      const need = Math.min(G.q + PK.CLEAR + hw, w - hw - 0.1);
+      if (need > w / 2 - hw - PK.KEEP && c.pkGo !== gid) {          // over the centre line
+        if (ahead > PK.DECIDE) break;
+        let first = true;
+        if (ahead > 0) {
+          const tMe = reach(G.sHi + PK.ZONE[1] - rear, c.v, PK.PASS_V, 1.5);
+          if (!oncomingClear(L, G, tMe, idx, c, ego, si)) {
+            first = false;
+            if (!(follow(L, G, si, hl, idx, c, ego) && oncomingClear(L, G, tMe, idx, c, ego, null))) {
+              res.gap = Math.min(res.gap, ahead - PK.WAIT);
+              break;
+            }
+          }
+        }
+        c.pkGo = gid;
+        pkConvoy.set(gid, first ? 1 : (pkConvoy.get(gid) || 0) + 1);
+        if (first) pkPasses++; else pkFollows++;
+      }
+      const f = ahead > 0 ? (PK.IN[0] - ahead) / (PK.IN[0] - PK.IN[1]) : behind > 0 ? (PK.OUT[1] - behind) / (PK.OUT[1] - PK.OUT[0]) : 1;
+      res.target = Math.max(res.target, need * clamp(f, 0, 1));
+      res.swing = true;
+      c.pkProf = { lo: g.s0 + (G.sLo - g.lo), hi: g.s0 + (G.sHi - g.lo), need };
+      if (ahead > -0.5 && c.shift < need - 0.25) res.vmax = Math.min(res.vmax, Math.sqrt(PK.SWING_V ** 2 + 4 * Math.max(ahead - 1, 0)));
+      break;
+    }
+    return res;
+  }
+
+  /** The oncoming cars give way to a car out round parked cars on its side: they stop PK.GIVE_ROOM short of its
+   *  passing stretch (on their lane) while it is out there (active: the groups passed now, the ego's too). */
+  function giveWay(c, active, res) {
+    const g = c.route.segs[c.seg];
+    if (g.kind !== 'lane') return;
+    const ids = parked.oppGroups.get(g.lane.id);
+    if (!ids) return;
+    const s = g.lo + (c.s - g.s0);
+    for (const gid of ids) {
+      if (!active.has(gid)) continue;
+      const d = parked.groups[gid].oppZone[0] - (s + c.L / 2);
+      if (d > 0 && d < 40) res.gap = Math.min(res.gap, d - PK.GIVE_ROOM);
+    }
+  }
+
+  /** keisim corridor_gaps with the parked cars' circles (margin PK.MARGIN) on the line the car will drive (shiftAt):
+   *  a car not yet out far enough comes up behind the parked car, one that cannot pass stops behind it. */
+  function parkedGap(c) {
+    const near = pkCircles.filter((o) => Math.abs(o.x - c.xy[0]) < 50 && Math.abs(o.y - c.xy[1]) < 50);
+    if (!near.length) return Infinity;
+    const n = BIKE_PATH.length, px = new Float64Array(n), py = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+      const a = BIKE_PATH[i], p = c.route.pointAt(c.s + a), h = c.route.headingAt(c.s + a), o = shiftAt(c, a);
+      px[i] = p[0] + Math.sin(h) * o; py[i] = p[1] - Math.cos(h) * o;
+    }
+    return corridorGap(px, py, BIKE_PATH, n, c.xy[0], c.xy[1], c.yaw, c.L / 2, c.W / 2, near, (o) => o.m).gap;
+  }
+
   /** Where the ego will be in 0.6, 1.2 and 1.8 s when it turns at the next junction (for the riders), or null. */
   function egoAhead(ego, en) {
     const d = en && en.decision;
@@ -774,6 +994,19 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
     const bc = bikes ? bikes.circles(true) : null;
     lastOcc = occ;
     const lcg = graph ? laneChangeGaps(dt, ego) : null;
+    // parked cars: every car's decision first, from where everybody is now (keisim Traffic._parked_gaps)
+    let pkRes = null;
+    if (parked && parked.n) {
+      const idx = pkIndex();
+      egoPkGo = egoPassing(ego);
+      const live = new Set(egoPkGo);                          // a convoy ends with its last car
+      for (const c of cars) if (c.pkGo !== null) live.add(c.pkGo);
+      for (const gid of [...pkConvoy.keys()]) if (!live.has(gid)) pkConvoy.delete(gid);
+      pkRes = new Map(cars.map((c) => [c, parkedRules(c, idx, ego)]));
+      const active = new Set(egoPkGo);
+      for (const c of cars) if (c.pkGo !== null) active.add(c.pkGo);
+      if (active.size) for (const c of cars) giveWay(c, active, pkRes.get(c));
+    }
     for (const c of cars) {
       const k = c.seg, g = c.route.segs[k], segs = c.route.segs;
       const v0 = graph ? c.vf * speedLimit(c) : 10 * c.vf;
@@ -785,6 +1018,13 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
       }
       let { gap, vl } = leader(c, ego);
       if (lcg && lcg.has(c)) { const x = lcg.get(c); if (x.gap < gap) { gap = x.gap; vl = x.vl; } }
+      const pk = pkRes ? pkRes.get(c) : null;                 // parked cars: wait behind them, swing out slowly
+      if (pk) {
+        vmax = Math.min(vmax, pk.vmax);
+        if (pk.gap < gap) { gap = pk.gap; vl = 0; }
+        const pg = parkedGap(c);
+        if (pg < gap) { gap = pg; vl = 0; }
+      }
       // the approach: the lane piece before the next junction, the car's own or (lane changes) one ahead of it
       let apK = g.kind === 'lane' ? k : g.kind === 'change' ? k + 1 : -1;
       while (apK >= 0 && segs[apK + 1] && segs[apK + 1].kind === 'change') apK += 2;
@@ -839,7 +1079,8 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
           if (gw < gap) { gap = gw; vl = 0; }
         }
       }
-      const bk = bikes ? bikeRules(c, dt, bc) : null;        // bicycles: a slower pass, a stop before a left turn
+      const bk = bikes ? bikeRules(c, dt, bc, pk) : null;    // bicycles: a slower pass, a stop before a left turn
+      if (!bikes && pk) integrateShift(c, pk.target, dt, pk.swing);   // (without riders: out round parked cars)
       if (bk) {
         vmax = Math.min(vmax, bk.vcap);
         if (bk.stop < gap) { gap = bk.stop; vl = 0; }
@@ -865,7 +1106,7 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
       c.seg = c.route.segAt(c.s);
       c.xy = c.route.pointAt(c.s);
       c.yaw = c.route.headingAt(c.s);
-      if (bikes && (c.shift > 0 || c.shiftV !== 0)) {         // moved right for a bicycle (keisim World: Traffic.shift)
+      if ((bikes || parked) && (c.shift > 0 || c.shiftV !== 0)) {   // moved right (keisim World: Traffic.shift)
         const dyaw = Math.atan2(c.shiftV, Math.max(c.v, 2)), side = c.shift + 0.3 * c.L * Math.sin(dyaw);
         c.xy[0] += Math.sin(c.yaw) * side; c.xy[1] -= Math.cos(c.yaw) * side; c.yaw -= dyaw;
       }
@@ -888,6 +1129,24 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
           const hit = Math.abs(c.xy[0] - r.x) < 8 && Math.abs(c.xy[1] - r.y) < 8 &&
             boxesOverlap([c.xy[0], c.xy[1], c.yaw, c.L / 2, c.W / 2], B);
           if (hit && !bikeTouching.has(key)) { bikeTouching.add(key); carBikeContacts++; } else if (!hit) bikeTouching.delete(key);
+        }
+        if (parked) for (const q of parked.cars) {             // … and with the parked cars
+          const key = -(q.id * 1000 + r.id) - 1;
+          const hit = Math.abs(q.x - r.x) < 8 && Math.abs(q.y - r.y) < 8 && boxesOverlap([q.x, q.y, q.yaw, q.L / 2, q.W / 2], B);
+          if (hit && !bikeTouching.has(key)) { bikeTouching.add(key); bikePkContacts++; } else if (!hit) bikeTouching.delete(key);
+        }
+      }
+    }
+    if (parked && parked.n) {                               // contacts with parked cars: the ego's, the other cars'
+      for (const q of parked.cars) {
+        const Q = [q.x, q.y, q.yaw, q.L / 2, q.W / 2];
+        if (ego && t - lastPkContact > 2 && Math.hypot(q.x - ego.x, q.y - ego.y) < 7 &&
+            boxesOverlap(Q, [ego.x, ego.y, ego.yaw, EGO.L / 2, EGO.W / 2])) { pkContacts++; lastPkContact = t; }
+        for (const c of cars) {
+          const key = c.id * 1000 + q.id;
+          const hit = Math.abs(c.xy[0] - q.x) < 8 && Math.abs(c.xy[1] - q.y) < 8 &&
+            boxesOverlap([c.xy[0], c.xy[1], c.yaw, c.L / 2, c.W / 2], Q);
+          if (hit && !pkTouching.has(key)) { pkTouching.add(key); npcPkContacts++; } else if (!hit) pkTouching.delete(key);
         }
       }
     }
@@ -916,6 +1175,7 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
       if (Math.abs(c.xy[0] - cx) > r || Math.abs(c.xy[1] - cy) > r) continue;
       out.push([c.id, c.xy[0], c.xy[1], c.yaw, c.L, c.W, c.H, c.rgb[0], c.rgb[1], c.rgb[2], c.kind, c.brake ? 1 : 0]);
     }
+    if (parked) out.push(...parked.drawList(cx, cy, r));       // the parked cars (lights off)
     return out;
   }
 
@@ -924,6 +1184,12 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
 
   function reset(ego) {
     if (bikes) bikes.riders.length = 0;                       // the cars are placed first, the riders between them
+    if (parked) {                                             // the parked cars before both, away from the ego
+      parked.place(ego ? [ego.x, ego.y] : null);
+      pkCircles = parked.circles([], PK.MARGIN);
+      pkConvoy.clear(); egoPkGo = new Set(); pkTouching.clear();
+      pkContacts = 0; npcPkContacts = 0; lastPkContact = -1e9; pkPasses = 0; pkFollows = 0; bikePkContacts = 0;
+    }
     spawn(ego);
     contacts = 0; npcContacts = 0; stopSignStops = 0; laneChanges = 0; rampPassages = 0; touching.clear();
     if (bikes) { bikes.reset(ego); lastOcc = null; bikeContacts = 0; carBikeContacts = 0; lastBikeContact = -1e9; bikeTouching.clear(); }
@@ -936,6 +1202,13 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
     get carBikeContacts() { return carBikeContacts; }, riders: bikes ? bikes.riders : [],
     get contacts() { return contacts; }, get npcContacts() { return npcContacts; }, get n() { return cars.length; },
     get stopSignStops() { return stopSignStops; },             // full stops at 止まれ lines (tests)
+    // parked cars (option parked): how many stand, the ego's contacts with one and the other cars' (tests), passes
+    // over the centre line begun (pkPasses: the first of a convoy, pkFollows: following one), cars out round one now
+    get parked() { return parked ? parked.n : 0; }, parkedCars: parked ? parked.cars : [],
+    get parkedContacts() { return pkContacts; }, get npcParkedContacts() { return npcPkContacts; },
+    get bikeParkedContacts() { return bikePkContacts; },
+    get pkPasses() { return pkPasses; }, get pkFollows() { return pkFollows; },
+    get pkOut() { return cars.filter((c) => c.pkGo !== null).length; },
     // lane graph towns (tests): lane changes begun between the lanes of a road, and merges out of a ramp
     get laneChanges() { return graph ? laneChanges : undefined; }, get rampPassages() { return graph ? rampPassages : undefined; },
   };

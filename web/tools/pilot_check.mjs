@@ -7,6 +7,8 @@
 //                              [--traffic 0] [--cars 20]   (no other cars / their number)
 //                              [--bikes 8]   (?bikes=8: bicycles, riders per road km; the report then ends with their
 //                              number / contacts with the ego / contacts with other cars / metres to the nearest one)
+//                              [--parked 4]   (?parked=4: parked cars per km of kerb; the report then ends with their number
+//                              / contacts with the ego / with other cars / passes and convoys / metres to the nearest)
 //                              [--model models/keipilot_v24.onnx]   (another ONNX under web/; default models/keipilot.onnx)
 //                              [--tdir .towns]   (a town exported there by scripts/import_osm.py, not one under towns/)
 //                              [--url https://southern-star.github.io/keisim/]   (a deployed copy instead of web/)
@@ -57,7 +59,7 @@ try {
   page.on('pageerror', (e) => console.log(`[pageerror] ${e.message}`));
   const q = new URLSearchParams({ pilot: args.pilot || '1', town, ...(args.ep ? { ep: args.ep } : {}), ...(args.tdir ? { tdir: args.tdir } : {}),
     ...(args.traffic ? { traffic: args.traffic } : {}), ...(args.cars ? { cars: args.cars } : {}),
-    ...(args.bikes ? { bikes: args.bikes } : {}),
+    ...(args.bikes ? { bikes: args.bikes } : {}), ...(args.parked ? { parked: args.parked } : {}),
     ...(args.model ? { model: args.model } : {}), ...(args.ort ? { ort: args.ort } : {}), ...(args.ramp ? { ramp: args.ramp } : {}),
     ...(args.only ? { only: args.only } : {}), ...(args.infer ? { infer: args.infer } : {}),
     ...(args.readback ? { readback: args.readback } : {}), ...(args.hz ? { hz: args.hz } : {}),
@@ -89,7 +91,7 @@ try {
       (mean(read) > 0 ? `, read back after ${mean(read).toFixed(1)} ms` : '') + `, town time x${((b.t - a.t) / wall).toFixed(2)}`);
   }
   console.log('   t     s  km/h  target  light  next turn       dev  restarts  infer  frame   cars/ego/npc contacts' +
-    (args.bikes ? '   bicycles/ego/car contacts, nearest' : ''));
+    (args.bikes ? '   bicycles/ego/car contacts, nearest' : '') + (args.parked ? '   parked/ego/car contacts, passes+follows, nearest' : ''));
   const names = ['red', 'yellow', 'green', 'none'];
   for (let t = every; t <= sec + 1e-6; t += every) {
     const s = await page.evaluate((d) => window.__pilotRun(d).then((r) => ({
@@ -109,7 +111,8 @@ try {
     const k = s.tl ? s.tl.indexOf(Math.max(...s.tl)) : 3;
     console.log(`${t.toFixed(0).padStart(4)} ${s.s.toFixed(0).padStart(5)} ${(s.v * 3.6).toFixed(0).padStart(5)} ${s.target === null ? '     -' : (s.target * 3.6).toFixed(0).padStart(6)}` +
       `  ${names[k].padEnd(6)} ${s.turn.padEnd(8)} ${s.dist === null ? '' : `${s.dist.toFixed(0)} m`.padStart(6)} ${s.dev.toFixed(2).padStart(6)} ${String(s.resets).padStart(6)} ${s.ms.toFixed(0).padStart(6)} ms ${s.cap.toFixed(0).padStart(4)} ms${s.hold ? ' hold' : ''}   ${s.traffic ? `${s.traffic.n}/${s.traffic.contacts}/${s.traffic.npcContacts}${s.traffic.stopSignStops ? ` 止まれ ${s.traffic.stopSignStops}` : ''}${s.traffic.laneChanges !== undefined ? `  lane changes ${s.traffic.laneChanges} ramps ${s.traffic.rampPassages}` : ''}` : '-'}${s.stand === null ? '' : `   stood ${s.stand.toFixed(1)} m ago`}` +
-      (s.traffic && s.traffic.bikes ? `   bikes ${s.traffic.bikes.n}/${s.traffic.bikes.contacts}/${s.traffic.bikes.carContacts} ${s.traffic.bikes.near.toFixed(0)} m` : ''));
+      (s.traffic && s.traffic.bikes ? `   bikes ${s.traffic.bikes.n}/${s.traffic.bikes.contacts}/${s.traffic.bikes.carContacts} ${s.traffic.bikes.near.toFixed(0)} m` : '') +
+      (s.traffic && s.traffic.parked ? `   parked ${s.traffic.parked.n}/${s.traffic.parked.contacts}/${s.traffic.parked.carContacts} ${s.traffic.parked.passes}+${s.traffic.parked.follows} ${s.traffic.parked.near.toFixed(0)} m` : ''));
     if (args.eval) { const r = await page.evaluate(args.eval); if (r !== null && r !== undefined) console.log(JSON.stringify(r)); }
   }
   if (args.shot) { await page.screenshot({ path: args.shot }); console.log(`screenshot: ${args.shot}`); }
