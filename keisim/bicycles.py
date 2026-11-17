@@ -598,11 +598,9 @@ class Bicycles:
             home = self.lat_t[i] < 0.01
             lead_slow = math.isfinite(gH[i]) and vH[i] < self.cruise[i] - 0.8 and (oH[i] <= -2 or oH[i] >= BIKE_OWNER)
             if pk_near is not None and pk_near[i]:
-                # a parked car just ahead or beside: out round it (after the look back, and with the way out clear
-                # ahead: not into a car standing there to pass it; the parked car itself does not count, the line
-                # out from right behind it clips its corner), and not back in before past
-                clear = gO[i] > max(9.0, 2.5 * v) or oO[i] >= PARKED_OWNER
-                if home and clear and self._rear_clear(i, vxy, vv_):
+                # a parked car just ahead or beside: out round it (after the look back, which also takes in a car
+                # just ahead on the right, standing there to pass it), and not back in before past
+                if home and self._rear_clear(i, vxy, vv_, ahead=7.0):
                     self.look_t[i] += dt
                     if self.look_t[i] >= LOOK_BACK:
                         self.lat_t[i] = out_eff[i]
@@ -669,7 +667,7 @@ class Bicycles:
                 a_req = -v * v / (2.0 * max(stop_d, 0.05))
             # whoever is in the way
             if math.isfinite(gap):
-                s0 = S0_CAR if 0 <= lead_o < BIKE_OWNER or lead_o == -1 else S0_BIKE
+                s0 = S0_CAR if 0 <= lead_o < BIKE_OWNER or lead_o == -1 or lead_o >= PARKED_OWNER else S0_BIKE
                 room = max(gap - s0, 0.0)
                 vl = max(float(lead_v), 0.0)
                 v_obs = min(math.sqrt(vl * vl + 2.0 * b * room), vl + room / T_HEAD)
@@ -806,8 +804,9 @@ class Bicycles:
             self.stuck[i] = self.stuck[i] + dt if v_new < 0.1 else 0.0
         self._release(ego_xy, ego_yaw, cxy, cr)
 
-    def _rear_clear(self, i, vxy, vv):
-        """No car beside rider i or coming up from behind within the time it takes to move out and pass."""
+    def _rear_clear(self, i, vxy, vv, ahead=3.0):
+        """No car beside rider i (its centre up to `ahead` m ahead) or coming up from behind within the time it
+        takes to move out and pass."""
         if len(vxy) == 0:
             return True
         yaw = self.yaw[i]
@@ -815,7 +814,7 @@ class Bicycles:
         lon = d[:, 0] * math.cos(yaw) + d[:, 1] * math.sin(yaw)
         right = d[:, 0] * math.sin(yaw) - d[:, 1] * math.cos(yaw)
         reach = 6.0 + 3.5 * np.maximum(vv - self.v[i], 0.0) + 0.5 * vv
-        if np.any((lon < 3.0) & (lon > -reach) & (right > -1.0) & (right < 3.6)):
+        if np.any((lon < ahead) & (lon > -reach) & (right > -1.0) & (right < 3.6)):
             return False
         # the other riders: one beside on the right, or a faster one coming up within a few metres
         d = self.xy - self.xy[i]
