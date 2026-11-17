@@ -28,6 +28,9 @@
 //                              [--infer main]   (the model on the page's main thread, as before src/infer_worker.js)
 //                              [--readback sync]   (read the model frame back at once, waiting for the GPU, as before)
 //                              [--hz N]   (at most N model calls a second in real time)
+//                              [--overlay line|band|swept]   (?overlay=: the plan as a band of the car's width (the default),
+//                              with the ground the body passes over, or as a line; the report then ends with the band:
+//                              metres the car gets in 3 s, 'held' while a safety layer holds the target, ms to draw)
 // Needs models/keipilot.onnx (scripts/export_onnx.py) and network access to cdn.jsdelivr.net (onnxruntime-web).
 import fs from 'node:fs';
 import puppeteer from 'puppeteer-core';
@@ -63,7 +66,7 @@ try {
     ...(args.model ? { model: args.model } : {}), ...(args.ort ? { ort: args.ort } : {}), ...(args.ramp ? { ramp: args.ramp } : {}),
     ...(args.only ? { only: args.only } : {}), ...(args.infer ? { infer: args.infer } : {}),
     ...(args.readback ? { readback: args.readback } : {}), ...(args.hz ? { hz: args.hz } : {}),
-    ...(args.pace ? { pace: args.pace } : {}) });
+    ...(args.pace ? { pace: args.pace } : {}), ...(args.overlay ? { overlay: args.overlay } : {}) });
   const t0 = Date.now();
   await page.goto(`${base}?${q}`, { waitUntil: 'load', timeout: 180000 });
   await page.waitForFunction('window.__pilotRun || /読み込めません/.test(document.getElementById("loadlabel").textContent)', { timeout: 600000, polling: 200 });
@@ -97,7 +100,7 @@ try {
     const s = await page.evaluate((d) => window.__pilotRun(d).then((r) => ({
       s: r.s, v: r.car.v, target: r.plan ? r.plan.target : null, tl: r.plan ? r.plan.tl : null,
       turn: (r.inputs.turn || 'straight') + (r.inputs.ramp ? '/ramp' : ''), dist: r.inputs.dist, dev: r.deviation, resets: r.resets, ms: r.inferMs, cap: r.captureMs, hold: r.holding,
-      traffic: r.traffic, stand: r.useStand ? r.standM : null })), every);
+      traffic: r.traffic, stand: r.useStand ? r.standM : null, overlay: r.overlay })), every);
     if (args.images) {
       fs.mkdirSync(args.images, { recursive: true });
       const urls = await page.evaluate(() => window.__pilot.images().map((im) => {
@@ -112,7 +115,8 @@ try {
     console.log(`${t.toFixed(0).padStart(4)} ${s.s.toFixed(0).padStart(5)} ${(s.v * 3.6).toFixed(0).padStart(5)} ${s.target === null ? '     -' : (s.target * 3.6).toFixed(0).padStart(6)}` +
       `  ${names[k].padEnd(6)} ${s.turn.padEnd(8)} ${s.dist === null ? '' : `${s.dist.toFixed(0)} m`.padStart(6)} ${s.dev.toFixed(2).padStart(6)} ${String(s.resets).padStart(6)} ${s.ms.toFixed(0).padStart(6)} ms ${s.cap.toFixed(0).padStart(4)} ms${s.hold ? ' hold' : ''}   ${s.traffic ? `${s.traffic.n}/${s.traffic.contacts}/${s.traffic.npcContacts}${s.traffic.stopSignStops ? ` 止まれ ${s.traffic.stopSignStops}` : ''}${s.traffic.laneChanges !== undefined ? `  lane changes ${s.traffic.laneChanges} ramps ${s.traffic.rampPassages}` : ''}` : '-'}${s.stand === null ? '' : `   stood ${s.stand.toFixed(1)} m ago`}` +
       (s.traffic && s.traffic.bikes ? `   bikes ${s.traffic.bikes.n}/${s.traffic.bikes.contacts}/${s.traffic.bikes.carContacts} ${s.traffic.bikes.near.toFixed(0)} m` : '') +
-      (s.traffic && s.traffic.parked ? `   parked ${s.traffic.parked.n}/${s.traffic.parked.contacts}/${s.traffic.parked.carContacts} ${s.traffic.parked.passes}+${s.traffic.parked.follows} ${s.traffic.parked.near.toFixed(0)} m` : ''));
+      (s.traffic && s.traffic.parked ? `   parked ${s.traffic.parked.n}/${s.traffic.parked.contacts}/${s.traffic.parked.carContacts} ${s.traffic.parked.passes}+${s.traffic.parked.follows} ${s.traffic.parked.near.toFixed(0)} m` : '') +
+      (args.overlay && s.overlay && s.overlay.horizon !== null ? `   band ${s.overlay.horizon.toFixed(1)} m${s.overlay.held ? ' held' : ''} ${s.overlay.ms.toFixed(1)} ms` : ''));
     if (args.eval) { const r = await page.evaluate(args.eval); if (r !== null && r !== undefined) console.log(JSON.stringify(r)); }
   }
   if (args.shot) { await page.screenshot({ path: args.shot }); console.log(`screenshot: ${args.shot}`); }

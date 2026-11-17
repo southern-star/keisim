@@ -145,10 +145,20 @@ cd web && node tools/serve.mjs                    # → http://localhost:5174/?p
 - 曲がる方向はキー ← ↑ →（または画面のボタン）で、次の交差点について指定します。
   - 指定しなければランダムに曲がります。
   - Space で一時停止、R で最初から、T で周りの車の表示を切り替えます。
-- 画面の線の意味:
-  - ピンクはモデルが描いた走行経路です。
-  - 水色はナビのルートです。
+- 画面の表示の意味:
+  - 水色の帯は、モデルの計画です。
+    - 幅は車幅と同じ 1.85 m です。モデルが出した経路（2 m おきの 10 点）を路面の上でなめらかな曲線にし、左右に 0.925 m ずつずらして帯の縁にします。
+    - 長さは、その計画のまま 3 秒走ると進む距離です。経路と目標速度を、車を動かしているのと同じ制御器と車両モデルに 3 秒分与えて求めます。
+      24 km/h より速ければ、帯は経路の終わり（20 m 先）まで届きます。止まる手前では帯が縮み、その先の経路は縁の線だけが残ります。
+    - 安全層（BrakeHold / RedHold、Mc では YieldHold も）が目標速度をモデルの値より下げているあいだは、帯と縁の線が赤になります。
+  - 緑の線はナビのルートです。
   - 右下に、モデルへの入力画像とモデルの領域分割を表示します。
+  - `?overlay=swept` を付けると、その 3 秒に車体（4.5 × 1.85 m）が通る範囲も橙で出ます。
+    帯は経路の左右 0.925 m なので、曲がるときの車体の向きは入っていません。右左折では、車体の前の角が帯の外へふくらみ、後ろが内へ切れ込みます
+    （半径 10 m のカーブを 14 km/h で回ると、外へ 0.58 m、内へ 0.19 m。`tools/overlay_check.mjs`）。
+  - `?overlay=line` を付けると、帯になる前の表示（モデルの経路がピンクの線、ナビのルートが水色の線）に戻ります。
+
+  ![計画の帯。上の段は同じ右折の瞬間で、左が ?overlay=line（帯になる前の表示）、右が帯。中の段は左が ?overlay=swept（橙が車体の通る範囲）、右が直進中の帯。下の段は左が赤信号の手前（帯は止まる所で終わり、その先は縁の線だけ）、右が Mc の譲り待ち（YieldHold が止めているあいだは縁が赤）](../docs/keiview_band.jpg)
 - 信号は KeiSim と同じ現示で切り替わります。
   - town 1000〜1003 は、流入方向ごとに 1 方向ずつ青になるスプリット現示です。交差点の中で進路が交わらないので、右折待ちはありません。
   - town 1015 と 1018（`?town=1015-98782ab7`、`?town=1018-98782ab7`、右上のメニューでも選べます）は、日本でふつうの二段階の信号です。向かい合う方向が同時に青になり、右折は交差点の中の待ち位置で対向車の切れ目を待ちます（long3 と同じ街のタイプ）。KeiPilot は v0.6 からこの右折待ちを学んでいます。
@@ -230,7 +240,7 @@ cd web && node tools/serve.mjs                    # → http://localhost:5174/?p
   - `?pace=0` を付けると、町は判断を待ちません（前の動き）。
 - モデルの重みは float16 で保存し、グラフの中で float32 に戻します（30 MB、計算は float32）。値は Release の重みと同じです。
 
-URL パラメータ: `?town=1001`（二段階の信号の町は `?town=1015-98782ab7`、札幌は `?town=osm_sapporo`）、`?q=low`（表示の画質。モデルの入力は常に medium）、`?ep=wasm` / `?ep=webgpu`（推論エンジンを固定）、`?pace=0.25`（モデルの判断に何秒までかかってよいか。それより長くかかるときは町の時間をゆっくり進めて待つ、既定 0.25。HUD に「スロー ×0.5」などと出る。`?pace=0` で待たない）、`?model=<URL>`、`?traffic=0`（周りの車なし）、`?cars=20`（周りの車の台数）、`?bikes=8`（自転車を出す。道路 1 km あたりの台数、最大 30。付けなければ自転車なし）、`?parked=4`（路上駐車。止められる路肩 1 km あたりの台数、最大 20。付けなければなし）、`?cardetail=0`（周りの車を簡易な形で表示）、`?tdir=.towns`（`scripts/import_osm.py` が `web/.towns` に書き出した町、例 `?tdir=.towns&town=osm_nishioi`: 一方通行の道路は中心線の上の車線 1 本で、周りの車もその向きにだけ走ります）、`?ramp=N`（ランプのある町: N 本目のランプの手前から。`-1` でふつうの出発点）、`?ort=node_modules/onnxruntime-web/dist/`（onnxruntime-web を CDN ではなくこのサイトから読む。同じサイトの相対パスだけ。CDN に出られない環境のテスト用: `npm install --no-save onnxruntime-web@1.20.1`）
+URL パラメータ: `?town=1001`（二段階の信号の町は `?town=1015-98782ab7`、札幌は `?town=osm_sapporo`）、`?q=low`（表示の画質。モデルの入力は常に medium）、`?ep=wasm` / `?ep=webgpu`（推論エンジンを固定）、`?pace=0.25`（モデルの判断に何秒までかかってよいか。それより長くかかるときは町の時間をゆっくり進めて待つ、既定 0.25。HUD に「スロー ×0.5」などと出る。`?pace=0` で待たない）、`?model=<URL>`、`?traffic=0`（周りの車なし）、`?cars=20`（周りの車の台数）、`?bikes=8`（自転車を出す。道路 1 km あたりの台数、最大 30。付けなければ自転車なし）、`?parked=4`（路上駐車。止められる路肩 1 km あたりの台数、最大 20。付けなければなし）、`?cardetail=0`（周りの車を簡易な形で表示）、`?overlay=swept`（計画の帯に加えて、3 秒のあいだに車体が通る範囲も表示）、`?overlay=line`（計画を帯ではなく線で表示。以前の表示）、`?tdir=.towns`（`scripts/import_osm.py` が `web/.towns` に書き出した町、例 `?tdir=.towns&town=osm_nishioi`: 一方通行の道路は中心線の上の車線 1 本で、周りの車もその向きにだけ走ります）、`?ramp=N`（ランプのある町: N 本目のランプの手前から。`-1` でふつうの出発点）、`?ort=node_modules/onnxruntime-web/dist/`（onnxruntime-web を CDN ではなくこのサイトから読む。同じサイトの相対パスだけ。CDN に出られない環境のテスト用: `npm install --no-save onnxruntime-web@1.20.1`）
 
 ```bash
 node tools/pilot_check.mjs --town 1000 --sec 60   # headless Chrome で 60 秒（シミュレーション時間）走らせて記録を表示
@@ -242,6 +252,8 @@ node tools/traffic_check.mjs --town 2002-8c5d282b --sec 600 --why   # 周りの�
 node tools/pilot_check.mjs --pilot mc --town 1015-98782ab7 --sec 300 --every 5 --bikes 8   # 自転車あり（行の最後に 自転車の台数/自車との接触/車との接触、いちばん近い自転車までの距離）
 node tools/traffic_check.mjs --town osm_sapporo --sec 1200 --bikes 8 --seed 7 --why   # 自転車と周りの車を node で
 node tools/traffic_check.mjs --town 1018-98782ab7 --sec 900 --parked 4 --bikes 8 --why   # 路上駐車（追い越しの回数・列・接触）
+node tools/overlay_check.mjs   # 計画の帯と車体が通る範囲の形、帯の長さを決める 3 秒の先読みを node だけで（ブラウザなし）
+node tools/pilot_check.mjs --town 1000 --sec 60 --overlay swept --shot out.png   # 帯の表示を選ぶ（行の最後に 帯の長さ・安全層が抑えているか・表示の描画時間）
 ```
 
 `pilot_check.mjs` は、モデルの計算を毎ステップ待つので、KeiSim と同じく推論の遅れがない状態で走ります（`--realtime` の間だけは、見る人のブラウザと同じく実時間で走ります）。
@@ -289,10 +301,11 @@ src/world/cars.js           表示用の詳しい形の車（8 車種）
 src/ego.js                  エゴモード（1 フレーム描画・セマンティックラベル・ライティングのランダム化）
 src/pilot.js                パイロットモード（モデルの入力の描画、onnxruntime-web、制御器と車両モデル、安全層、表示）
 src/nav.js                  パイロットモードのルート、コマンド、目標点（keisim/route.py と同じ規則）
+src/overlay.js              パイロットモードの表示: 計画の帯と、車体が通る範囲の形（路面の上の幾何）
 src/lanes.js                KeiSim の車線グラフ（片側2車線・ランプ）、車線変更、ナビと周りの車のルートの経路
 vendor/sakuragaoka/         Sakuragaoka Station から持ってきたコード（MIT、変更点は NOTICE.md）
 towns/                      エクスポート済みの街（1000〜1003、二段階の信号の 1015 と 1018、道路の種類の 1000-dae67d73、片側2車線とランプの 2000 と 2002）。エゴモードの街は .towns/ に自動で出力（git 対象外）
-tools/                      serve / check / shot / ego_server / pilot_check / traffic_check
+tools/                      serve / check / shot / ego_server / pilot_check / traffic_check / overlay_check
 ```
 
 ## クレジット
