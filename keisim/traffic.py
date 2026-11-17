@@ -1471,7 +1471,16 @@ class Traffic:
             reach = (hl + half_b)[:, None]
             near = (lon > -(reach + BIKE_OUT[0])) & (lon < reach + 2.0) & (lat > 0.0) & (lat < hw[:, None] + 2.2)
             room = np.where(near, np.maximum(room, self.shift[:, None]), room)
-            target = np.where(near.any(1), np.maximum(target, self.shift), target)
+            hold = self.shift
+            if self.parked is not None and self.parked.n and not __import__("os").environ.get("KS_NOHOLD"):
+                # out round parked cars: once past them no further out than inside its lane (not on over the centre
+                # line beside a rider, into the queue at the next junction, where it would block the other way)
+                hold = self.shift.copy()
+                for i in np.nonzero(near.any(1))[0]:
+                    lane = lanes[self.route[i][self.ri[i]]]
+                    if lane.kind == "road" and not (swing is not None and swing[i]):
+                        hold[i] = min(hold[i], max(lane.width / 2 - hw[i] - BIKE_KEEP, 0.0))
+            target = np.where(near.any(1), np.maximum(target, hold), target)
         if pk_target is not None:                   # parked cars too (_parked_gaps): the larger move out
             target = np.maximum(target, pk_target)
         self._integrate_shift(target, dt, swing)
