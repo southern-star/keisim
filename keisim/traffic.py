@@ -1440,7 +1440,10 @@ class Traffic:
                 if pkp is not None and sj < pkp[1] + PK_OUT[0]:
                     a = pkp[0] - (sj + hl[i])          # the car's front bumper to the parked cars, with it at the rider
                     f = (PK_IN[0] - a) / (PK_IN[0] - PK_IN[1]) if a > 0.0 else 1.0
-                    c = max(c, pkp[2] * min(max(f, 0.0), 1.0))
+                    # room is checked on the unshifted path, so it only holds for a rider left of it: one out round
+                    # the parked cars itself (or moving out) is on the car's line, and gets less than none
+                    sd = float(bk.side[j]) - max(float(bk.lat_t[j] - bk.lat[j]), 0.0)
+                    c = max(c, pkp[2] * min(max(f, 0.0), 1.0) + 2.0 * min(sd, 0.0))
                 room[i, j] = c
                 want = min(max(hw[i] + 0.3 + BIKE_FREE + 0.05 - bk.side[j], 0.0), c)
                 if ahead > 0.0:
