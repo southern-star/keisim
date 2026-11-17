@@ -350,6 +350,7 @@ def worker(wid, args, quota, out_dir, counter):
     cfg.expert_yield_visible = bool(args.yield_visible)
     cfg.expert_bike_visible = bool(args.bike_visible)
     cfg.expert_bike_sweep = bool(args.bike_sweep)
+    cfg.expert_wait_back = float(args.expert_wait_back)
     if args.ego_cross_rate is not None:
         cfg.traffic.ego_cross_rate = args.ego_cross_rate
     if args.ped_spacing is not None:
@@ -640,6 +641,9 @@ def parse_args(argv=None):
     ap.add_argument("--bike_visible", type=int, default=0, choices=[0, 1],
                     help="the expert's 巻き込み確認 and give-way counts only the riders the camera sees, and riders "
                          "coming unseen from behind do not move its path (EnvConfig.expert_bike_visible)")
+    ap.add_argument("--expert_wait_back", type=float, default=0.0, metavar="M",
+                    help="the expert waits M m short of each yielding connector's wait point "
+                         "(EnvConfig.expert_wait_back; NPCs unchanged)")
     ap.add_argument("--bike_sweep", type=int, default=0, choices=[0, 1],
                     help="the expert's room beside a rider ahead counts its front corner off the path when it points "
                          "off it (EnvConfig.expert_bike_sweep)")
@@ -709,6 +713,7 @@ def main():
                **({"osm_towns": args.osm_towns, "osm_seed0": args.osm_seed0} if args.osm_towns else {}),
                **({"keiview_roads": args.keiview_roads} if args.keiview_roads != "plain" else {}),
                **({"yield_visible": 1} if args.yield_visible else {}),
+               **({"expert_wait_back": args.expert_wait_back} if args.expert_wait_back else {}),
                **({"ego_patience": args.ego_patience} if args.ego_patience else {}),
                **({"npc_past_line": args.npc_past_line} if args.npc_past_line else {}),
                **({"crosswalks": args.crosswalks} if args.crosswalks > 0 else {}),

@@ -65,6 +65,13 @@ def clear_time(d_cross, v, length):
     return Traffic._reach(max(d_cross, 0.0) + 2.3 + length, v, 5.0, 2.0)
 
 
+def wait_back(wait_s, back):
+    """Where the expert waits on a yielding connector: `back` m short of Lane.wait_s (EnvConfig.expert_wait_back),
+    but not before the connector's start (its local s = 0: the junction's entry, past the stop line). A wait point
+    already before the start (narrow junctions: Town._narrow_wait) stays where it is. back = 0: wait_s itself."""
+    return wait_s if back == 0.0 else min(wait_s, max(wait_s - back, 0.0))
+
+
 def stop_profile(x, b=2.5):
     """Target speed with `x` metres left to the stopping point.
     sqrt(2bx) far away, a slow linear creep close in -> small distance errors near
@@ -661,9 +668,13 @@ class Expert:
                     break
                 conn = w.town.lanes[jn["lane"]]
                 if conn.yields:
-                    d_wait = jn["s_in"] + conn.wait_s - s_front
+                    # d_old: the connector's wait point (Lane.wait_s, where the NPCs wait), which decides the branch;
+                    # d_wait: where the expert stops (EnvConfig.expert_wait_back short of it, not before the
+                    # connector's start). Between the two the give-way rule still holds and stops the car at once.
+                    d_old = jn["s_in"] + conn.wait_s - s_front
+                    d_wait = jn["s_in"] + wait_back(conn.wait_s, env.cfg.expert_wait_back) - s_front
                     d_cross = jn["s_in"] + conn.yields[0][1] - s_front
-                    if d_wait >= -0.5:
+                    if d_old >= -0.5:
                         if not jn["signalized"] and len(w.town.junctions[jn["junction"]].arms) >= 3:
                             v_x = math.sqrt(CROSSING_V ** 2 + 2 * CROSSING_B * max(d_wait, 0.0))
                             lin = w.town.lanes[conn.pred[0]]            # the approach: its 止まれ line, if any
@@ -722,8 +733,10 @@ class Expert:
                 stop_at = None
                 conn = w.town.lanes[route.lanes[kc - 1]] if kc > 0 else None
                 if conn is not None and conn.kind == "conn" and conn.yields and conn.wait_s is not None:
-                    d_wait = route.offsets[kc - 1] + conn.wait_s - route.s0[kc - 1] - s_front
-                    if d_wait >= -0.5 and peds.crosswalk_blocked(ci, u0, u1, w.t, CW_REACH + (d - d_wait) / 3.0):
+                    d_base = route.offsets[kc - 1] - route.s0[kc - 1] - s_front
+                    d_old = d_base + conn.wait_s            # as for the give-way rule: EnvConfig.expert_wait_back
+                    d_wait = d_base + wait_back(conn.wait_s, env.cfg.expert_wait_back)
+                    if d_old >= -0.5 and peds.crosswalk_blocked(ci, u0, u1, w.t, CW_REACH + (d - d_wait) / 3.0):
                         stop_at = max(d_wait, 0.0)
                 if stop_at is None and peds.crosswalk_blocked(ci, u0, u1, w.t):
                     stop_at = d - CW_MARGIN

@@ -6,6 +6,7 @@ a perfect prediction reproduces the expert's driving.
 """
 from __future__ import annotations
 
+import collections
 import math
 
 import numpy as np
@@ -88,3 +89,20 @@ class PlanFollower:
         steer = self.pp(path, v)
         thr, brk = self.sc(target_speed, v, dt)
         return np.array([steer, thr, brk])
+
+
+class ActionDelay:
+    """A FIFO of `n` control steps between a driver's actions and the car (evaluate.py --expert_delay: the expert's
+    actions arrive as late as a driving model's decisions). Until the first action comes through the car brakes."""
+
+    BRAKE = (0.0, 0.0, 1.0)
+
+    def __init__(self, n):
+        self.n = int(n)
+        self.q = collections.deque(np.array(self.BRAKE) for _ in range(self.n))
+
+    def __call__(self, action):
+        if not self.n:
+            return action
+        self.q.append(action)
+        return self.q.popleft()

@@ -2148,3 +2148,60 @@ def test_junction_passes_window():
     assert j0["stood_s"] == 3.0 and j0["needless_s"] == 1.0 and j0["expert_stop"]
     assert j0["s_first_stop"] == 46.0
     assert not j1["reached"] and j1["kind"] == "signalised"
+
+
+def _expert_episode(town, ep, style="suburban", steps=1500, wait_back=0.0, log=None):
+    """An expert episode (jam fixes on, as in the 片側2車線 suites); per step its front bumper's s and the expert's
+    reason while it stands for a give-way (`log`), and a hash of the per-step poses, speeds and reasons."""
+    import hashlib
+    from keisim.config import town_config
+    cfg = EnvConfig()
+    cfg.town = town_config(style)
+    cfg.render_rgb = cfg.render_seg = False
+    cfg.traffic.box_rule = cfg.traffic.release_hidden = True
+    if wait_back:
+        cfg.expert_wait_back = wait_back
+    env = KeiEnv(cfg)
+    env.reset(town_seed=town, episode_seed=ep, route_length=600.0)
+    h = hashlib.sha256()
+    for _ in range(steps):
+        e = env.world.ego
+        h.update(np.round(np.r_[e.pose, e.v], 3).tobytes() + env.plan["reason"].encode())
+        if log is not None and env.plan["reason"] == "yield" and e.v < 0.05:
+            s_front = env.s_ego + e.LENGTH / 2
+            for jn in env.route.junctions:
+                lane = env.world.town.lanes[jn["lane"]]
+                if lane.yields and jn["s_in"] - 1.0 <= s_front <= jn["s_out"]:
+                    log.setdefault(jn["junction"], s_front - jn["s_in"] - lane.wait_s)
+        _, _, done, _ = env.step(env.expert_action())
+        if done:
+            break
+    return h.hexdigest()[:16]
+
+
+def test_expert_wait_back():
+    """EnvConfig.expert_wait_back: off, the expert drives as before it existed, step for step (hashes recorded on the
+    base branch); 2 m, it stands for the oncoming traffic ~2 m further back at the two-phase signal's right turn
+    (suburban town 2002, episode 9800: junction 9), NPCs unchanged. A wait point already before its connector's
+    start stays where it is; one less than `back` into the connector goes to its start."""
+    from keisim.expert import wait_back
+    assert wait_back(6.2, 0.0) == 6.2 and abs(wait_back(6.2, 2.0) - 4.2) < 1e-9
+    assert wait_back(1.5, 2.0) == 0.0 and wait_back(-3.8, 2.0) == -3.8
+    assert _expert_episode(2001, 9801, steps=400) == "08cf971b936192c3"
+    at0, at2 = {}, {}
+    assert _expert_episode(2002, 9800, log=at0) == "f74a7eb79553daeb"
+    _expert_episode(2002, 9800, wait_back=2.0, log=at2)
+    assert set(at0) == set(at2) == {9}
+    assert -0.5 < at0[9] <= 0.1 and -2.5 < at2[9] < -1.5
+
+
+def test_action_delay():
+    """evaluate.py --expert_delay: the actions reach the car n control steps late, braking until the first arrives;
+    n = 0 passes each action through."""
+    from keisim.control import ActionDelay
+    d = ActionDelay(3)
+    out = [d(np.array([0.1 * k, 0.5, 0.0])) for k in range(6)]
+    assert all(np.array_equal(o, [0.0, 0.0, 1.0]) for o in out[:3])
+    assert [round(float(o[0]), 3) for o in out[3:]] == [0.0, 0.1, 0.2]
+    a = np.array([0.3, 0.2, 0.0])
+    assert ActionDelay(0)(a) is a
