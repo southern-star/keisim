@@ -1,0 +1,242 @@
+{
+ "summary": {
+  "routes": 1,
+  "DS": 0.8915016992504545,
+  "RC": 0.8915016992504545,
+  "IS": 1.0,
+  "success_rate": 0.0,
+  "km": 0.5578,
+  "avg_speed_kmh": 3.774935970000681,
+  "lights_passed": 4,
+  "infractions_per_km": {},
+  "infraction_counts": {},
+  "status": {
+   "blocked": 1
+  },
+  "blocked_by": {
+   "traffic": 1
+  }
+ },
+ "results": [
+  {
+   "status": "blocked",
+   "RC": 0.8915016992504545,
+   "IS": 1.0,
+   "DS": 0.8915016992504545,
+   "infractions": [],
+   "time": 532.0,
+   "distance": 557.8,
+   "route_length": 626.6,
+   "off_lane_ratio": 0.0,
+   "town": 1002,
+   "episode": 9003,
+   "steps": 5320,
+   "wall": 527.6636033058167,
+   "avg_speed": 1.048593325000189,
+   "weather": "cloudy",
+   "lights_passed": 4,
+   "lane_changes": 0,
+   "ramps": 0,
+   "junction_passes": [
+    {
+     "junction": 15,
+     "kind": "bend",
+     "arms": 2,
+     "turn": "left",
+     "s_in": 45.8,
+     "s_out": 53.8,
+     "reached": true,
+     "yields": false,
+     "expert_reasons": {
+      "vehicle": 33,
+      "curve": 1
+     },
+     "expert_stop": false,
+     "v_min": 4.68,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
+    },
+    {
+     "junction": 11,
+     "kind": "signalised",
+     "arms": 3,
+     "turn": "left",
+     "s_in": 122.2,
+     "s_out": 135.0,
+     "reached": true,
+     "yields": false,
+     "expert_reasons": {
+      "vehicle": 31,
+      "red_light": 260,
+      "curve": 37
+     },
+     "expert_stop": false,
+     "v_min": 0.0,
+     "stood_s": 24.8,
+     "needless_s": 0.1,
+     "s_first_stop": 120.9
+    },
+    {
+     "junction": 10,
+     "kind": "signalised",
+     "arms": 4,
+     "turn": "straight",
+     "s_in": 208.0,
+     "s_out": 227.4,
+     "reached": true,
+     "yields": false,
+     "expert_reasons": {
+      "vehicle": 34,
+      "red_light": 357,
+      "cruise": 41
+     },
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 34.7,
+     "needless_s": 0.1,
+     "s_first_stop": 207.7
+    },
+    {
+     "junction": 9,
+     "kind": "signalised",
+     "arms": 4,
+     "turn": "left",
+     "s_in": 274.9,
+     "s_out": 287.8,
+     "reached": true,
+     "yields": false,
+     "expert_reasons": {
+      "vehicle": 389,
+      "curve": 21
+     },
+     "expert_stop": false,
+     "v_min": 0.0,
+     "stood_s": 32.3,
+     "needless_s": 0.0,
+     "s_first_stop": 264.6
+    },
+    {
+     "junction": 13,
+     "kind": "signalised",
+     "arms": 3,
+     "turn": "right",
+     "s_in": 348.0,
+     "s_out": 366.0,
+     "reached": true,
+     "yields": false,
+     "expert_reasons": {
+      "cruise": 2,
+      "curve": 42
+     },
+     "expert_stop": false,
+     "v_min": 4.95,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
+    },
+    {
+     "junction": 12,
+     "kind": "bend",
+     "arms": 2,
+     "turn": "right",
+     "s_in": 429.8,
+     "s_out": 443.6,
+     "reached": true,
+     "yields": false,
+     "expert_reasons": {
+      "pedestrian": 9,
+      "curve": 57
+     },
+     "expert_stop": false,
+     "v_min": 0.03,
+     "stood_s": 0.1,
+     "needless_s": 0.1,
+     "s_first_stop": 415.5
+    },
+    {
+     "junction": 8,
+     "kind": "bend",
+     "arms": 2,
+     "turn": "right",
+     "s_in": 507.5,
+     "s_out": 522.0,
+     "reached": true,
+     "yields": false,
+     "expert_reasons": {
+      "vehicle": 790
+     },
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 55.0,
+     "needless_s": 0.0,
+     "s_first_stop": 504.2
+    },
+    {
+     "junction": 9,
+     "kind": "signalised",
+     "arms": 4,
+     "turn": "right",
+     "s_in": 597.4,
+     "s_out": 614.6,
+     "reached": false,
+     "yields": false
+    }
+   ],
+   "blocked_by": {
+    "cause": "traffic",
+    "expert_go_s": 0.0,
+    "expert_reasons": {
+     "vehicle": 896
+    }
+   }
+  }
+ ],
+ "args": {
+  "agent": "model",
+  "ckpt": "runs/keipilot_mc13/last.pt",
+  "suite": "test",
+  "workers": 1,
+  "route_length": 600.0,
+  "weather": "random",
+  "max_steps": 6000,
+  "videos": 0,
+  "video_dir": "runs/videos",
+  "tag": null,
+  "dense": true,
+  "renderer": "keisim",
+  "keiview_roads": "plain",
+  "out": "runs/eval/standoff/keipilot_mc13_hold_red_yh_4_1_3.5_4_0.5_0.5_10_test_dense/1002_9003.json",
+  "yield_visible": 0,
+  "brake_hold": true,
+  "red_hold": true,
+  "yield_hold": [
+   4.0,
+   1.0,
+   3.5,
+   4.0,
+   0.5,
+   0.5,
+   10.0
+  ],
+  "town_style": "classic",
+  "blocked_timeout": 90.0,
+  "jam_fixes": 0,
+  "osm_town": null,
+  "osm_bbox": null,
+  "routes": 20,
+  "episode0": 100,
+  "via_ramp": 0,
+  "rig": "wide_narrow",
+  "ego_patience": 0.0,
+  "npc_past_line": 0,
+  "crosswalks": 0.0,
+  "bicycles": 0.0,
+  "bike_visible": 0,
+  "bike_sweep": 0,
+  "only": [
+   "1002:9003"
+  ]
+ },
+ "time": 534.2020468711853
+}
