@@ -40,7 +40,8 @@ if (PILOT) {                                      // the intro board describes t
     <li>${params.get('overlay') === 'line' ? 'ピンクはモデルが描いた走行経路、水色はナビのルート。'
       : '水色の帯はモデルの計画です（幅は車幅の 1.85 m、長さは 3 秒で進む距離。安全層が速度を抑えているあいだは赤）。緑の線はナビのルート。'}右下はモデルへの入力画像と、モデルの領域分割です。</li>
     <li>周りの車は「周りの車」ボタン、T キー、<code>?traffic=0</code> で消せます（描画が重いとき。選んだ設定はこのブラウザに残ります）。</li>
-    <li>右上の「路面」で路上駐車を選べます（<code>?parked=4</code>）。周りの車は、対向車が来ないときに中央線を越えて追い越します。
+    <li>右上の「路面」で、路上駐車（<code>?parked=4</code>）と自転車（<code>?bikes=8</code>）を選べます。
+    周りの車は、駐車車両は対向車が来ないときに中央線を越えて、自転車は右へ寄って追い越します。
     モデルは路上駐車をまだ学習していないので、駐車車両の後ろで止まって待つことがあります。</li>
     <li>町は右上のメニューで選べます。town 1015 と 1018 は日本でふつうの二段階の信号で、右折は交差点の中で対向車の切れ目を待ちます。
     「札幌」と「西大井」は OpenStreetMap から作った実在の町です。札幌（東区の 1 km 角）はほとんどの交差点に信号がなく、細い道の車が優先道路に譲ります。
@@ -380,13 +381,19 @@ function wireMenus() {
   }
   const rsel = $('roadsel');
   if (rsel && PILOT) {
-    // pilot: not the detailed roads (the model knows the plain ones), but parked cars (?parked=N, src/parked.js)
-    rsel.innerHTML = '<option value="plain">路面: 標準</option><option value="parked">路面: 路上駐車</option>';
-    rsel.setAttribute('aria-label', 'Parked cars');
-    rsel.value = Number(params.get('parked')) > 0 ? 'parked' : 'plain';
+    // pilot: not the detailed roads (the model knows the plain ones), but what stands or rides on them: parked cars
+    // (?parked=N, src/parked.js) and bicycles (?bikes=N, src/bicycles.js). A count already in the URL is kept.
+    const on = (k) => Number(params.get(k)) > 0;
+    const opts = { plain: ['標準', false, false], parked: ['路上駐車', true, false], bikes: ['自転車', false, true],
+      both: ['駐車＋自転車', true, true] };
+    rsel.innerHTML = Object.entries(opts).map(([v, [t]]) => `<option value="${v}">路面: ${t}</option>`).join('');
+    rsel.setAttribute('aria-label', 'Parked cars and bicycles');
+    rsel.value = on('parked') ? (on('bikes') ? 'both' : 'parked') : on('bikes') ? 'bikes' : 'plain';
     rsel.addEventListener('change', () => {
-      const u = new URL(location.href);
-      if (rsel.value === 'parked') u.searchParams.set('parked', '4'); else u.searchParams.delete('parked');
+      const u = new URL(location.href), [, pk, bk] = opts[rsel.value];
+      for (const [k, want, n] of [['parked', pk, '4'], ['bikes', bk, '8']]) {
+        if (!want) u.searchParams.delete(k); else if (!on(k)) u.searchParams.set(k, n);
+      }
       location.href = u.toString();
     });
   } else if (rsel) {
