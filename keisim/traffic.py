@@ -326,7 +326,8 @@ class Traffic:
         self.yaw = np.zeros(0)
         self.stuck = np.zeros(0)
         self.lead_gap = np.zeros(0)          # each car's first obstacle in its corridor at the last step: gap (m,
-        self.lead_owner = np.zeros(0, int)   # inf: none) and whose (>= 0 a car, -1 the ego, <= -2 a person)
+        self.lead_owner = np.zeros(0, int)   # inf: none) and whose (>= 0 a car, PARKED_OWNER + k a parked one, -1 the
+                                             # ego, <= -2 a person)
         self.target_n = n
         self.has_yields = any(getattr(l, "yields", None) for l in town.lanes)
         self.has_lc = any(getattr(l, "links", None) for l in town.lanes)    # multi-lane roads, ramps: lane changes

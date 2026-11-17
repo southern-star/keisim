@@ -292,14 +292,14 @@ def junction_passes(env, log, dt, approach=15.0):
     whether the expert wanted a stop there ("yield" at a priority crossing, a red light, ...), whether the ego actually
     stood (v < 0.1), for how long, and for how long of that the expert would have driven on (a needless stop).
     s is relative to the route start, like the infractions' s. Routes the ego never reached are listed with
-    reached=False."""
+    reached=False. (Before round 13 the windows were s_start too far back and s_first_stop was absolute.)"""
     s0 = env.route.s_start
     rows = [r for r in log]
     out = []
     for j in env.route.junctions:
         J = env.world.town.junctions[j["junction"]]
         a, b = j["s_in"] - approach, j["s_out"]
-        win = [r for r in rows if a <= r[1] + s0 <= b]
+        win = [r for r in rows if a <= r[1] <= b]        # the log's s is env.s_ego: absolute, as the junctions' s
         kind = "signalised" if j["signalized"] else ("priority" if len(J.arms) >= 3 else "bend")
         rec = {"junction": int(j["junction"]), "kind": kind, "arms": len(J.arms), "turn": j["turn"],
                "s_in": round(j["s_in"] - s0, 1), "s_out": round(j["s_out"] - s0, 1),
@@ -312,7 +312,7 @@ def junction_passes(env, log, dt, approach=15.0):
             rec.update({"expert_reasons": reasons, "expert_stop": any(r[-1] < 0.3 for r in win),
                         "v_min": round(min(r[2] for r in win), 2), "stood_s": round(len(stood) * dt, 1),
                         "needless_s": round(sum(1 for r in stood if r[-1] > 1.0) * dt, 1),
-                        "s_first_stop": None if not stood else round(stood[0][1], 1)})
+                        "s_first_stop": None if not stood else round(stood[0][1] - s0, 1)})
         out.append(rec)
     return out
 

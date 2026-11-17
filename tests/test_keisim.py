@@ -2122,3 +2122,29 @@ def test_dart_out():
             break
     assert info["status"] == "success" and not info["infractions"]
     assert sum(d[3] for d in w.darts) >= 3 and hidden_run > 0      # they ran out, hidden at first
+
+
+def test_junction_passes_window():
+    """evaluate.py's junction_passes() looks at the steps near each junction: the log's s (env.s_ego) is absolute, as
+    the junctions' s_in / s_out, and the record's s is relative to the route start (s_start > 0 here)."""
+    from types import SimpleNamespace as NS
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
+    from evaluate import junction_passes
+
+    town = NS(junctions={0: NS(arms=[0, 1, 2]), 1: NS(arms=[0, 1, 2, 3])}, lanes=[NS(yields=True), NS(yields=False)])
+    route = NS(s_start=100.0, junctions=[
+        {"junction": 0, "s_in": 150.0, "s_out": 170.0, "signalized": False, "turn": "right", "lane": 0},
+        {"junction": 1, "s_in": 400.0, "s_out": 420.0, "signalized": True, "turn": "straight", "lane": 1}])
+    env = NS(route=route, world=NS(town=town))
+    dt = 0.1
+    # (t, s_ego, v, reason, tl, tl_pred, target_model, target_expert): drive up to s 146, stand there 3 s (the expert
+    # wants a stop for 2 s, then go), drive through junction 0; the route ends before junction 1
+    log = [(round(i * dt, 1), 100.0 + i * 0.5, 5.0, "cruise", 0, 0, 5.0, 5.0) for i in range(92)]
+    log += [(round(9.2 + i * dt, 1), 146.0, 0.0, "yield", 0, 0, 0.0, 0.0 if i < 20 else 4.0) for i in range(30)]
+    log += [(round(12.2 + i * dt, 1), 146.0 + i * 0.5, 5.0, "cruise", 0, 0, 5.0, 5.0) for i in range(60)]
+    j0, j1 = junction_passes(env, log, dt)
+    assert j0["reached"] and j0["kind"] == "priority" and j0["yields"]
+    assert (j0["s_in"], j0["s_out"]) == (50.0, 70.0)
+    assert j0["stood_s"] == 3.0 and j0["needless_s"] == 1.0 and j0["expert_stop"]
+    assert j0["s_first_stop"] == 46.0
+    assert not j1["reached"] and j1["kind"] == "signalised"
