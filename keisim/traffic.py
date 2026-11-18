@@ -158,6 +158,8 @@ GRID_MIN_PAIRS = 40000      # corridor_gaps: below this many (path, circle) pair
 SWEEP_AHEAD = 25.0          # m: TrafficConfig.npc_sweep (sweep_gaps): the car's box is placed this far along its path
 SWEEP_CORNER = math.sqrt(2.0) / 1.05    # ... and a car's circle (vehicle_circles: 1.05 x half its width) is grown by
 #                             this to reach the corners of its box
+SWEEP_MIN = 0.05            # m: ... for the cars whose front corner swings out more than this on their path's sharpest
+#                             bend within SWEEP_AHEAD (half_len^2 x curvature / 2)
 YIELD_GAP = 5.0             # s: a yielding turn goes only if no car with priority reaches the crossing sooner
 LC_GIVE_UP = 8.0            # s: an NPC waiting this long at the end of its lane change window stays in its lane (two
                             # cars side by side that want each other's lane would wait for ever)
@@ -300,18 +302,19 @@ def corridor_gaps(paths, cum, valid, origin, heading, half_len, half_w, cxy, cr,
     return gap, lead_v, lead_o
 
 
-def sweep_gaps(paths, cum, valid, origin, heading, half_len, half_w, cxy, cr, cowner, cspeed, cyaw, self_owner,
+def sweep_gaps(paths, cum, valid, curv, origin, heading, half_len, half_w, cxy, cr, cowner, cspeed, cyaw, self_owner,
                margin):
     """TrafficConfig.npc_sweep: the cars that corridor_gaps' tube misses but the car's body would touch.
 
     The tube is the car's half width (plus the margin) round each point of its path. The body is a box placed at each
     point along the path's heading there: on a sharp turn a long car's front corner swings out past the tube by about
     half_len^2 / (2 R) (bigjunction 3009/9801: a 6.9 m truck turning left hit the front corner of the ego, standing
-    at its right turn; the tube missed the ego by 0.4-0.7 m). Only the circles of cars (owners -1 .. PARKED_OWNER - 1:
-    the ego and the NPCs) that the tube misses are tested, against the box out to SWEEP_AHEAD along the path, each
-    circle grown to the corners of its own box (SWEEP_CORNER). On straight paths that is inside the tube: nothing
-    changes there. Arguments as for corridor_gaps; returns gap (K,), the distance the car's centre can go along the
-    path before its box touches a circle (inf: none), lead_speed (K,) and lead_owner (K,) (-1 if none)."""
+    at its right turn; the tube missed the ego by 0.4-0.7 m). Only the cars whose path turns that sharply (by more
+    than SWEEP_MIN) within SWEEP_AHEAD are tested, and only against the circles of cars (owners -1 .. PARKED_OWNER - 1:
+    the ego and the NPCs) that the tube misses there, each grown to the corners of its own box (SWEEP_CORNER).
+    On straight paths the box is inside the tube. Arguments as for corridor_gaps, and curv (K, P), the path's
+    curvature at each point; returns gap (K,), the distance the car's centre can go along the path before its box
+    touches a circle (inf: none), lead_speed (K,) and lead_owner (K,) (-1 if none)."""
     K = len(paths)
     gap = np.full(K, np.inf)
     lead_v = np.zeros(K)
@@ -319,10 +322,17 @@ def sweep_gaps(paths, cum, valid, origin, heading, half_len, half_w, cxy, cr, co
     car = (cowner >= -1) & (cowner < PARKED_OWNER)
     if K == 0 or not car.any():
         return gap, lead_v, lead_o
+    win = valid & (cum <= SWEEP_AHEAD)
+    turn = np.where(win, np.abs(curv), 0.0).max(1) * half_len ** 2 / 2.0 > SWEEP_MIN
+    if not turn.any():
+        return gap, lead_v, lead_o
+    act = np.nonzero(turn)[0]
+    Pm = max(int(win[act].sum(1).max()), 2)                     # the points in the window (cum grows along the path)
+    paths, cum, valid = paths[:, :Pm], cum[:, :Pm], win[:, :Pm]
     cm = np.nonzero(car)[0]
     reach = SWEEP_AHEAD + half_len + 4.0
-    ks, j = near_pairs(origin, reach, cxy[cm])
-    ms = cm[j]
+    ka, j = near_pairs(origin[act], reach[act], cxy[cm])
+    ks, ms = act[ka], cm[j]
     ds = cxy[ms] - origin[ks]
     u = np.stack([np.cos(heading), np.sin(heading)], -1)
     lon = (ds * u[ks]).sum(-1)
@@ -351,8 +361,7 @@ def sweep_gaps(paths, cum, valid, origin, heading, half_len, half_w, cxy, cr, co
     y = diff[..., 1] * tk[..., 0] - diff[..., 0] * tk[..., 1]
     rc = (cr[ms] * SWEEP_CORNER)[:, None]
     f = np.maximum(np.abs(x) - (half_len[ks][:, None] + rc), np.abs(y) - (half_w[ks][:, None] + rc))
-    use = valid[ks] & (cum[ks] <= SWEEP_AHEAD)
-    inside = use & (f < 0.0)
+    inside = valid[ks] & (f < 0.0)
     hit = inside.any(1)
     if not hit.any():
         return gap, lead_v, lead_o
@@ -1223,7 +1232,7 @@ class Traffic:
         gap, lead_v, lead_o = corridor_gaps(paths, relc, valid, self.xy, self.yaw, hl, self.dims[:, 1] / 2,
                                             cxy, cr, cow, csp, cyw, np.arange(n), margin)
         if cfg.npc_sweep:           # the corners of the body on a turn: the cars the tube misses (sweep_gaps)
-            g_s, v_s, o_s = sweep_gaps(paths, relc, valid, self.xy, self.yaw, hl, self.dims[:, 1] / 2,
+            g_s, v_s, o_s = sweep_gaps(paths, relc, valid, curv, self.xy, self.yaw, hl, self.dims[:, 1] / 2,
                                        cxy, cr, cow, csp, cyw, np.arange(n), margin)
             closer = g_s < gap
             gap = np.where(closer, g_s, gap)
