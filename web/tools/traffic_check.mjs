@@ -12,6 +12,7 @@
 //                                               contacts with them; the stand-in ego passes them when it is the first
 //                                               behind one and nobody comes the other way within 70 m, else it waits)
 //                                [--watch ID --from T0 --to T1]   (rider ID and the cars near it at every step)
+//                                [--sweep 0]   (the cars do not place their body along a sharp turn: src/traffic.js leader)
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -36,7 +37,8 @@ const nav = createNavigator(data, lanes);
 const roadKm = lanes.reduce((a, l) => a + l.len, 0) / 1000;
 const count = Number(args.cars) || Math.min(40, Math.round(roadKm * 12));
 const nBikes = Number(args.bikes || 0), nParked = Number(args.parked || 0);
-const traffic = createTraffic(data, lanes, { count, seed: Number(args.seed || 7), bikes: nBikes, ...(nParked ? { parked: nParked } : {}) });
+const traffic = createTraffic(data, lanes, { count, seed: Number(args.seed || 7), bikes: nBikes, ...(nParked ? { parked: nParked } : {}),
+  sweep: args.sweep !== '0' });
 
 const DT = 0.05;
 const p0 = nav.start();
