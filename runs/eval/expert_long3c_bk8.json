@@ -5,8 +5,8 @@
   "RC": 1.0,
   "IS": 1.0,
   "success_rate": 1.0,
-  "km": 50.099199999999996,
-  "avg_speed_kmh": 12.930878642361195,
+  "km": 50.0989,
+  "avg_speed_kmh": 13.032247753005644,
   "lights_passed": 251,
   "infractions_per_km": {},
   "infraction_counts": {},
@@ -21,15 +21,15 @@
    "IS": 1.0,
    "DS": 1.0,
    "infractions": [],
-   "time": 1107.65,
-   "distance": 2498.5,
+   "time": 827.6,
+   "distance": 2498.3,
    "route_length": 2500.0,
    "off_lane_ratio": 0.0,
    "town": 1010,
    "episode": 9400,
-   "steps": 11077,
-   "wall": 402.58500814437866,
-   "avg_speed": 2.25648516705993,
+   "steps": 8276,
+   "wall": 462.5549113750458,
+   "avg_speed": 3.0192534025452082,
    "weather": "fog",
    "lights_passed": 12,
    "lane_changes": 0,
@@ -122,14 +122,16 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "red_light": 245,
-      "curve": 65
+      "vehicle": 55,
+      "junction_blocked": 48,
+      "yield": 15,
+      "curve": 40
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 22.5,
+     "stood_s": 4.4,
      "needless_s": 0.1,
-     "s_first_stop": 616.3
+     "s_first_stop": 616.7
     },
     {
      "junction": 4,
@@ -141,13 +143,15 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 52
+      "red_light": 251,
+      "junction_blocked": 49,
+      "curve": 57
      },
-     "expert_stop": false,
-     "v_min": 3.15,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 27.6,
+     "needless_s": 0.1,
+     "s_first_stop": 811.7
     },
     {
      "junction": 5,
@@ -159,11 +163,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 15,
+      "vehicle": 13,
       "curve": 55
      },
      "expert_stop": false,
-     "v_min": 3.8,
+     "v_min": 4.26,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -178,13 +182,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 338
+      "vehicle": 5,
+      "curve": 19
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 21.0,
+     "expert_stop": false,
+     "v_min": 7.43,
+     "stood_s": 0.0,
      "needless_s": 0.0,
-     "s_first_stop": 1164.3
+     "s_first_stop": null
     },
     {
      "junction": 11,
@@ -196,14 +201,15 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "vehicle": 58,
-      "curve": 20
+      "red_light": 250,
+      "curve": 57,
+      "yield": 64
      },
-     "expert_stop": false,
-     "v_min": 3.44,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 26.5,
+     "needless_s": 0.2,
+     "s_first_stop": 1335.3
     },
     {
      "junction": 10,
@@ -215,16 +221,14 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "vehicle": 11,
-      "red_light": 280,
-      "curve": 53,
-      "yield": 49
+      "vehicle": 25,
+      "curve": 47
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 28.5,
-     "needless_s": 0.2,
-     "s_first_stop": 1483.1
+     "expert_stop": false,
+     "v_min": 3.35,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
     },
     {
      "junction": 7,
@@ -236,11 +240,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 23,
-      "curve": 30
+      "curve": 49
      },
      "expert_stop": false,
-     "v_min": 3.09,
+     "v_min": 3.07,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -255,11 +258,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 46,
-      "curve": 24
+      "curve": 49
      },
      "expert_stop": false,
-     "v_min": 3.45,
+     "v_min": 4.36,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -274,15 +276,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 16,
-      "red_light": 224,
-      "cruise": 49
+      "vehicle": 21,
+      "cruise": 33
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 21.8,
-     "needless_s": 0.1,
-     "s_first_stop": 1929.9
+     "expert_stop": false,
+     "v_min": 3.36,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
     },
     {
      "junction": 12,
@@ -294,13 +295,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 48
+      "vehicle": 106,
+      "curve": 25
      },
-     "expert_stop": false,
-     "v_min": 3.16,
-     "stood_s": 0.0,
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 0.4,
      "needless_s": 0.0,
-     "s_first_stop": null
+     "s_first_stop": 2098.2
     },
     {
      "junction": 13,
@@ -312,14 +314,15 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 16,
-      "curve": 42
+      "vehicle": 3,
+      "red_light": 228,
+      "curve": 57
      },
-     "expert_stop": false,
-     "v_min": 3.69,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 20.9,
+     "needless_s": 0.1,
+     "s_first_stop": 2210.2
     },
     {
      "junction": 10,
@@ -331,16 +334,15 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 207,
-      "red_light": 178,
-      "junction_blocked": 65,
-      "cruise": 50
+      "red_light": 175,
+      "cruise": 11,
+      "bicycle": 44
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 40.1,
+     "stood_s": 15.2,
      "needless_s": 0.1,
-     "s_first_stop": 2376.9
+     "s_first_stop": 2380.8
     }
    ]
   },
@@ -350,15 +352,15 @@
    "IS": 1.0,
    "DS": 1.0,
    "infractions": [],
-   "time": 817.1,
-   "distance": 2499.3,
+   "time": 807.75,
+   "distance": 2499.4,
    "route_length": 2500.0,
    "off_lane_ratio": 0.0,
    "town": 1010,
    "episode": 9401,
-   "steps": 8171,
-   "wall": 261.8626708984375,
-   "avg_speed": 3.0591557130376086,
+   "steps": 8078,
+   "wall": 414.76449751853943,
+   "avg_speed": 3.095201998901992,
    "weather": "noon",
    "lights_passed": 10,
    "lane_changes": 0,
@@ -471,10 +473,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 69
+      "vehicle": 18,
+      "curve": 52
      },
      "expert_stop": false,
-     "v_min": 3.93,
+     "v_min": 3.95,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -489,17 +492,18 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 124,
-      "red_light": 191,
-      "junction_blocked": 10,
+      "vehicle": 389,
+      "bicycle": 51,
+      "red_light": 192,
+      "junction_blocked": 11,
       "cruise": 24,
       "curve": 28
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 28.3,
+     "stood_s": 56.5,
      "needless_s": 0.1,
-     "s_first_stop": 980.4
+     "s_first_stop": 970.8
     },
     {
      "junction": 8,
@@ -511,11 +515,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 15,
-      "curve": 11
+      "vehicle": 10,
+      "curve": 14
      },
      "expert_stop": false,
-     "v_min": 7.41,
+     "v_min": 7.49,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -530,13 +534,13 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 51
+      "vehicle": 121
      },
-     "expert_stop": false,
-     "v_min": 5.23,
-     "stood_s": 0.0,
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 3.3,
      "needless_s": 0.0,
-     "s_first_stop": null
+     "s_first_stop": 1367.2
     },
     {
      "junction": 14,
@@ -548,11 +552,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 25,
-      "curve": 25
+      "vehicle": 19,
+      "curve": 28
      },
      "expert_stop": false,
-     "v_min": 4.25,
+     "v_min": 4.24,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -567,16 +571,16 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "vehicle": 100,
-      "red_light": 230,
-      "curve": 58,
-      "yield": 38
+      "vehicle": 16,
+      "junction_blocked": 98,
+      "red_light": 247,
+      "curve": 64
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 28.4,
-     "needless_s": 0.2,
-     "s_first_stop": 1672.9
+     "stood_s": 34.0,
+     "needless_s": 0.1,
+     "s_first_stop": 1677.5
     },
     {
      "junction": 10,
@@ -588,15 +592,14 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "curve": 50,
-      "yield": 74,
-      "bicycle": 3
+      "vehicle": 29,
+      "curve": 34
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 4.8,
-     "needless_s": 0.1,
-     "s_first_stop": 1866.1
+     "expert_stop": false,
+     "v_min": 4.7,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
     },
     {
      "junction": 11,
@@ -608,11 +611,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 16,
-      "curve": 50
+      "vehicle": 55,
+      "curve": 25
      },
      "expert_stop": false,
-     "v_min": 3.52,
+     "v_min": 3.3,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -627,10 +630,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 45
+      "vehicle": 24,
+      "curve": 24
      },
      "expert_stop": false,
-     "v_min": 4.19,
+     "v_min": 4.35,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -645,15 +649,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 96,
-      "red_light": 150,
-      "bicycle": 204
+      "red_light": 227,
+      "cruise": 50
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 30.8,
-     "needless_s": 0.0,
-     "s_first_stop": 2297.8
+     "stood_s": 20.6,
+     "needless_s": 0.1,
+     "s_first_stop": 2302.9
     },
     {
      "junction": 12,
@@ -665,10 +668,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 56
+      "curve": 57
      },
      "expert_stop": false,
-     "v_min": 4.1,
+     "v_min": 4.05,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -681,15 +684,15 @@
    "IS": 1.0,
    "DS": 1.0,
    "infractions": [],
-   "time": 1118.95,
-   "distance": 2507.9,
+   "time": 1074.95,
+   "distance": 2507.7,
    "route_length": 2510.4,
    "off_lane_ratio": 0.0,
    "town": 1011,
    "episode": 9400,
-   "steps": 11190,
-   "wall": 154.14253997802734,
-   "avg_speed": 2.2417865245921877,
+   "steps": 10750,
+   "wall": 183.82805395126343,
+   "avg_speed": 2.3334976476813782,
    "weather": "noon",
    "lights_passed": 18,
    "lane_changes": 0,
@@ -780,15 +783,15 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 74,
-      "cruise": 25,
-      "pedestrian": 11
+      "red_light": 244,
+      "junction_blocked": 7,
+      "cruise": 51
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 1.1,
-     "needless_s": 0.0,
-     "s_first_stop": 398.5
+     "stood_s": 23.0,
+     "needless_s": 0.1,
+     "s_first_stop": 395.2
     },
     {
      "junction": 3,
@@ -800,14 +803,15 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 34,
-      "curve": 35
+      "red_light": 120,
+      "junction_blocked": 55,
+      "curve": 65
      },
-     "expert_stop": false,
-     "v_min": 3.77,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 15.3,
+     "needless_s": 0.1,
+     "s_first_stop": 482.0
     },
     {
      "junction": 0,
@@ -819,10 +823,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 58
+      "curve": 52
      },
      "expert_stop": false,
-     "v_min": 3.27,
+     "v_min": 4.15,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -837,16 +841,16 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "vehicle": 42,
-      "bicycle": 15,
-      "yield": 39,
+      "vehicle": 12,
+      "bicycle": 8,
+      "yield": 48,
       "curve": 40
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 2.6,
-     "needless_s": 0.3,
-     "s_first_stop": 665.1
+     "stood_s": 2.5,
+     "needless_s": 0.1,
+     "s_first_stop": 668.9
     },
     {
      "junction": 4,
@@ -859,15 +863,13 @@
      "yields": false,
      "expert_reasons": {
       "vehicle": 18,
-      "red_light": 258,
-      "junction_blocked": 27,
-      "cruise": 49
+      "cruise": 31
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 27.8,
-     "needless_s": 0.1,
-     "s_first_stop": 738.7
+     "expert_stop": false,
+     "v_min": 5.06,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
     },
     {
      "junction": 7,
@@ -879,14 +881,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "red_light": 238,
-      "curve": 62
+      "vehicle": 18,
+      "curve": 46
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 21.8,
-     "needless_s": 0.1,
-     "s_first_stop": 818.9
+     "expert_stop": false,
+     "v_min": 3.67,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
     },
     {
      "junction": 6,
@@ -916,13 +918,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "cruise": 34
+      "red_light": 167,
+      "cruise": 50
      },
-     "expert_stop": false,
-     "v_min": 10.12,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 14.6,
+     "needless_s": 0.1,
+     "s_first_stop": 984.4
     },
     {
      "junction": 0,
@@ -934,14 +937,13 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 29,
-      "vehicle": 622
+      "vehicle": 773
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 54.3,
+     "stood_s": 47.2,
      "needless_s": 0.0,
-     "s_first_stop": 1105.6
+     "s_first_stop": 1095.5
     },
     {
      "junction": 1,
@@ -953,15 +955,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 22,
-      "red_light": 178,
-      "curve": 53
+      "bicycle": 43,
+      "curve": 17
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 16.1,
-     "needless_s": 0.1,
-     "s_first_stop": 1160.4
+     "expert_stop": false,
+     "v_min": 2.67,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
     },
     {
      "junction": 2,
@@ -973,10 +974,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 60
+      "curve": 59
      },
      "expert_stop": false,
-     "v_min": 4.01,
+     "v_min": 4.04,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -991,16 +992,18 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "bicycle": 221,
-      "yield": 29,
-      "vehicle": 10,
-      "curve": 40
+      "vehicle": 16,
+      "bicycle": 23,
+      "junction_blocked": 92,
+      "red_light": 243,
+      "curve": 58,
+      "yield": 60
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 15.8,
+     "stood_s": 37.3,
      "needless_s": 0.2,
-     "s_first_stop": 1377.1
+     "s_first_stop": 1377.6
     },
     {
      "junction": 4,
@@ -1012,15 +1015,15 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "vehicle": 40,
-      "yield": 6,
-      "curve": 34
+      "red_light": 81,
+      "bicycle": 116,
+      "curve": 50
      },
      "expert_stop": true,
-     "v_min": 1.54,
-     "stood_s": 0.0,
+     "v_min": 0.0,
+     "stood_s": 15.6,
      "needless_s": 0.0,
-     "s_first_stop": null
+     "s_first_stop": 1487.9
     },
     {
      "junction": 1,
@@ -1032,11 +1035,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 12,
+      "vehicle": 13,
       "curve": 40
      },
      "expert_stop": false,
-     "v_min": 4.91,
+     "v_min": 4.66,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -1051,10 +1054,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 45
+      "vehicle": 47,
+      "curve": 23
      },
      "expert_stop": false,
-     "v_min": 3.26,
+     "v_min": 2.82,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -1069,11 +1073,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 13,
-      "curve": 43
+      "bicycle": 28,
+      "curve": 37
      },
      "expert_stop": false,
-     "v_min": 3.46,
+     "v_min": 3.11,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -1088,13 +1092,16 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 51
+      "vehicle": 161,
+      "red_light": 225,
+      "junction_blocked": 102,
+      "curve": 55
      },
-     "expert_stop": false,
-     "v_min": 4.03,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 45.4,
+     "needless_s": 0.1,
+     "s_first_stop": 1813.9
     },
     {
      "junction": 1,
@@ -1106,14 +1113,15 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 14,
-      "curve": 40
+      "red_light": 129,
+      "junction_blocked": 84,
+      "curve": 57
      },
-     "expert_stop": false,
-     "v_min": 3.94,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 19.2,
+     "needless_s": 0.1,
+     "s_first_stop": 1886.8
     },
     {
      "junction": 0,
@@ -1143,13 +1151,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "cruise": 34
+      "red_light": 108,
+      "cruise": 50
      },
-     "expert_stop": false,
-     "v_min": 10.1,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 8.6,
+     "needless_s": 0.1,
+     "s_first_stop": 2051.8
     },
     {
      "junction": 6,
@@ -1164,7 +1173,7 @@
       "curve": 49
      },
      "expert_stop": false,
-     "v_min": 3.06,
+     "v_min": 3.14,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -1179,14 +1188,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 17,
-      "cruise": 31
+      "red_light": 46,
+      "cruise": 50
      },
-     "expert_stop": false,
-     "v_min": 4.94,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 2.6,
+     "needless_s": 0.1,
+     "s_first_stop": 2211.7
     },
     {
      "junction": 8,
@@ -1198,11 +1207,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 43,
-      "curve": 26
+      "vehicle": 47,
+      "curve": 28
      },
      "expert_stop": false,
-     "v_min": 3.1,
+     "v_min": 2.46,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -1217,10 +1226,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 54
+      "bicycle": 43,
+      "vehicle": 19
      },
      "expert_stop": false,
-     "v_min": 4.39,
+     "v_min": 3.26,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -1233,15 +1243,15 @@
    "IS": 1.0,
    "DS": 1.0,
    "infractions": [],
-   "time": 533.45,
-   "distance": 2527.9,
+   "time": 584.75,
+   "distance": 2528.0,
    "route_length": 2529.7,
    "off_lane_ratio": 0.0,
    "town": 1011,
    "episode": 9401,
-   "steps": 5335,
-   "wall": 57.550037145614624,
-   "avg_speed": 4.739708082811268,
+   "steps": 5848,
+   "wall": 82.32471537590027,
+   "avg_speed": 4.323810852769842,
    "weather": "noon",
    "lights_passed": 15,
    "lane_changes": 0,
@@ -1407,11 +1417,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 32,
-      "curve": 34
+      "vehicle": 31,
+      "curve": 35
      },
      "expert_stop": false,
-     "v_min": 3.99,
+     "v_min": 4.0,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -1426,11 +1436,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 36,
-      "cruise": 33
+      "vehicle": 46
      },
      "expert_stop": false,
-     "v_min": 2.05,
+     "v_min": 6.0,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -1445,10 +1454,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 55
+      "vehicle": 32,
+      "curve": 33
      },
      "expert_stop": false,
-     "v_min": 4.1,
+     "v_min": 3.99,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -1463,14 +1473,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 23,
-      "cruise": 30
+      "red_light": 252,
+      "cruise": 50
      },
-     "expert_stop": false,
-     "v_min": 2.42,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 23.1,
+     "needless_s": 0.1,
+     "s_first_stop": 1027.3
     },
     {
      "junction": 0,
@@ -1500,11 +1510,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "bicycle": 48,
-      "curve": 15
+      "vehicle": 24,
+      "curve": 34
      },
      "expert_stop": false,
-     "v_min": 2.83,
+     "v_min": 3.38,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -1519,10 +1529,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 59
+      "curve": 60
      },
      "expert_stop": false,
-     "v_min": 4.05,
+     "v_min": 4.01,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -1537,14 +1547,15 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "red_light": 160,
-      "bicycle": 162
+      "vehicle": 125,
+      "red_light": 186,
+      "cruise": 50
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 23.3,
-     "needless_s": 0.0,
-     "s_first_stop": 1423.1
+     "stood_s": 26.2,
+     "needless_s": 0.1,
+     "s_first_stop": 1418.5
     },
     {
      "junction": 8,
@@ -1556,10 +1567,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 54
+      "curve": 55
      },
      "expert_stop": false,
-     "v_min": 4.21,
+     "v_min": 4.1,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -1574,14 +1585,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "red_light": 1,
-      "cruise": 39
+      "red_light": 111,
+      "cruise": 50
      },
-     "expert_stop": false,
-     "v_min": 5.15,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 8.9,
+     "needless_s": 0.1,
+     "s_first_stop": 1621.0
     },
     {
      "junction": 6,
@@ -1593,10 +1604,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 54
+      "curve": 55
      },
      "expert_stop": false,
-     "v_min": 4.08,
+     "v_min": 4.09,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -1611,14 +1622,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 101,
-      "cruise": 34
+      "vehicle": 23,
+      "cruise": 31
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 3.7,
+     "expert_stop": false,
+     "v_min": 3.09,
+     "stood_s": 0.0,
      "needless_s": 0.0,
-     "s_first_stop": 1789.5
+     "s_first_stop": null
     },
     {
      "junction": 0,
@@ -1630,10 +1641,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 52
+      "curve": 51
      },
      "expert_stop": false,
-     "v_min": 4.12,
+     "v_min": 4.11,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -1648,15 +1659,14 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "red_light": 70,
-      "curve": 41,
-      "yield": 60
+      "vehicle": 17,
+      "curve": 44
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 6.5,
-     "needless_s": 0.2,
-     "s_first_stop": 1962.6
+     "expert_stop": false,
+     "v_min": 4.18,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
     },
     {
      "junction": 4,
@@ -1668,11 +1678,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 50,
-      "curve": 23
+      "vehicle": 3,
+      "curve": 48
      },
      "expert_stop": false,
-     "v_min": 2.55,
+     "v_min": 4.25,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -1687,11 +1697,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 14,
-      "curve": 43
+      "vehicle": 38,
+      "curve": 27
      },
      "expert_stop": false,
-     "v_min": 3.44,
+     "v_min": 3.42,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -1706,10 +1716,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 51
+      "vehicle": 28,
+      "curve": 30
      },
      "expert_stop": false,
-     "v_min": 3.09,
+     "v_min": 3.13,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -1724,11 +1735,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "cruise": 3,
-      "curve": 38
+      "vehicle": 36,
+      "curve": 14
      },
      "expert_stop": false,
-     "v_min": 7.36,
+     "v_min": 5.57,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -1743,8 +1754,8 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 15,
-      "curve": 31
+      "vehicle": 23,
+      "curve": 28
      },
      "expert_stop": false,
      "v_min": 3.25,
@@ -1760,15 +1771,15 @@
    "IS": 1.0,
    "DS": 1.0,
    "infractions": [],
-   "time": 765.15,
-   "distance": 2498.6,
+   "time": 683.95,
+   "distance": 2498.3,
    "route_length": 2500.0,
    "off_lane_ratio": 0.0,
    "town": 1012,
    "episode": 9400,
-   "steps": 7652,
-   "wall": 198.05467867851257,
-   "avg_speed": 3.2662082141579862,
+   "steps": 6840,
+   "wall": 301.38809037208557,
+   "avg_speed": 3.653354180634442,
    "weather": "cloudy",
    "lights_passed": 10,
    "lane_changes": 0,
@@ -1842,11 +1853,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 21,
-      "cruise": 32
+      "vehicle": 31,
+      "cruise": 35
      },
      "expert_stop": false,
-     "v_min": 2.98,
+     "v_min": 2.91,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -1861,11 +1872,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 34,
-      "curve": 26
+      "vehicle": 16,
+      "curve": 42
      },
      "expert_stop": false,
-     "v_min": 4.49,
+     "v_min": 3.5,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -1880,11 +1891,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 19,
-      "curve": 46
+      "curve": 62
      },
      "expert_stop": false,
-     "v_min": 4.0,
+     "v_min": 3.98,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -1899,8 +1909,7 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 9,
-      "curve": 43
+      "curve": 51
      },
      "expert_stop": false,
      "v_min": 4.15,
@@ -1918,14 +1927,15 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "red_light": 261,
+      "junction_blocked": 22,
+      "red_light": 264,
       "curve": 57,
-      "yield": 60,
-      "bicycle": 6
+      "yield": 28,
+      "vehicle": 9
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 27.8,
+     "stood_s": 27.3,
      "needless_s": 0.2,
      "s_first_stop": 949.6
     },
@@ -1939,16 +1949,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 4,
-      "red_light": 223,
-      "junction_blocked": 35,
-      "cruise": 52
+      "vehicle": 65,
+      "cruise": 36
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 24.0,
-     "needless_s": 0.1,
-     "s_first_stop": 1041.5
+     "stood_s": 0.4,
+     "needless_s": 0.0,
+     "s_first_stop": 1043.7
     },
     {
      "junction": 7,
@@ -1960,14 +1968,17 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "vehicle": 12,
-      "curve": 46
+      "vehicle": 20,
+      "junction_blocked": 112,
+      "red_light": 240,
+      "curve": 68,
+      "yield": 31
      },
-     "expert_stop": false,
-     "v_min": 4.88,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 36.8,
+     "needless_s": 0.2,
+     "s_first_stop": 1228.7
     },
     {
      "junction": 6,
@@ -1979,11 +1990,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 89,
-      "curve": 26
+      "curve": 51
      },
      "expert_stop": false,
-     "v_min": 0.95,
+     "v_min": 3.04,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -1998,12 +2008,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "bicycle": 20,
-      "vehicle": 2,
-      "curve": 18
+      "curve": 35
      },
      "expert_stop": false,
-     "v_min": 4.61,
+     "v_min": 4.66,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -2018,11 +2026,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 28,
-      "curve": 24
+      "curve": 46
      },
      "expert_stop": false,
-     "v_min": 3.21,
+     "v_min": 3.16,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -2037,11 +2044,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 14,
-      "curve": 12
+      "cruise": 2,
+      "curve": 22
      },
      "expert_stop": false,
-     "v_min": 7.4,
+     "v_min": 7.41,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -2056,8 +2063,7 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 26,
-      "curve": 22
+      "curve": 40
      },
      "expert_stop": false,
      "v_min": 3.36,
@@ -2075,10 +2081,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 58
+      "vehicle": 59
      },
      "expert_stop": false,
-     "v_min": 3.0,
+     "v_min": 4.27,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -2093,15 +2099,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 6,
-      "bicycle": 33,
-      "curve": 54
+      "vehicle": 12,
+      "curve": 41
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 1.3,
-     "needless_s": 0.1,
-     "s_first_stop": 2149.9
+     "expert_stop": false,
+     "v_min": 4.34,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
     },
     {
      "junction": 7,
@@ -2113,14 +2118,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 19,
-      "cruise": 30
+      "red_light": 223,
+      "cruise": 50
      },
-     "expert_stop": false,
-     "v_min": 4.4,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 20.2,
+     "needless_s": 0.1,
+     "s_first_stop": 2230.3
     },
     {
      "junction": 6,
@@ -2132,10 +2137,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 52
+      "vehicle": 26,
+      "curve": 30
      },
      "expert_stop": false,
-     "v_min": 3.02,
+     "v_min": 3.04,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -2150,10 +2156,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 10
+      "vehicle": 11
      },
      "expert_stop": false,
-     "v_min": 7.74,
+     "v_min": 7.15,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -2166,15 +2172,15 @@
    "IS": 1.0,
    "DS": 1.0,
    "infractions": [],
-   "time": 595.6,
-   "distance": 2498.6,
+   "time": 704.7,
+   "distance": 2498.3,
    "route_length": 2500.0,
    "off_lane_ratio": 0.0,
    "town": 1012,
    "episode": 9401,
-   "steps": 5956,
-   "wall": 152.72229933738708,
-   "avg_speed": 4.195526899815977,
+   "steps": 7047,
+   "wall": 312.36787724494934,
+   "avg_speed": 3.545676836861366,
    "weather": "cloudy",
    "lights_passed": 11,
    "lane_changes": 0,
@@ -2248,14 +2254,14 @@
      "yields": true,
      "expert_reasons": {
       "vehicle": 15,
-      "yield": 58,
-      "curve": 41
+      "yield": 5,
+      "curve": 40
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 2.9,
-     "needless_s": 0.1,
-     "s_first_stop": 402.6
+     "expert_stop": false,
+     "v_min": 3.73,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
     },
     {
      "junction": 7,
@@ -2267,15 +2273,15 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "red_light": 193,
-      "junction_blocked": 33,
-      "curve": 58
+      "vehicle": 27,
+      "red_light": 239,
+      "curve": 57
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 20.4,
+     "stood_s": 24.3,
      "needless_s": 0.1,
-     "s_first_stop": 574.8
+     "s_first_stop": 575.2
     },
     {
      "junction": 8,
@@ -2287,11 +2293,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "bicycle": 53,
-      "curve": 21
+      "vehicle": 37,
+      "curve": 25
      },
      "expert_stop": false,
-     "v_min": 3.31,
+     "v_min": 3.99,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -2306,15 +2312,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "red_light": 171,
-      "junction_blocked": 15,
-      "curve": 58
+      "vehicle": 19,
+      "curve": 41
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 16.3,
-     "needless_s": 0.1,
-     "s_first_stop": 842.9
+     "expert_stop": false,
+     "v_min": 3.04,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
     },
     {
      "junction": 4,
@@ -2326,13 +2331,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 51
+      "red_light": 222,
+      "curve": 59
      },
-     "expert_stop": false,
-     "v_min": 4.2,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 20.1,
+     "needless_s": 0.1,
+     "s_first_stop": 930.5
     },
     {
      "junction": 7,
@@ -2344,14 +2350,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 41,
-      "curve": 21
+      "vehicle": 107,
+      "curve": 24
      },
-     "expert_stop": false,
-     "v_min": 4.12,
-     "stood_s": 0.0,
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 2.1,
      "needless_s": 0.0,
-     "s_first_stop": null
+     "s_first_stop": 1113.2
     },
     {
      "junction": 8,
@@ -2363,11 +2369,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 15,
-      "curve": 47
+      "vehicle": 37,
+      "curve": 28
      },
      "expert_stop": false,
-     "v_min": 4.63,
+     "v_min": 4.09,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -2382,16 +2388,16 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 131,
-      "red_light": 156,
-      "junction_blocked": 8,
-      "cruise": 57
+      "vehicle": 136,
+      "red_light": 196,
+      "junction_blocked": 16,
+      "cruise": 53
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 24.8,
+     "stood_s": 30.3,
      "needless_s": 0.1,
-     "s_first_stop": 1314.3
+     "s_first_stop": 1319.9
     },
     {
      "junction": 14,
@@ -2403,10 +2409,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 46
+      "vehicle": 24,
+      "curve": 26
      },
      "expert_stop": false,
-     "v_min": 4.17,
+     "v_min": 4.2,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -2421,7 +2428,8 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 23
+      "vehicle": 12,
+      "curve": 13
      },
      "expert_stop": false,
      "v_min": 7.01,
@@ -2439,10 +2447,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 50
+      "vehicle": 26,
+      "curve": 30
      },
      "expert_stop": false,
-     "v_min": 4.1,
+     "v_min": 4.11,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -2457,11 +2466,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 32,
-      "pedestrian": 1
+      "vehicle": 13,
+      "curve": 22
      },
      "expert_stop": false,
-     "v_min": 3.83,
+     "v_min": 3.85,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -2476,10 +2485,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 59
+      "vehicle": 35,
+      "curve": 31
      },
      "expert_stop": false,
-     "v_min": 4.02,
+     "v_min": 4.01,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -2494,11 +2504,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 9,
-      "curve": 43
+      "vehicle": 50,
+      "curve": 25
      },
      "expert_stop": false,
-     "v_min": 4.07,
+     "v_min": 3.33,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -2513,11 +2523,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 48,
-      "curve": 43
+      "vehicle": 13,
+      "curve": 40
      },
      "expert_stop": false,
-     "v_min": 1.01,
+     "v_min": 4.98,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -2532,7 +2542,7 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 62
+      "curve": 63
      },
      "expert_stop": false,
      "v_min": 3.98,
@@ -2548,15 +2558,15 @@
    "IS": 1.0,
    "DS": 1.0,
    "infractions": [],
-   "time": 759.45,
-   "distance": 2498.4,
+   "time": 620.75,
+   "distance": 2499.0,
    "route_length": 2500.0,
    "off_lane_ratio": 0.0,
    "town": 1013,
    "episode": 9400,
-   "steps": 7595,
-   "wall": 216.29517650604248,
-   "avg_speed": 3.2902003423591193,
+   "steps": 6208,
+   "wall": 241.4814314842224,
+   "avg_speed": 4.026315142054931,
    "weather": "cloudy",
    "lights_passed": 11,
    "lane_changes": 0,
@@ -2612,17 +2622,15 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 76,
-      "red_light": 183,
-      "junction_blocked": 31,
-      "cruise": 30,
+      "vehicle": 20,
+      "cruise": 11,
       "curve": 21
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 23.8,
-     "needless_s": 0.1,
-     "s_first_stop": 288.5
+     "expert_stop": false,
+     "v_min": 3.15,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
     },
     {
      "junction": 1,
@@ -2634,11 +2642,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 55,
-      "curve": 21
+      "vehicle": 17,
+      "curve": 49
      },
      "expert_stop": false,
-     "v_min": 3.52,
+     "v_min": 3.39,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -2653,16 +2661,15 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "vehicle": 84,
-      "red_light": 229,
-      "curve": 42,
-      "yield": 60
+      "vehicle": 22,
+      "yield": 54,
+      "curve": 40
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 26.0,
-     "needless_s": 0.2,
-     "s_first_stop": 561.5
+     "stood_s": 2.9,
+     "needless_s": 0.1,
+     "s_first_stop": 578.4
     },
     {
      "junction": 7,
@@ -2674,11 +2681,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 7,
-      "curve": 46
+      "bicycle": 40,
+      "curve": 21
      },
      "expert_stop": false,
-     "v_min": 4.13,
+     "v_min": 4.32,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -2693,10 +2700,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "cruise": 20
+      "cruise": 21
      },
      "expert_stop": false,
-     "v_min": 10.06,
+     "v_min": 10.08,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -2711,11 +2718,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 15,
-      "curve": 41
+      "vehicle": 38,
+      "curve": 25
      },
      "expert_stop": false,
-     "v_min": 4.01,
+     "v_min": 3.68,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -2730,10 +2737,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 43
+      "vehicle": 22,
+      "curve": 24
      },
      "expert_stop": false,
-     "v_min": 3.28,
+     "v_min": 3.31,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -2748,10 +2756,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 25
+      "vehicle": 24
      },
      "expert_stop": false,
-     "v_min": 8.35,
+     "v_min": 8.2,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -2766,11 +2774,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "bicycle": 20,
-      "curve": 38
+      "vehicle": 34,
+      "curve": 26
      },
      "expert_stop": false,
-     "v_min": 4.51,
+     "v_min": 3.7,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -2785,14 +2793,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "bicycle": 61,
-      "curve": 42
+      "bicycle": 43,
+      "curve": 20
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 0.7,
-     "needless_s": 0.1,
-     "s_first_stop": 1578.7
+     "expert_stop": false,
+     "v_min": 4.27,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
     },
     {
      "junction": 8,
@@ -2804,10 +2812,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "cruise": 26
+      "cruise": 21
      },
      "expert_stop": false,
-     "v_min": 5.27,
+     "v_min": 10.08,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -2822,11 +2830,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 3,
-      "curve": 56
+      "vehicle": 15,
+      "curve": 51
      },
      "expert_stop": false,
-     "v_min": 4.39,
+     "v_min": 4.48,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -2877,7 +2885,7 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 31
+      "curve": 32
      },
      "expert_stop": false,
      "v_min": 4.27,
@@ -2895,17 +2903,14 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "vehicle": 23,
-      "junction_blocked": 26,
-      "red_light": 246,
-      "curve": 55,
-      "yield": 53
+      "vehicle": 53,
+      "curve": 28
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 29.3,
-     "needless_s": 0.2,
-     "s_first_stop": 2373.4
+     "expert_stop": false,
+     "v_min": 2.27,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
     },
     {
      "junction": 6,
@@ -2917,11 +2922,11 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "vehicle": 17,
-      "yield": 11
+      "vehicle": 21,
+      "curve": 10
      },
      "expert_stop": false,
-     "v_min": 3.99,
+     "v_min": 3.32,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -2934,15 +2939,15 @@
    "IS": 1.0,
    "DS": 1.0,
    "infractions": [],
-   "time": 989.65,
-   "distance": 2498.8,
+   "time": 1029.0,
+   "distance": 2498.3,
    "route_length": 2500.0,
    "off_lane_ratio": 0.0,
    "town": 1013,
    "episode": 9401,
-   "steps": 9897,
-   "wall": 292.08400774002075,
-   "avg_speed": 2.5256123925793452,
+   "steps": 10290,
+   "wall": 382.91110920906067,
+   "avg_speed": 2.4282958555913328,
    "weather": "noon",
    "lights_passed": 12,
    "lane_changes": 0,
@@ -3013,14 +3018,17 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "vehicle": 57,
-      "curve": 29
+      "vehicle": 33,
+      "junction_blocked": 72,
+      "red_light": 229,
+      "curve": 70,
+      "yield": 26
      },
-     "expert_stop": false,
-     "v_min": 3.14,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 31.6,
+     "needless_s": 0.2,
+     "s_first_stop": 476.5
     },
     {
      "junction": 11,
@@ -3032,14 +3040,15 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 36,
-      "curve": 27
+      "red_light": 223,
+      "junction_blocked": 66,
+      "curve": 58
      },
-     "expert_stop": false,
-     "v_min": 3.87,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 26.7,
+     "needless_s": 0.1,
+     "s_first_stop": 592.1
     },
     {
      "junction": 12,
@@ -3051,10 +3060,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 40
+      "curve": 31
      },
      "expert_stop": false,
-     "v_min": 4.57,
+     "v_min": 5.08,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -3069,10 +3078,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 62
+      "cruise": 21
      },
      "expert_stop": false,
-     "v_min": 3.39,
+     "v_min": 10.11,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -3087,11 +3096,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 52,
-      "curve": 20
+      "curve": 44
      },
      "expert_stop": false,
-     "v_min": 2.65,
+     "v_min": 3.19,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -3106,11 +3114,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 48,
-      "curve": 26
+      "vehicle": 12,
+      "curve": 43
      },
      "expert_stop": false,
-     "v_min": 3.07,
+     "v_min": 3.76,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -3125,10 +3133,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 60
+      "cruise": 20
      },
      "expert_stop": false,
-     "v_min": 3.45,
+     "v_min": 9.9,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -3143,16 +3151,16 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 116,
-      "red_light": 261,
-      "cruise": 27,
-      "curve": 22
+      "vehicle": 139,
+      "red_light": 249,
+      "cruise": 24,
+      "curve": 23
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 33.2,
+     "stood_s": 35.3,
      "needless_s": 0.1,
-     "s_first_stop": 1377.0
+     "s_first_stop": 1379.2
     },
     {
      "junction": 6,
@@ -3164,16 +3172,16 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 38,
-      "red_light": 175,
-      "junction_blocked": 34,
+      "vehicle": 1,
+      "red_light": 215,
+      "junction_blocked": 61,
       "curve": 59
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 19.8,
+     "stood_s": 25.6,
      "needless_s": 0.1,
-     "s_first_stop": 1470.4
+     "s_first_stop": 1473.4
     },
     {
      "junction": 11,
@@ -3185,15 +3193,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "red_light": 210,
-      "junction_blocked": 41,
-      "curve": 64
+      "vehicle": 18,
+      "curve": 48
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 22.9,
-     "needless_s": 0.1,
-     "s_first_stop": 1586.0
+     "expert_stop": false,
+     "v_min": 3.43,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
     },
     {
      "junction": 10,
@@ -3208,7 +3215,7 @@
       "curve": 49
      },
      "expert_stop": false,
-     "v_min": 4.24,
+     "v_min": 4.28,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -3223,14 +3230,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 148,
-      "cruise": 36
+      "red_light": 237,
+      "cruise": 50
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 5.1,
-     "needless_s": 0.0,
-     "s_first_stop": 1876.8
+     "stood_s": 21.6,
+     "needless_s": 0.1,
+     "s_first_stop": 1874.2
     },
     {
      "junction": 0,
@@ -3245,7 +3252,7 @@
       "curve": 53
      },
      "expert_stop": false,
-     "v_min": 4.06,
+     "v_min": 4.05,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -3260,10 +3267,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 48
+      "vehicle": 59
      },
      "expert_stop": false,
-     "v_min": 6.26,
+     "v_min": 3.49,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -3278,14 +3285,15 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "vehicle": 51,
-      "curve": 18
+      "vehicle": 42,
+      "yield": 37,
+      "curve": 40
      },
-     "expert_stop": false,
-     "v_min": 4.21,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 2.9,
+     "needless_s": 0.1,
+     "s_first_stop": 2302.6
     },
     {
      "junction": 7,
@@ -3297,14 +3305,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 31,
-      "curve": 29
+      "bicycle": 37,
+      "curve": 52
      },
-     "expert_stop": false,
-     "v_min": 4.2,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 0.5,
+     "needless_s": 0.1,
+     "s_first_stop": 2442.9
     }
    ]
   },
@@ -3314,15 +3322,15 @@
    "IS": 1.0,
    "DS": 1.0,
    "infractions": [],
-   "time": 663.6,
-   "distance": 2524.3,
+   "time": 585.85,
+   "distance": 2523.7,
    "route_length": 2525.6,
    "off_lane_ratio": 0.0,
    "town": 1014,
    "episode": 9400,
-   "steps": 6636,
-   "wall": 211.19062304496765,
-   "avg_speed": 3.8043090263630175,
+   "steps": 5859,
+   "wall": 247.1136462688446,
+   "avg_speed": 4.308720575927922,
    "weather": "noon",
    "lights_passed": 11,
    "lane_changes": 0,
@@ -3396,10 +3404,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 57
+      "vehicle": 55
      },
      "expert_stop": false,
-     "v_min": 3.71,
+     "v_min": 3.57,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -3417,7 +3425,7 @@
       "vehicle": 91
      },
      "expert_stop": false,
-     "v_min": 3.24,
+     "v_min": 3.23,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -3432,8 +3440,8 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 51,
-      "curve": 19
+      "vehicle": 50,
+      "curve": 20
      },
      "expert_stop": false,
      "v_min": 3.07,
@@ -3470,8 +3478,8 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 44,
-      "curve": 34
+      "vehicle": 40,
+      "curve": 35
      },
      "expert_stop": false,
      "v_min": 3.16,
@@ -3489,11 +3497,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 37,
-      "curve": 26
+      "vehicle": 12,
+      "curve": 42
      },
      "expert_stop": false,
-     "v_min": 3.79,
+     "v_min": 3.78,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -3508,11 +3516,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 55,
-      "curve": 19
+      "curve": 44
      },
      "expert_stop": false,
-     "v_min": 2.61,
+     "v_min": 3.24,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -3527,15 +3534,13 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 12,
-      "bicycle": 24,
-      "curve": 54
+      "curve": 49
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 0.5,
-     "needless_s": 0.1,
-     "s_first_stop": 1380.0
+     "expert_stop": false,
+     "v_min": 3.87,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
     },
     {
      "junction": 9,
@@ -3547,13 +3552,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 67
+      "red_light": 197,
+      "cruise": 65
      },
-     "expert_stop": false,
-     "v_min": 4.59,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 17.4,
+     "needless_s": 0.1,
+     "s_first_stop": 1515.3
     },
     {
      "junction": 5,
@@ -3565,15 +3571,17 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "vehicle": 33,
-      "curve": 43,
-      "yield": 15
+      "red_light": 58,
+      "junction_blocked": 5,
+      "curve": 63,
+      "yield": 75,
+      "bicycle": 7
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 0.9,
-     "needless_s": 0.1,
-     "s_first_stop": 1727.9
+     "stood_s": 9.8,
+     "needless_s": 0.2,
+     "s_first_stop": 1715.0
     },
     {
      "junction": 6,
@@ -3585,14 +3593,15 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "vehicle": 16,
-      "curve": 44
+      "red_light": 214,
+      "yield": 114,
+      "curve": 43
      },
-     "expert_stop": false,
-     "v_min": 5.46,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 25.7,
+     "needless_s": 0.2,
+     "s_first_stop": 1886.7
     },
     {
      "junction": 10,
@@ -3604,11 +3613,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 39,
-      "curve": 28
+      "vehicle": 13,
+      "curve": 43
      },
      "expert_stop": false,
-     "v_min": 3.37,
+     "v_min": 3.42,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -3623,11 +3632,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 3,
-      "curve": 50
+      "curve": 53
      },
      "expert_stop": false,
-     "v_min": 4.07,
+     "v_min": 4.11,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -3642,11 +3650,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 10,
-      "curve": 36
+      "curve": 45
      },
      "expert_stop": false,
-     "v_min": 4.19,
+     "v_min": 4.22,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -3659,15 +3666,15 @@
    "IS": 1.0,
    "DS": 1.0,
    "infractions": [],
-   "time": 476.65,
-   "distance": 2516.1,
+   "time": 557.25,
+   "distance": 2516.5,
    "route_length": 2518.8,
    "off_lane_ratio": 0.0,
    "town": 1014,
    "episode": 9401,
-   "steps": 4767,
-   "wall": 168.63838863372803,
-   "avg_speed": 5.279521773006465,
+   "steps": 5573,
+   "wall": 239.40538454055786,
+   "avg_speed": 4.516711010914251,
    "weather": "cloudy",
    "lights_passed": 10,
    "lane_changes": 0,
@@ -3743,7 +3750,7 @@
       "curve": 41
      },
      "expert_stop": false,
-     "v_min": 3.38,
+     "v_min": 3.4,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -3758,10 +3765,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 46
+      "bicycle": 41,
+      "curve": 22
      },
      "expert_stop": false,
-     "v_min": 3.25,
+     "v_min": 3.29,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -3776,14 +3784,13 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "red_light": 191,
-      "junction_blocked": 49,
-      "bicycle": 10,
-      "curve": 67
+      "red_light": 157,
+      "curve": 45,
+      "bicycle": 21
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 22.8,
+     "stood_s": 13.4,
      "needless_s": 0.1,
      "s_first_stop": 811.2
     },
@@ -3797,15 +3804,15 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "vehicle": 14,
-      "curve": 51,
-      "yield": 4
+      "vehicle": 39,
+      "curve": 50,
+      "yield": 38
      },
-     "expert_stop": false,
-     "v_min": 3.67,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 1.7,
+     "needless_s": 0.2,
+     "s_first_stop": 1005.5
     },
     {
      "junction": 7,
@@ -3817,10 +3824,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 38
+      "vehicle": 23,
+      "curve": 20
      },
      "expert_stop": false,
-     "v_min": 3.51,
+     "v_min": 3.45,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -3835,10 +3843,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 50
+      "vehicle": 28,
+      "curve": 28
      },
      "expert_stop": false,
-     "v_min": 3.06,
+     "v_min": 3.1,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -3853,12 +3862,12 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "red_light": 95,
+      "red_light": 225,
       "cruise": 50
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 7.3,
+     "stood_s": 20.3,
      "needless_s": 0.1,
      "s_first_stop": 1474.4
     },
@@ -3872,10 +3881,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 52
+      "vehicle": 47,
+      "curve": 26
      },
      "expert_stop": false,
-     "v_min": 3.43,
+     "v_min": 3.34,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -3890,11 +3900,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 38,
-      "curve": 27
+      "vehicle": 13,
+      "curve": 43
      },
      "expert_stop": false,
-     "v_min": 3.4,
+     "v_min": 3.91,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -3909,15 +3919,17 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "vehicle": 14,
-      "yield": 15,
-      "curve": 37
+      "vehicle": 87,
+      "red_light": 179,
+      "junction_blocked": 51,
+      "curve": 44,
+      "yield": 47
      },
-     "expert_stop": false,
-     "v_min": 4.93,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 25.9,
+     "needless_s": 0.2,
+     "s_first_stop": 1994.9
     },
     {
      "junction": 10,
@@ -3929,7 +3941,8 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "red_light": 137,
+      "red_light": 135,
+      "junction_blocked": 2,
       "curve": 58
      },
      "expert_stop": true,
@@ -3966,10 +3979,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 44
+      "curve": 45
      },
      "expert_stop": false,
-     "v_min": 4.31,
+     "v_min": 4.18,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -3982,15 +3995,15 @@
    "IS": 1.0,
    "DS": 1.0,
    "infractions": [],
-   "time": 1025.95,
-   "distance": 2499.2,
+   "time": 1182.0,
+   "distance": 2498.9,
    "route_length": 2500.0,
    "off_lane_ratio": 0.0,
    "town": 1015,
    "episode": 9400,
-   "steps": 10260,
-   "wall": 277.42867279052734,
-   "avg_speed": 2.4367949524184653,
+   "steps": 11820,
+   "wall": 404.0584955215454,
+   "avg_speed": 2.1147766651611795,
    "weather": "fog",
    "lights_passed": 13,
    "lane_changes": 0,
@@ -4065,11 +4078,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 41,
-      "curve": 27
+      "vehicle": 15,
+      "curve": 43
      },
      "expert_stop": false,
-     "v_min": 3.11,
+     "v_min": 3.12,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -4084,11 +4097,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 26,
-      "curve": 29
+      "curve": 50
      },
      "expert_stop": false,
-     "v_min": 3.12,
+     "v_min": 3.09,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -4106,7 +4118,7 @@
       "curve": 51
      },
      "expert_stop": false,
-     "v_min": 5.48,
+     "v_min": 5.41,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -4118,160 +4130,6 @@
      "turn": "right",
      "s_in": 840.3,
      "s_out": 856.3,
-     "reached": true,
-     "yields": false,
-     "expert_reasons": {
-      "vehicle": 19,
-      "curve": 41
-     },
-     "expert_stop": false,
-     "v_min": 4.02,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
-    },
-    {
-     "junction": 7,
-     "kind": "bend",
-     "arms": 2,
-     "turn": "straight",
-     "s_in": 996.9,
-     "s_out": 1002.3,
-     "reached": true,
-     "yields": false,
-     "expert_reasons": {
-      "vehicle": 364
-     },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 20.8,
-     "needless_s": 0.0,
-     "s_first_stop": 1000.8
-    },
-    {
-     "junction": 11,
-     "kind": "signalised",
-     "arms": 3,
-     "turn": "right",
-     "s_in": 1079.0,
-     "s_out": 1097.7,
-     "reached": true,
-     "yields": true,
-     "expert_reasons": {
-      "vehicle": 68,
-      "junction_blocked": 37,
-      "curve": 20
-     },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 3.2,
-     "needless_s": 0.1,
-     "s_first_stop": 1071.1
-    },
-    {
-     "junction": 10,
-     "kind": "signalised",
-     "arms": 3,
-     "turn": "straight",
-     "s_in": 1244.9,
-     "s_out": 1263.9,
-     "reached": true,
-     "yields": false,
-     "expert_reasons": {
-      "vehicle": 21,
-      "cruise": 19
-     },
-     "expert_stop": false,
-     "v_min": 6.68,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
-    },
-    {
-     "junction": 9,
-     "kind": "signalised",
-     "arms": 4,
-     "turn": "right",
-     "s_in": 1366.0,
-     "s_out": 1383.3,
-     "reached": true,
-     "yields": true,
-     "expert_reasons": {
-      "vehicle": 17,
-      "curve": 41,
-      "yield": 7
-     },
-     "expert_stop": false,
-     "v_min": 3.19,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
-    },
-    {
-     "junction": 5,
-     "kind": "signalised",
-     "arms": 4,
-     "turn": "right",
-     "s_in": 1443.3,
-     "s_out": 1463.6,
-     "reached": true,
-     "yields": true,
-     "expert_reasons": {
-      "vehicle": 16,
-      "yield": 8,
-      "curve": 34
-     },
-     "expert_stop": false,
-     "v_min": 4.56,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
-    },
-    {
-     "junction": 6,
-     "kind": "bend",
-     "arms": 2,
-     "turn": "left",
-     "s_in": 1553.6,
-     "s_out": 1563.3,
-     "reached": true,
-     "yields": false,
-     "expert_reasons": {
-      "curve": 50
-     },
-     "expert_stop": false,
-     "v_min": 3.09,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
-    },
-    {
-     "junction": 2,
-     "kind": "signalised",
-     "arms": 3,
-     "turn": "right",
-     "s_in": 1692.8,
-     "s_out": 1711.5,
-     "reached": true,
-     "yields": false,
-     "expert_reasons": {
-      "red_light": 50,
-      "junction_blocked": 35,
-      "curve": 61
-     },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 6.2,
-     "needless_s": 0.1,
-     "s_first_stop": 1682.9
-    },
-    {
-     "junction": 3,
-     "kind": "bend",
-     "arms": 2,
-     "turn": "right",
-     "s_in": 1854.4,
-     "s_out": 1870.3,
      "reached": true,
      "yields": false,
      "expert_reasons": {
@@ -4288,18 +4146,173 @@
      "kind": "bend",
      "arms": 2,
      "turn": "straight",
+     "s_in": 996.9,
+     "s_out": 1002.3,
+     "reached": true,
+     "yields": false,
+     "expert_reasons": {
+      "vehicle": 40
+     },
+     "expert_stop": false,
+     "v_min": 3.03,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
+    },
+    {
+     "junction": 11,
+     "kind": "signalised",
+     "arms": 3,
+     "turn": "right",
+     "s_in": 1079.0,
+     "s_out": 1097.7,
+     "reached": true,
+     "yields": true,
+     "expert_reasons": {
+      "red_light": 256,
+      "curve": 43,
+      "yield": 59,
+      "vehicle": 1
+     },
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 25.4,
+     "needless_s": 0.2,
+     "s_first_stop": 1069.2
+    },
+    {
+     "junction": 10,
+     "kind": "signalised",
+     "arms": 3,
+     "turn": "straight",
+     "s_in": 1244.9,
+     "s_out": 1263.9,
+     "reached": true,
+     "yields": false,
+     "expert_reasons": {
+      "vehicle": 35
+     },
+     "expert_stop": false,
+     "v_min": 9.49,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
+    },
+    {
+     "junction": 9,
+     "kind": "signalised",
+     "arms": 4,
+     "turn": "right",
+     "s_in": 1366.0,
+     "s_out": 1383.3,
+     "reached": true,
+     "yields": true,
+     "expert_reasons": {
+      "vehicle": 20,
+      "red_light": 213,
+      "bicycle": 1,
+      "curve": 56,
+      "yield": 46
+     },
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 21.3,
+     "needless_s": 0.2,
+     "s_first_stop": 1356.1
+    },
+    {
+     "junction": 5,
+     "kind": "signalised",
+     "arms": 4,
+     "turn": "right",
+     "s_in": 1443.3,
+     "s_out": 1463.6,
+     "reached": true,
+     "yields": true,
+     "expert_reasons": {
+      "vehicle": 18,
+      "yield": 3,
+      "curve": 40
+     },
+     "expert_stop": false,
+     "v_min": 3.75,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
+    },
+    {
+     "junction": 6,
+     "kind": "bend",
+     "arms": 2,
+     "turn": "left",
+     "s_in": 1553.6,
+     "s_out": 1563.3,
+     "reached": true,
+     "yields": false,
+     "expert_reasons": {
+      "curve": 51
+     },
+     "expert_stop": false,
+     "v_min": 3.08,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
+    },
+    {
+     "junction": 2,
+     "kind": "signalised",
+     "arms": 3,
+     "turn": "right",
+     "s_in": 1692.8,
+     "s_out": 1711.5,
+     "reached": true,
+     "yields": false,
+     "expert_reasons": {
+      "vehicle": 32,
+      "curve": 30
+     },
+     "expert_stop": false,
+     "v_min": 3.56,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
+    },
+    {
+     "junction": 3,
+     "kind": "bend",
+     "arms": 2,
+     "turn": "right",
+     "s_in": 1854.4,
+     "s_out": 1870.3,
+     "reached": true,
+     "yields": false,
+     "expert_reasons": {
+      "vehicle": 22,
+      "curve": 38
+     },
+     "expert_stop": false,
+     "v_min": 4.05,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
+    },
+    {
+     "junction": 7,
+     "kind": "bend",
+     "arms": 2,
+     "turn": "straight",
      "s_in": 2010.9,
      "s_out": 2016.3,
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 27
+      "vehicle": 288
      },
-     "expert_stop": false,
-     "v_min": 5.9,
-     "stood_s": 0.0,
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 16.7,
      "needless_s": 0.0,
-     "s_first_stop": null
+     "s_first_stop": 2013.8
     },
     {
      "junction": 11,
@@ -4311,16 +4324,17 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "vehicle": 164,
-      "red_light": 200,
-      "curve": 43,
-      "yield": 56
+      "vehicle": 80,
+      "red_light": 88,
+      "bicycle": 220,
+      "yield": 57,
+      "curve": 39
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 32.5,
+     "stood_s": 31.5,
      "needless_s": 0.2,
-     "s_first_stop": 2079.5
+     "s_first_stop": 2079.4
     },
     {
      "junction": 10,
@@ -4332,11 +4346,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 33,
-      "cruise": 21
+      "vehicle": 51
      },
      "expert_stop": false,
-     "v_min": 3.75,
+     "v_min": 4.75,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -4351,13 +4364,15 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "vehicle": 101
+      "vehicle": 27,
+      "yield": 50,
+      "curve": 43
      },
-     "expert_stop": false,
-     "v_min": 0.8,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 2.9,
+     "needless_s": 0.1,
+     "s_first_stop": 2383.2
     },
     {
      "junction": 5,
@@ -4369,15 +4384,18 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "vehicle": 30,
-      "curve": 44,
-      "yield": 3
+      "red_light": 468,
+      "junction_blocked": 178,
+      "bicycle": 14,
+      "curve": 40,
+      "yield": 49,
+      "vehicle": 11
      },
      "expert_stop": true,
-     "v_min": 2.92,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "v_min": 0.0,
+     "stood_s": 65.0,
+     "needless_s": 0.2,
+     "s_first_stop": 2447.5
     }
    ]
   },
@@ -4387,15 +4405,15 @@
    "IS": 1.0,
    "DS": 1.0,
    "infractions": [],
-   "time": 499.1,
-   "distance": 2499.1,
+   "time": 517.4,
+   "distance": 2498.7,
    "route_length": 2500.0,
    "off_lane_ratio": 0.0,
    "town": 1015,
    "episode": 9401,
-   "steps": 4991,
-   "wall": 106.43393445014954,
-   "avg_speed": 5.007670630931283,
+   "steps": 5174,
+   "wall": 142.30262565612793,
+   "avg_speed": 4.829501252013947,
    "weather": "sunset",
    "lights_passed": 10,
    "lane_changes": 0,
@@ -4529,7 +4547,7 @@
       "curve": 58
      },
      "expert_stop": false,
-     "v_min": 3.99,
+     "v_min": 4.04,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -4544,11 +4562,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 7,
-      "curve": 20
+      "curve": 27
      },
      "expert_stop": false,
-     "v_min": 5.91,
+     "v_min": 5.9,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -4563,10 +4580,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 47
+      "vehicle": 47,
+      "cruise": 31
      },
      "expert_stop": false,
-     "v_min": 6.15,
+     "v_min": 1.2,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -4581,11 +4599,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 33,
-      "curve": 26
+      "curve": 47
      },
      "expert_stop": false,
-     "v_min": 3.98,
+     "v_min": 4.21,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -4597,81 +4614,6 @@
      "turn": "right",
      "s_in": 1237.1,
      "s_out": 1251.2,
-     "reached": true,
-     "yields": false,
-     "expert_reasons": {
-      "vehicle": 31,
-      "curve": 32
-     },
-     "expert_stop": false,
-     "v_min": 3.92,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
-    },
-    {
-     "junction": 10,
-     "kind": "signalised",
-     "arms": 3,
-     "turn": "right",
-     "s_in": 1308.6,
-     "s_out": 1326.2,
-     "reached": true,
-     "yields": false,
-     "expert_reasons": {
-      "vehicle": 16,
-      "curve": 48
-     },
-     "expert_stop": false,
-     "v_min": 4.52,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
-    },
-    {
-     "junction": 11,
-     "kind": "signalised",
-     "arms": 3,
-     "turn": "right",
-     "s_in": 1473.4,
-     "s_out": 1490.2,
-     "reached": true,
-     "yields": false,
-     "expert_reasons": {
-      "vehicle": 3,
-      "curve": 56
-     },
-     "expert_stop": false,
-     "v_min": 4.18,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
-    },
-    {
-     "junction": 15,
-     "kind": "bend",
-     "arms": 2,
-     "turn": "right",
-     "s_in": 1546.9,
-     "s_out": 1559.2,
-     "reached": true,
-     "yields": false,
-     "expert_reasons": {
-      "curve": 46
-     },
-     "expert_stop": false,
-     "v_min": 4.32,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
-    },
-    {
-     "junction": 14,
-     "kind": "bend",
-     "arms": 2,
-     "turn": "right",
-     "s_in": 1694.2,
-     "s_out": 1708.3,
      "reached": true,
      "yields": false,
      "expert_reasons": {
@@ -4688,19 +4630,95 @@
      "kind": "signalised",
      "arms": 3,
      "turn": "right",
+     "s_in": 1308.6,
+     "s_out": 1326.2,
+     "reached": true,
+     "yields": false,
+     "expert_reasons": {
+      "vehicle": 22,
+      "curve": 49
+     },
+     "expert_stop": false,
+     "v_min": 3.5,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
+    },
+    {
+     "junction": 11,
+     "kind": "signalised",
+     "arms": 3,
+     "turn": "right",
+     "s_in": 1473.4,
+     "s_out": 1490.2,
+     "reached": true,
+     "yields": false,
+     "expert_reasons": {
+      "vehicle": 11,
+      "curve": 48
+     },
+     "expert_stop": false,
+     "v_min": 4.16,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
+    },
+    {
+     "junction": 15,
+     "kind": "bend",
+     "arms": 2,
+     "turn": "right",
+     "s_in": 1546.9,
+     "s_out": 1559.2,
+     "reached": true,
+     "yields": false,
+     "expert_reasons": {
+      "vehicle": 25,
+      "curve": 27
+     },
+     "expert_stop": false,
+     "v_min": 4.28,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
+    },
+    {
+     "junction": 14,
+     "kind": "bend",
+     "arms": 2,
+     "turn": "right",
+     "s_in": 1694.2,
+     "s_out": 1708.3,
+     "reached": true,
+     "yields": false,
+     "expert_reasons": {
+      "vehicle": 25,
+      "curve": 32
+     },
+     "expert_stop": false,
+     "v_min": 4.12,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
+    },
+    {
+     "junction": 10,
+     "kind": "signalised",
+     "arms": 3,
+     "turn": "right",
      "s_in": 1765.7,
      "s_out": 1783.3,
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "red_light": 92,
-      "curve": 65
+      "vehicle": 14,
+      "curve": 48
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 7.1,
-     "needless_s": 0.1,
-     "s_first_stop": 1755.8
+     "expert_stop": false,
+     "v_min": 4.76,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
     },
     {
      "junction": 11,
@@ -4712,11 +4730,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "bicycle": 80,
-      "curve": 17
+      "vehicle": 38,
+      "curve": 27
      },
      "expert_stop": false,
-     "v_min": 0.96,
+     "v_min": 3.9,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -4731,10 +4749,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 26
+      "vehicle": 29,
+      "curve": 7
      },
      "expert_stop": false,
-     "v_min": 6.49,
+     "v_min": 5.68,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -4749,13 +4768,15 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 50
+      "vehicle": 3,
+      "bicycle": 45,
+      "curve": 43
      },
-     "expert_stop": false,
-     "v_min": 3.09,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 1.6,
+     "needless_s": 0.1,
+     "s_first_stop": 2163.2
     },
     {
      "junction": 2,
@@ -4767,11 +4788,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 36,
+      "vehicle": 39,
       "curve": 25
      },
      "expert_stop": false,
-     "v_min": 3.37,
+     "v_min": 4.05,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -4786,11 +4807,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 24,
-      "curve": 37
+      "vehicle": 45,
+      "curve": 26
      },
      "expert_stop": false,
-     "v_min": 4.08,
+     "v_min": 3.94,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -4803,15 +4824,15 @@
    "IS": 1.0,
    "DS": 1.0,
    "infractions": [],
-   "time": 594.7,
-   "distance": 2498.6,
+   "time": 557.2,
+   "distance": 2498.7,
    "route_length": 2500.0,
    "off_lane_ratio": 0.0,
    "town": 1016,
    "episode": 9400,
-   "steps": 5947,
-   "wall": 115.53616642951965,
-   "avg_speed": 4.2019546418468785,
+   "steps": 5572,
+   "wall": 138.65541076660156,
+   "avg_speed": 4.484906015919776,
    "weather": "sunset",
    "lights_passed": 12,
    "lane_changes": 0,
@@ -4845,15 +4866,15 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "bicycle": 22,
-      "red_light": 236,
-      "cruise": 49
+      "bicycle": 30,
+      "red_light": 3,
+      "cruise": 38
      },
      "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 22.9,
-     "needless_s": 0.1,
-     "s_first_stop": 174.4
+     "v_min": 1.14,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
     },
     {
      "junction": 9,
@@ -4865,10 +4886,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 46
+      "curve": 47
      },
      "expert_stop": false,
-     "v_min": 3.35,
+     "v_min": 3.13,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -4883,15 +4904,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "red_light": 75,
-      "junction_blocked": 18,
-      "cruise": 50
+      "bicycle": 51,
+      "cruise": 16
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 7.1,
-     "needless_s": 0.1,
-     "s_first_stop": 410.1
+     "expert_stop": false,
+     "v_min": 3.2,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
     },
     {
      "junction": 11,
@@ -4903,10 +4923,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 48
+      "curve": 49
      },
      "expert_stop": false,
-     "v_min": 3.19,
+     "v_min": 3.06,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -4921,13 +4941,12 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 20,
-      "red_light": 192,
+      "red_light": 221,
       "curve": 61
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 17.9,
+     "stood_s": 19.8,
      "needless_s": 0.1,
      "s_first_stop": 717.1
     },
@@ -4941,10 +4960,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 49
+      "vehicle": 14,
+      "curve": 43
      },
      "expert_stop": false,
-     "v_min": 4.24,
+     "v_min": 4.22,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -4959,13 +4979,13 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "red_light": 115,
-      "junction_blocked": 12,
+      "red_light": 138,
+      "junction_blocked": 55,
       "curve": 64
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 10.5,
+     "stood_s": 17.1,
      "needless_s": 0.1,
      "s_first_stop": 1034.9
     },
@@ -4979,11 +4999,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "bicycle": 8,
-      "curve": 48
+      "curve": 53
      },
      "expert_stop": false,
-     "v_min": 4.17,
+     "v_min": 4.1,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -4998,15 +5017,15 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "curve": 47,
-      "yield": 55,
-      "vehicle": 1
+      "red_light": 220,
+      "curve": 54,
+      "yield": 90
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 2.5,
-     "needless_s": 0.1,
-     "s_first_stop": 1289.6
+     "stood_s": 25.7,
+     "needless_s": 0.2,
+     "s_first_stop": 1276.1
     },
     {
      "junction": 7,
@@ -5018,15 +5037,15 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 5,
-      "red_light": 214,
+      "red_light": 199,
+      "junction_blocked": 11,
       "curve": 57
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 19.5,
+     "stood_s": 18.8,
      "needless_s": 0.1,
-     "s_first_stop": 1400.0
+     "s_first_stop": 1399.9
     },
     {
      "junction": 4,
@@ -5038,11 +5057,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 12,
-      "curve": 43
+      "red_light": 13,
+      "curve": 54
      },
      "expert_stop": false,
-     "v_min": 3.43,
+     "v_min": 1.32,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -5057,14 +5076,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 49,
-      "curve": 9
+      "red_light": 184,
+      "curve": 58
      },
-     "expert_stop": false,
-     "v_min": 3.56,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 16.2,
+     "needless_s": 0.1,
+     "s_first_stop": 1646.3
     },
     {
      "junction": 0,
@@ -5076,11 +5095,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 27,
-      "curve": 36
+      "curve": 59
      },
      "expert_stop": false,
-     "v_min": 4.06,
+     "v_min": 4.15,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -5095,14 +5113,13 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 30,
-      "cruise": 32
+      "bicycle": 207
      },
-     "expert_stop": false,
-     "v_min": 3.42,
-     "stood_s": 0.0,
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 11.0,
      "needless_s": 0.0,
-     "s_first_stop": null
+     "s_first_stop": 1886.5
     },
     {
      "junction": 2,
@@ -5114,11 +5131,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "bicycle": 61,
-      "curve": 18
+      "curve": 54
      },
      "expert_stop": false,
-     "v_min": 2.89,
+     "v_min": 4.17,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -5133,10 +5149,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 25
+      "curve": 26
      },
      "expert_stop": false,
-     "v_min": 6.79,
+     "v_min": 6.77,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -5151,14 +5167,14 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "red_light": 163,
+      "red_light": 187,
       "curve": 64,
-      "yield": 81,
-      "bicycle": 14
+      "yield": 69,
+      "vehicle": 9
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 21.0,
+     "stood_s": 21.8,
      "needless_s": 0.2,
      "s_first_stop": 2349.6
     }
@@ -5170,15 +5186,15 @@
    "IS": 1.0,
    "DS": 1.0,
    "infractions": [],
-   "time": 745.2,
-   "distance": 2499.3,
+   "time": 616.75,
+   "distance": 2499.5,
    "route_length": 2500.0,
    "off_lane_ratio": 0.0,
    "town": 1016,
    "episode": 9401,
-   "steps": 7452,
-   "wall": 157.3745629787445,
-   "avg_speed": 3.35419284032181,
+   "steps": 6168,
+   "wall": 170.91370630264282,
+   "avg_speed": 4.053686065836442,
    "weather": "cloudy",
    "lights_passed": 11,
    "lane_changes": 0,
@@ -5269,11 +5285,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 26,
-      "cruise": 32
+      "vehicle": 51,
+      "cruise": 34
      },
      "expert_stop": false,
-     "v_min": 3.65,
+     "v_min": 1.02,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -5288,7 +5304,7 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 52
+      "curve": 53
      },
      "expert_stop": false,
      "v_min": 4.14,
@@ -5306,15 +5322,15 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 135,
-      "red_light": 206,
-      "cruise": 46
+      "vehicle": 83,
+      "red_light": 198,
+      "cruise": 50
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 26.3,
+     "stood_s": 23.1,
      "needless_s": 0.1,
-     "s_first_stop": 860.6
+     "s_first_stop": 853.5
     },
     {
      "junction": 3,
@@ -5326,16 +5342,17 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "vehicle": 3,
-      "red_light": 172,
-      "curve": 60,
-      "yield": 42
+      "vehicle": 26,
+      "red_light": 234,
+      "curve": 65,
+      "yield": 47,
+      "bicycle": 17
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 16.8,
+     "stood_s": 27.3,
      "needless_s": 0.2,
-     "s_first_stop": 1009.2
+     "s_first_stop": 1009.8
     },
     {
      "junction": 4,
@@ -5347,15 +5364,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "red_light": 178,
-      "junction_blocked": 96,
-      "curve": 66
+      "vehicle": 16,
+      "curve": 51
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 25.2,
-     "needless_s": 0.1,
-     "s_first_stop": 1134.7
+     "expert_stop": false,
+     "v_min": 3.04,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
     },
     {
      "junction": 7,
@@ -5367,17 +5383,15 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "vehicle": 32,
-      "red_light": 215,
-      "curve": 52,
-      "yield": 63,
-      "bicycle": 1
+      "vehicle": 18,
+      "curve": 43,
+      "yield": 4
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 24.1,
-     "needless_s": 0.2,
-     "s_first_stop": 1263.9
+     "expert_stop": false,
+     "v_min": 3.51,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
     },
     {
      "junction": 6,
@@ -5389,15 +5403,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "red_light": 124,
-      "junction_blocked": 37,
-      "curve": 65
+      "vehicle": 22,
+      "curve": 49
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 13.9,
-     "needless_s": 0.1,
-     "s_first_stop": 1387.9
+     "expert_stop": false,
+     "v_min": 3.57,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
     },
     {
      "junction": 3,
@@ -5409,15 +5422,16 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "red_light": 226,
-      "curve": 60,
-      "yield": 42
+      "vehicle": 9,
+      "bicycle": 3,
+      "curve": 43,
+      "yield": 48
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 22.2,
-     "needless_s": 0.2,
-     "s_first_stop": 1537.3
+     "stood_s": 2.1,
+     "needless_s": 0.1,
+     "s_first_stop": 1549.8
     },
     {
      "junction": 4,
@@ -5429,11 +5443,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 16,
-      "curve": 42
+      "vehicle": 43,
+      "curve": 23
      },
      "expert_stop": false,
-     "v_min": 3.52,
+     "v_min": 4.18,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -5448,11 +5462,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 17,
-      "curve": 48
+      "vehicle": 42,
+      "curve": 30
      },
      "expert_stop": false,
-     "v_min": 3.52,
+     "v_min": 4.18,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -5467,10 +5481,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 56
+      "vehicle": 31,
+      "curve": 31
      },
      "expert_stop": false,
-     "v_min": 4.01,
+     "v_min": 4.02,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -5485,10 +5500,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 25
+      "vehicle": 9,
+      "curve": 17
      },
      "expert_stop": false,
-     "v_min": 6.87,
+     "v_min": 6.78,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -5503,16 +5519,13 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 21,
-      "red_light": 173,
-      "junction_blocked": 9,
-      "cruise": 55
+      "vehicle": 60
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 16.5,
-     "needless_s": 0.1,
-     "s_first_stop": 2235.4
+     "expert_stop": false,
+     "v_min": 3.72,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
     },
     {
      "junction": 11,
@@ -5524,11 +5537,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 3,
-      "curve": 52
+      "vehicle": 16,
+      "curve": 40
      },
      "expert_stop": false,
-     "v_min": 4.04,
+     "v_min": 4.08,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -5541,15 +5554,15 @@
    "IS": 1.0,
    "DS": 1.0,
    "infractions": [],
-   "time": 497.95,
-   "distance": 2514.8,
+   "time": 588.55,
+   "distance": 2514.6,
    "route_length": 2515.3,
    "off_lane_ratio": 0.0,
    "town": 1017,
    "episode": 9400,
-   "steps": 4980,
-   "wall": 179.22570514678955,
-   "avg_speed": 5.05120436586036,
+   "steps": 5886,
+   "wall": 280.5121431350708,
+   "avg_speed": 4.273060314647363,
    "weather": "noon",
    "lights_passed": 14,
    "lane_changes": 0,
@@ -5640,14 +5653,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 53,
-      "bicycle": 51
+      "vehicle": 116,
+      "junction_blocked": 15
      },
-     "expert_stop": false,
-     "v_min": 1.15,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 1.1,
+     "needless_s": 0.1,
+     "s_first_stop": 545.5
     },
     {
      "junction": 10,
@@ -5659,14 +5672,15 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "red_light": 89,
-      "bicycle": 141
+      "vehicle": 64,
+      "bicycle": 26,
+      "junction_blocked": 45
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 11.1,
-     "needless_s": 0.0,
-     "s_first_stop": 619.8
+     "stood_s": 3.9,
+     "needless_s": 0.1,
+     "s_first_stop": 626.1
     },
     {
      "junction": 5,
@@ -5678,10 +5692,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "cruise": 21
+      "vehicle": 25
      },
      "expert_stop": false,
-     "v_min": 10.09,
+     "v_min": 8.44,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -5696,10 +5710,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 54
+      "vehicle": 23,
+      "curve": 34
      },
      "expert_stop": false,
-     "v_min": 3.99,
+     "v_min": 4.06,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -5714,11 +5729,11 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "vehicle": 10,
-      "curve": 50
+      "vehicle": 63,
+      "curve": 22
      },
      "expert_stop": false,
-     "v_min": 4.39,
+     "v_min": 2.06,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -5733,11 +5748,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 14,
-      "cruise": 36
+      "vehicle": 45
      },
      "expert_stop": false,
-     "v_min": 4.43,
+     "v_min": 8.06,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -5752,13 +5766,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 51
+      "red_light": 236,
+      "curve": 57
      },
-     "expert_stop": false,
-     "v_min": 3.97,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 21.2,
+     "needless_s": 0.1,
+     "s_first_stop": 1441.5
     },
     {
      "junction": 12,
@@ -5788,10 +5803,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 57
+      "vehicle": 21,
+      "cruise": 34
      },
      "expert_stop": false,
-     "v_min": 4.09,
+     "v_min": 3.46,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -5806,11 +5822,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "bicycle": 48,
-      "curve": 17
+      "vehicle": 16,
+      "curve": 41
      },
      "expert_stop": false,
-     "v_min": 4.28,
+     "v_min": 3.79,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -5828,7 +5844,7 @@
       "curve": 25
      },
      "expert_stop": false,
-     "v_min": 6.89,
+     "v_min": 6.85,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -5843,10 +5859,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 47
+      "curve": 48
      },
      "expert_stop": false,
-     "v_min": 3.23,
+     "v_min": 3.16,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -5861,14 +5877,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 6,
-      "curve": 46
+      "red_light": 37,
+      "curve": 58
      },
-     "expert_stop": false,
-     "v_min": 4.08,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 1.8,
+     "needless_s": 0.1,
+     "s_first_stop": 2084.2
     },
     {
      "junction": 18,
@@ -5880,12 +5896,13 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "red_light": 159,
+      "red_light": 259,
+      "junction_blocked": 10,
       "cruise": 51
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 13.8,
+     "stood_s": 24.9,
      "needless_s": 0.1,
      "s_first_stop": 2153.9
     },
@@ -5899,14 +5916,15 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "bicycle": 76,
-      "curve": 18
+      "vehicle": 1,
+      "red_light": 237,
+      "curve": 57
      },
-     "expert_stop": false,
-     "v_min": 0.83,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 21.8,
+     "needless_s": 0.1,
+     "s_first_stop": 2269.8
     },
     {
      "junction": 22,
@@ -5918,15 +5936,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "red_light": 101,
-      "bicycle": 1,
-      "curve": 56
+      "bicycle": 56,
+      "curve": 16
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 8.0,
-     "needless_s": 0.1,
-     "s_first_stop": 2385.2
+     "expert_stop": false,
+     "v_min": 3.79,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
     },
     {
      "junction": 23,
@@ -5938,10 +5955,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 25
+      "bicycle": 46,
+      "curve": 11
      },
      "expert_stop": false,
-     "v_min": 6.86,
+     "v_min": 2.76,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -5954,15 +5972,15 @@
    "IS": 1.0,
    "DS": 1.0,
    "infractions": [],
-   "time": 628.9,
-   "distance": 2524.2,
+   "time": 661.45,
+   "distance": 2524.5,
    "route_length": 2525.1,
    "off_lane_ratio": 0.0,
    "town": 1017,
    "episode": 9401,
-   "steps": 6289,
-   "wall": 229.82575821876526,
-   "avg_speed": 4.014143135219268,
+   "steps": 6615,
+   "wall": 329.6242594718933,
+   "avg_speed": 3.8172600189546273,
    "weather": "noon",
    "lights_passed": 14,
    "lane_changes": 0,
@@ -6034,11 +6052,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 27,
-      "curve": 47
+      "vehicle": 46,
+      "curve": 23
      },
      "expert_stop": false,
-     "v_min": 2.84,
+     "v_min": 4.15,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -6053,11 +6071,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 56,
-      "cruise": 33
+      "vehicle": 51
      },
      "expert_stop": false,
-     "v_min": 0.93,
+     "v_min": 3.64,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -6072,14 +6089,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "red_light": 209,
-      "cruise": 50
+      "vehicle": 19,
+      "cruise": 31
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 18.7,
-     "needless_s": 0.1,
-     "s_first_stop": 693.5
+     "expert_stop": false,
+     "v_min": 3.64,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
     },
     {
      "junction": 4,
@@ -6127,16 +6144,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 116,
-      "red_light": 233,
-      "bicycle": 30,
-      "cruise": 29
+      "red_light": 2,
+      "cruise": 39
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 32.5,
-     "needless_s": 0.1,
-     "s_first_stop": 1095.5
+     "expert_stop": false,
+     "v_min": 4.74,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
     },
     {
      "junction": 7,
@@ -6148,11 +6163,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 65,
-      "cruise": 35
+      "vehicle": 75
      },
      "expert_stop": false,
-     "v_min": 0.45,
+     "v_min": 3.85,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -6167,14 +6181,15 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "bicycle": 35,
-      "curve": 57
+      "vehicle": 37,
+      "bicycle": 20,
+      "curve": 50
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 0.3,
-     "needless_s": 0.0,
-     "s_first_stop": 1332.7
+     "stood_s": 1.3,
+     "needless_s": 0.1,
+     "s_first_stop": 1341.1
     },
     {
      "junction": 1,
@@ -6186,13 +6201,12 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "red_light": 202,
-      "junction_blocked": 54,
+      "red_light": 263,
       "curve": 62
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 23.5,
+     "stood_s": 24.0,
      "needless_s": 0.1,
      "s_first_stop": 1514.0
     },
@@ -6206,16 +6220,16 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "vehicle": 16,
-      "junction_blocked": 45,
-      "bicycle": 54,
-      "curve": 46
+      "vehicle": 99,
+      "junction_blocked": 43,
+      "yield": 24,
+      "curve": 14
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 6.7,
-     "needless_s": 0.0,
-     "s_first_stop": 1648.7
+     "stood_s": 4.5,
+     "needless_s": 0.2,
+     "s_first_stop": 1649.3
     },
     {
      "junction": 7,
@@ -6227,13 +6241,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 52
+      "red_light": 246,
+      "curve": 57
      },
-     "expert_stop": false,
-     "v_min": 3.59,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 22.3,
+     "needless_s": 0.1,
+     "s_first_stop": 1839.3
     },
     {
      "junction": 8,
@@ -6245,14 +6260,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 13,
-      "curve": 43
+      "red_light": 134,
+      "curve": 58
      },
-     "expert_stop": false,
-     "v_min": 3.66,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 11.4,
+     "needless_s": 0.1,
+     "s_first_stop": 1937.6
     },
     {
      "junction": 3,
@@ -6264,10 +6279,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 56
+      "vehicle": 14,
+      "curve": 48
      },
      "expert_stop": false,
-     "v_min": 4.8,
+     "v_min": 4.17,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -6285,7 +6301,7 @@
       "curve": 49
      },
      "expert_stop": false,
-     "v_min": 4.22,
+     "v_min": 4.17,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -6300,10 +6316,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 61
+      "curve": 62
      },
      "expert_stop": false,
-     "v_min": 3.95,
+     "v_min": 3.97,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -6316,15 +6332,15 @@
    "IS": 1.0,
    "DS": 1.0,
    "infractions": [],
-   "time": 762.25,
-   "distance": 2498.5,
+   "time": 725.3,
+   "distance": 2499.0,
    "route_length": 2500.0,
    "off_lane_ratio": 0.0,
    "town": 1018,
    "episode": 9400,
-   "steps": 7623,
-   "wall": 248.15702867507935,
-   "avg_speed": 3.278675657035956,
+   "steps": 7253,
+   "wall": 331.4289243221283,
+   "avg_speed": 3.4458471500408168,
    "weather": "fog",
    "lights_passed": 15,
    "lane_changes": 0,
@@ -6379,12 +6395,13 @@
      "yields": true,
      "expert_reasons": {
       "red_light": 167,
-      "curve": 69,
-      "yield": 58
+      "curve": 56,
+      "yield": 70,
+      "vehicle": 9
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 19.2,
+     "stood_s": 18.4,
      "needless_s": 0.2,
      "s_first_stop": 340.0
     },
@@ -6398,15 +6415,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 4,
-      "red_light": 251,
-      "curve": 57
+      "vehicle": 13,
+      "curve": 41
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 23.2,
-     "needless_s": 0.1,
-     "s_first_stop": 492.1
+     "expert_stop": false,
+     "v_min": 3.76,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
     },
     {
      "junction": 17,
@@ -6418,15 +6434,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 8,
-      "red_light": 256,
-      "curve": 62
+      "vehicle": 16,
+      "curve": 46
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 23.8,
-     "needless_s": 0.1,
-     "s_first_stop": 646.6
+     "expert_stop": false,
+     "v_min": 4.12,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
     },
     {
      "junction": 16,
@@ -6438,10 +6453,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 57
+      "vehicle": 26,
+      "curve": 35
      },
      "expert_stop": false,
-     "v_min": 4.09,
+     "v_min": 4.13,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -6456,16 +6472,14 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "bicycle": 10,
-      "vehicle": 48,
-      "yield": 2,
-      "curve": 44
+      "vehicle": 41,
+      "curve": 46
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 0.5,
+     "expert_stop": false,
+     "v_min": 0.51,
+     "stood_s": 0.0,
      "needless_s": 0.0,
-     "s_first_stop": 927.3
+     "s_first_stop": null
     },
     {
      "junction": 13,
@@ -6477,14 +6491,15 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "red_light": 172,
-      "curve": 65
+      "vehicle": 18,
+      "curve": 45,
+      "yield": 4
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 15.0,
-     "needless_s": 0.1,
-     "s_first_stop": 1029.9
+     "expert_stop": false,
+     "v_min": 3.62,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
     },
     {
      "junction": 17,
@@ -6496,13 +6511,15 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 53
+      "red_light": 252,
+      "junction_blocked": 8,
+      "curve": 62
      },
-     "expert_stop": false,
-     "v_min": 5.12,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 23.8,
+     "needless_s": 0.1,
+     "s_first_stop": 1187.8
     },
     {
      "junction": 16,
@@ -6514,8 +6531,7 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 2,
-      "curve": 55
+      "curve": 57
      },
      "expert_stop": false,
      "v_min": 4.09,
@@ -6533,15 +6549,15 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "vehicle": 24,
-      "yield": 63,
-      "curve": 40
+      "curve": 48,
+      "yield": 39,
+      "bicycle": 1
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 4.5,
+     "stood_s": 1.0,
      "needless_s": 0.1,
-     "s_first_stop": 1476.4
+     "s_first_stop": 1476.3
     },
     {
      "junction": 13,
@@ -6553,14 +6569,13 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "red_light": 219,
-      "cruise": 50
+      "cruise": 33
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 19.7,
-     "needless_s": 0.1,
-     "s_first_stop": 1571.1
+     "expert_stop": false,
+     "v_min": 10.09,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
     },
     {
      "junction": 14,
@@ -6572,15 +6587,14 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "vehicle": 20,
-      "bicycle": 7,
-      "curve": 41
+      "bicycle": 177,
+      "curve": 45
      },
-     "expert_stop": false,
-     "v_min": 2.8,
-     "stood_s": 0.0,
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 11.3,
      "needless_s": 0.0,
-     "s_first_stop": null
+     "s_first_stop": 1721.1
     },
     {
      "junction": 18,
@@ -6592,14 +6606,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "red_light": 173,
-      "curve": 58
+      "bicycle": 265,
+      "curve": 20
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 15.0,
-     "needless_s": 0.1,
-     "s_first_stop": 1881.8
+     "stood_s": 17.2,
+     "needless_s": 0.0,
+     "s_first_stop": 1878.7
     },
     {
      "junction": 19,
@@ -6611,10 +6625,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 46
+      "curve": 45
      },
      "expert_stop": false,
-     "v_min": 3.18,
+     "v_min": 3.31,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -6629,12 +6643,12 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "red_light": 181,
+      "red_light": 100,
       "cruise": 50
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 15.8,
+     "stood_s": 7.7,
      "needless_s": 0.1,
      "s_first_stop": 2152.6
     },
@@ -6648,14 +6662,15 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "red_light": 199,
-      "curve": 58
+      "vehicle": 10,
+      "bicycle": 24,
+      "curve": 54
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 17.6,
+     "stood_s": 0.4,
      "needless_s": 0.1,
-     "s_first_stop": 2278.8
+     "s_first_stop": 2280.8
     },
     {
      "junction": 10,
@@ -6667,15 +6682,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "red_light": 218,
-      "junction_blocked": 8,
-      "curve": 64
+      "vehicle": 39,
+      "curve": 30
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 20.4,
-     "needless_s": 0.1,
-     "s_first_stop": 2397.0
+     "expert_stop": false,
+     "v_min": 2.93,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
     }
    ]
   },
@@ -6685,15 +6699,15 @@
    "IS": 1.0,
    "DS": 1.0,
    "infractions": [],
-   "time": 902.85,
-   "distance": 2499.6,
+   "time": 751.8,
+   "distance": 2499.3,
    "route_length": 2500.0,
    "off_lane_ratio": 0.0,
    "town": 1018,
    "episode": 9401,
-   "steps": 9029,
-   "wall": 328.19634985923767,
-   "avg_speed": 2.7695186262536824,
+   "steps": 7518,
+   "wall": 342.6407799720764,
+   "avg_speed": 3.3248341310623726,
    "weather": "noon",
    "lights_passed": 15,
    "lane_changes": 0,
@@ -6900,15 +6914,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 25,
-      "red_light": 247,
-      "cruise": 48
+      "vehicle": 87,
+      "cruise": 34
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 24.4,
-     "needless_s": 0.1,
-     "s_first_stop": 1369.8
+     "stood_s": 3.0,
+     "needless_s": 0.0,
+     "s_first_stop": 1369.9
     },
     {
      "junction": 19,
@@ -6920,14 +6933,13 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 29,
-      "vehicle": 144
+      "curve": 52
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 6.4,
+     "expert_stop": false,
+     "v_min": 4.06,
+     "stood_s": 0.0,
      "needless_s": 0.0,
-     "s_first_stop": 1549.8
+     "s_first_stop": null
     },
     {
      "junction": 18,
@@ -6939,18 +6951,15 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "bicycle": 6,
-      "vehicle": 12,
-      "junction_blocked": 84,
-      "red_light": 240,
-      "curve": 52,
-      "yield": 94
+      "vehicle": 16,
+      "curve": 42,
+      "yield": 4
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 37.2,
-     "needless_s": 0.3,
-     "s_first_stop": 1650.9
+     "expert_stop": false,
+     "v_min": 4.28,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
     },
     {
      "junction": 14,
@@ -6962,16 +6971,15 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 85,
-      "red_light": 185,
-      "bicycle": 16,
-      "cruise": 32
+      "vehicle": 5,
+      "red_light": 225,
+      "cruise": 50
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 23.5,
+     "stood_s": 20.5,
      "needless_s": 0.1,
-     "s_first_stop": 1810.6
+     "s_first_stop": 1808.5
     },
     {
      "junction": 10,
@@ -6983,13 +6991,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 51
+      "red_light": 254,
+      "cruise": 50
      },
-     "expert_stop": false,
-     "v_min": 3.73,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 23.1,
+     "needless_s": 0.1,
+     "s_first_stop": 1954.5
     },
     {
      "junction": 6,
@@ -7001,14 +7010,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 61,
-      "curve": 43
+      "vehicle": 8,
+      "curve": 45
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 0.7,
+     "expert_stop": false,
+     "v_min": 3.9,
+     "stood_s": 0.0,
      "needless_s": 0.0,
-     "s_first_stop": 2126.4
+     "s_first_stop": null
     },
     {
      "junction": 5,
@@ -7020,11 +7029,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 13,
+      "vehicle": 10,
       "curve": 42
      },
      "expert_stop": false,
-     "v_min": 3.76,
+     "v_min": 4.11,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -7055,15 +7064,15 @@
    "IS": 1.0,
    "DS": 1.0,
    "infractions": [],
-   "time": 743.65,
-   "distance": 2498.5,
+   "time": 1024.6,
+   "distance": 2499.3,
    "route_length": 2500.0,
    "off_lane_ratio": 0.0,
    "town": 1019,
    "episode": 9400,
-   "steps": 7437,
-   "wall": 191.47781896591187,
-   "avg_speed": 3.360695024481455,
+   "steps": 10246,
+   "wall": 310.55953216552734,
+   "avg_speed": 2.4397056699879753,
    "weather": "sunset",
    "lights_passed": 12,
    "lane_changes": 0,
@@ -7135,12 +7144,12 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 24,
-      "bicycle": 9,
-      "cruise": 24
+      "vehicle": 22,
+      "bicycle": 5,
+      "cruise": 28
      },
      "expert_stop": false,
-     "v_min": 3.37,
+     "v_min": 3.6,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -7173,11 +7182,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "bicycle": 57,
-      "vehicle": 14
+      "vehicle": 16,
+      "cruise": 33
      },
-     "expert_stop": true,
-     "v_min": 3.38,
+     "expert_stop": false,
+     "v_min": 4.45,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -7192,11 +7201,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 35,
-      "curve": 26
+      "bicycle": 33,
+      "curve": 34
      },
      "expert_stop": false,
-     "v_min": 4.21,
+     "v_min": 3.12,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -7211,14 +7220,12 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 1,
-      "red_light": 222,
-      "junction_blocked": 55,
+      "red_light": 219,
       "curve": 57
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 25.7,
+     "stood_s": 19.9,
      "needless_s": 0.1,
      "s_first_stop": 950.1
     },
@@ -7232,10 +7239,12 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 57
+      "vehicle": 21,
+      "cruise": 8,
+      "curve": 29
      },
      "expert_stop": false,
-     "v_min": 3.75,
+     "v_min": 3.48,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -7250,14 +7259,15 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 32,
-      "curve": 49
+      "red_light": 188,
+      "junction_blocked": 16,
+      "curve": 65
      },
-     "expert_stop": false,
-     "v_min": 2.66,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 18.3,
+     "needless_s": 0.1,
+     "s_first_stop": 1227.3
     },
     {
      "junction": 9,
@@ -7269,11 +7279,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "bicycle": 5,
-      "curve": 58
+      "bicycle": 60,
+      "curve": 21
      },
      "expert_stop": false,
-     "v_min": 4.1,
+     "v_min": 3.23,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -7291,7 +7301,7 @@
       "curve": 25
      },
      "expert_stop": false,
-     "v_min": 6.23,
+     "v_min": 6.27,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -7306,14 +7316,16 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 57,
-      "cruise": 35
+      "vehicle": 20,
+      "red_light": 153,
+      "junction_blocked": 14,
+      "cruise": 51
      },
-     "expert_stop": false,
-     "v_min": 0.88,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 15.0,
+     "needless_s": 0.1,
+     "s_first_stop": 1671.1
     },
     {
      "junction": 0,
@@ -7343,15 +7355,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 23,
-      "bicycle": 15,
-      "cruise": 18
+      "vehicle": 108,
+      "cruise": 33
      },
-     "expert_stop": false,
-     "v_min": 3.95,
-     "stood_s": 0.0,
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 4.3,
      "needless_s": 0.0,
-     "s_first_stop": null
+     "s_first_stop": 1970.2
     },
     {
      "junction": 2,
@@ -7363,10 +7374,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "curve": 56
+      "curve": 57
      },
      "expert_stop": false,
-     "v_min": 4.13,
+     "v_min": 4.06,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -7381,18 +7392,18 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "vehicle": 39,
-      "junction_blocked": 45,
-      "red_light": 136,
-      "bicycle": 168,
-      "yield": 59,
-      "curve": 41
+      "vehicle": 13,
+      "red_light": 447,
+      "junction_blocked": 140,
+      "curve": 50,
+      "yield": 99,
+      "bicycle": 6
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 37.0,
-     "needless_s": 0.1,
-     "s_first_stop": 2190.3
+     "stood_s": 64.5,
+     "needless_s": 0.2,
+     "s_first_stop": 2190.2
     },
     {
      "junction": 4,
@@ -7404,11 +7415,12 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 16,
-      "cruise": 31
+      "vehicle": 27,
+      "bicycle": 19,
+      "cruise": 14
      },
      "expert_stop": false,
-     "v_min": 5.17,
+     "v_min": 3.52,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -7423,14 +7435,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "red_light": 200,
-      "junction_blocked": 2,
-      "curve": 57
+      "red_light": 137,
+      "bicycle": 26,
+      "curve": 54
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 17.8,
-     "needless_s": 0.1,
+     "stood_s": 12.0,
+     "needless_s": 0.2,
      "s_first_stop": 2457.5
     }
    ]
@@ -7441,15 +7453,15 @@
    "IS": 1.0,
    "DS": 1.0,
    "infractions": [],
-   "time": 674.6,
-   "distance": 2499.0,
+   "time": 572.3,
+   "distance": 2498.9,
    "route_length": 2500.0,
    "off_lane_ratio": 0.0,
    "town": 1019,
    "episode": 9401,
-   "steps": 6746,
-   "wall": 172.95128512382507,
-   "avg_speed": 3.7048506696323535,
+   "steps": 5723,
+   "wall": 170.11993551254272,
+   "avg_speed": 4.366961618079742,
    "weather": "noon",
    "lights_passed": 15,
    "lane_changes": 0,
@@ -7579,11 +7591,12 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "vehicle": 35,
-      "curve": 32
+      "vehicle": 15,
+      "curve": 44,
+      "yield": 5
      },
      "expert_stop": false,
-     "v_min": 3.69,
+     "v_min": 3.7,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -7598,14 +7611,15 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 17,
-      "curve": 50
+      "red_light": 207,
+      "junction_blocked": 61,
+      "curve": 66
      },
-     "expert_stop": false,
-     "v_min": 3.61,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 24.6,
+     "needless_s": 0.1,
+     "s_first_stop": 962.4
     },
     {
      "junction": 2,
@@ -7635,15 +7649,15 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "curve": 51,
-      "yield": 20,
-      "vehicle": 10
+      "curve": 49,
+      "yield": 30,
+      "vehicle": 22
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 0.6,
+     "stood_s": 1.2,
      "needless_s": 0.0,
-     "s_first_stop": 1194.5
+     "s_first_stop": 1194.9
     },
     {
      "junction": 4,
@@ -7655,14 +7669,17 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "vehicle": 48,
-      "curve": 26
+      "red_light": 128,
+      "junction_blocked": 27,
+      "curve": 59,
+      "yield": 32,
+      "vehicle": 11
      },
-     "expert_stop": false,
-     "v_min": 4.16,
-     "stood_s": 0.0,
-     "needless_s": 0.0,
-     "s_first_stop": null
+     "expert_stop": true,
+     "v_min": 0.0,
+     "stood_s": 14.7,
+     "needless_s": 0.2,
+     "s_first_stop": 1292.2
     },
     {
      "junction": 1,
@@ -7674,11 +7691,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 60,
-      "curve": 26
+      "vehicle": 42,
+      "curve": 29
      },
      "expert_stop": false,
-     "v_min": 3.24,
+     "v_min": 3.71,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -7693,11 +7710,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 46,
-      "curve": 25
+      "vehicle": 24,
+      "curve": 36
      },
      "expert_stop": false,
-     "v_min": 3.99,
+     "v_min": 4.13,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -7712,15 +7729,14 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 68,
-      "red_light": 222,
-      "cruise": 48
+      "vehicle": 19,
+      "cruise": 31
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 25.8,
-     "needless_s": 0.1,
-     "s_first_stop": 1636.8
+     "expert_stop": false,
+     "v_min": 3.6,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
     },
     {
      "junction": 8,
@@ -7732,15 +7748,17 @@
      "reached": true,
      "yields": true,
      "expert_reasons": {
-      "vehicle": 64,
-      "junction_blocked": 70,
-      "curve": 23
+      "vehicle": 30,
+      "junction_blocked": 124,
+      "red_light": 272,
+      "curve": 41,
+      "yield": 40
      },
      "expert_stop": true,
      "v_min": 0.0,
-     "stood_s": 6.5,
-     "needless_s": 0.1,
-     "s_first_stop": 1824.5
+     "stood_s": 40.1,
+     "needless_s": 0.2,
+     "s_first_stop": 1825.0
     },
     {
      "junction": 7,
@@ -7752,15 +7770,15 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 4,
-      "red_light": 258,
-      "curve": 69
+      "red_light": 8,
+      "junction_blocked": 11,
+      "curve": 68
      },
-     "expert_stop": true,
-     "v_min": 0.0,
-     "stood_s": 23.9,
-     "needless_s": 0.1,
-     "s_first_stop": 1936.2
+     "expert_stop": false,
+     "v_min": 0.55,
+     "stood_s": 0.0,
+     "needless_s": 0.0,
+     "s_first_stop": null
     },
     {
      "junction": 4,
@@ -7772,10 +7790,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 52
+      "vehicle": 22,
+      "cruise": 32
      },
      "expert_stop": false,
-     "v_min": 5.5,
+     "v_min": 3.64,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -7790,11 +7809,11 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 41,
-      "curve": 25
+      "vehicle": 9,
+      "curve": 45
      },
      "expert_stop": false,
-     "v_min": 3.56,
+     "v_min": 3.85,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -7809,11 +7828,10 @@
      "reached": true,
      "yields": false,
      "expert_reasons": {
-      "vehicle": 25,
-      "curve": 27
+      "curve": 46
      },
      "expert_stop": false,
-     "v_min": 3.2,
+     "v_min": 3.14,
      "stood_s": 0.0,
      "needless_s": 0.0,
      "s_first_stop": null
@@ -7835,7 +7853,7 @@
   "dense": false,
   "renderer": "keisim",
   "keiview_roads": "plain",
-  "out": "/tmp/claude-0/-home-user-keisim/1c9178ca-50d5-5bbf-b7cf-2dd0ead9fce7/scratchpad/eval4/expert_long3c_bk8.json",
+  "out": "/tmp/claude-0/-home-user-keisim/1c9178ca-50d5-5bbf-b7cf-2dd0ead9fce7/scratchpad/eval5/expert_long3c_bk8.json",
   "yield_visible": 0,
   "brake_hold": false,
   "red_hold": false,
@@ -7863,5 +7881,5 @@
   "expert_delay_mode": "speed",
   "only": null
  },
- "time": 1079.0991804599762
+ "time": 1445.3428227901459
 }
