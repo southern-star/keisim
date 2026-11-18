@@ -27,6 +27,9 @@
 #    Memory: ~80k frames, ~2 GB (25 KB a KeiSim frame, 42 KB a KeiView one). MMAP=1 (train.py --mmap) is the way:
 #    without it the old sets are halved as in round 12 until under 21.3 GB.
 # 3. mc14 on the parked suite, round 12's new suites, round 11's curve courses and round 10's town suites
+#    and, after the KeiView part, mc13 again on the three bicycle suites (_bk8): PRs #53 and #55 changed the
+#    expert's and the riders' rules there after round 12 measured them, so mc14 is compared with mc13 on the
+#    same code (KeiSim, 4 workers beside the KeiSim part's 6; the old files are replaced)
 # Written in the cloud (no GPU) and not run end to end: every collect.py command was tried on 200-600 frames (the
 # DAgger ones with keipilot_mc.pt = mc12 on the CPU, the KeiView one on 30 frames with SwiftShader). Every step skips
 # what is already there.
@@ -201,6 +204,13 @@ kv() {
   echo R13_NEW_KV_DONE
   sap keiview
   echo R13_SAPPORO_KV_DONE
+  # mc13 on the bicycle suites again, on this code (its round 12 files predate PRs #53 and #55); the marker in
+  # logs/ lets a restart skip what is redone, as the old files are there already
+  for s in bigjunction_bk8 crosswalks_bk8 crosswalks_sub_bk8; do
+    [ -f logs/r13_mc13_$s.redone ] || { $E13 --suite $s --workers 4 --out runs/eval/${T13}_$s.json &&
+      touch logs/r13_mc13_$s.redone; }
+  done
+  echo R13_BK8_MC13_DONE
 }
 ks() {
   for a in long3c long3d long3e long3f; do ev $a --suite $a --workers 6; ev ${a}_dense --suite $a --dense --workers 6; done
