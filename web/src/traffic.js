@@ -28,7 +28,7 @@
 // counter-clockwise).
 import { heading, pointOn, wrap } from './nav.js';
 import { LC, Path, changeRoom, changeWindow, changedInto, laneHeading, laneMoves, linkMap, pickMove, projectOn } from './lanes.js';
-import { BIKE_LEN, BIKE_W, SINGLE_AHEAD, corridorGap, createBicycles } from './bicycles.js';
+import { BIKE_LEN, BIKE_W, SIGNAL_D, SINGLE_AHEAD, corridorGap, createBicycles } from './bicycles.js';
 import { PK, createParked } from './parked.js';
 
 const TL = { RED: 0, YELLOW: 1, GREEN: 2 };
@@ -225,6 +225,11 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
       const g = c.route.segs[c.seg], nx = c.route.segs[c.seg + 1];
       if (g.kind === 'conn') return g.conn.turn !== 'straight';
       return g.kind === 'lane' && !!nx && nx.kind === 'conn' && nx.conn.turn !== 'straight' && g.s1 - c.s < 12;
+    },
+    leftSignal(c) {                                           // a left turn within SIGNAL_D of its front, or on it
+      const g = c.route.segs[c.seg], nx = c.route.segs[c.seg + 1];
+      if (g.kind === 'conn') return g.conn.turn === 'left';
+      return g.kind === 'lane' && !!nx && nx.kind === 'conn' && nx.conn.turn === 'left' && g.s1 - c.s - c.L / 2 <= SIGNAL_D;
     },
     ahead: (c, d) => c.route.pointAt(c.s + d),
     single: (c, r) => single(c, r),
@@ -978,6 +983,13 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
   }
 
   /** Where the ego will be in 0.6, 1.2 and 1.8 s when it turns at the next junction (for the riders), or null. */
+  /** The ego signals a left turn: its front within SIGNAL_D of the left turn of its next decision, or on it (the riders
+   *  do not come up alongside it on its left; keisim World._ego_left_signal). */
+  function egoLeft(ego, en) {
+    const d = en && en.decision;
+    return !!(ego && d && d.conn && d.conn.turn === 'left' && en.s + EGO.L / 2 >= d.sIn - SIGNAL_D && en.s < d.sOut);
+  }
+
   function egoAhead(ego, en) {
     const d = en && en.decision;
     if (!ego || !d || !d.conn || d.conn.turn === 'straight' || ego.v < 0.5 || en.s < d.sIn - 12 || en.s >= d.sOut) return null;
@@ -1118,7 +1130,7 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
       }
     }
     if (bikes) {
-      bikes.step(dt, t, ego, egoAhead(ego, egoNav));
+      bikes.step(dt, t, ego, egoAhead(ego, egoNav), egoLeft(ego, egoNav));
       // contacts with a bicycle: the ego's (debounced like the cars') and the other cars' (a check on the rules)
       for (const r of bikes.riders) {
         const B = [r.x, r.y, r.yaw, BIKE_LEN / 2, BIKE_W / 2];

@@ -25,6 +25,9 @@ const MARGIN_SINGLE = 1.5;                  // to a car the rider stays behind (
 const EGO_WAIT = 3;                         // a rider and the standing ego beside it: the rider goes after this (s), for 6 s
 export const SINGLE_AHEAD = 0.3;            // the car goes first when its centre is this far ahead of the rider's (m)
 const S0_BIKE = 0.8, S0_CAR = 1.4, T_HEAD = 0.9, LOOK_BACK = 0.6, STUCK_S = 45.0;
+// m: a car signals a left turn from this far before it (道路交通法施行令 21 条: 30 m) until it has turned; a rider does
+// not come up alongside such a car on its left (keisim bicycles.SIGNAL_D)
+export const SIGNAL_D = 30.0;
 const SIG = 0, SIGN = 1, YIELD = 2;
 const PEDAL = 0, COAST = 1, BRAKE = 2;
 const P = 48;                     // points of a rider's lookahead: 24 every 0.5 m, then 24 every 1 m
@@ -113,6 +116,7 @@ function interp(x, xs, ys) {
  */
 export function createBicycles(data, lanes, env, { perKm = 0, seed = 1, max = 60 } = {}) {
   let st = (seed * 2654435761) >>> 0 || 1;
+  let signals = [];                                // the cars signalling a left turn this step (step, move)
   const rnd = () => ((st = (st * 1664525 + 1013904223) >>> 0) / 4294967296);
   const uni = (a, b) => a + (b - a) * rnd();
   const pick = (a) => a[Math.floor(rnd() * a.length)];
@@ -484,6 +488,22 @@ export function createBicycles(data, lanes, env, { perKm = 0, seed = 1, max = 60
       whyStop = whyStop || (vl < 0.5 && lead.gap < v * v / (2 * 0.35) + 3);
       if (v > vl) aReq = Math.min(aReq, -(v * v - vl * vl) / (2 * Math.max(room, 0.05)));
     }
+    // a car on the right signalling a left turn (SIGNAL_D): no coming up alongside it on its left, where its driver
+    // may not see the rider when it turns (巻き込み): the rider stays behind it, and drops back from beside its rear
+    // half. One the rider is level with or ahead of goes on (the car gives way to it). keisim Bicycles.step
+    if (signals.length) {
+      const ux = Math.cos(r.yaw), uy = Math.sin(r.yaw);
+      for (const c of signals) {
+        const dx = c.x - r.x, dy = c.y - r.y, lon = dx * ux + dy * uy, rgt = dx * uy - dy * ux;
+        if (Math.cos(c.yaw - r.yaw) <= 0.7 || lon <= 0 || lon >= 30 || rgt <= 0.3 || rgt >= c.hw + 2.6) continue;
+        const vl = Math.max(c.v, 0), gap = lon - c.hl - BIKE_LEN / 2;
+        if (gap > 0) {
+          const room = Math.max(gap - S0_CAR, 0);
+          vT = Math.min(vT, Math.sqrt(vl * vl + 2 * b * room), vl + room / T_HEAD);
+          if (v > vl) aReq = Math.min(aReq, -(v * v - vl * vl) / (2 * Math.max(room, 0.05)));
+        } else vT = Math.min(vT, Math.max(vl - 1, 0));
+      }
+    }
     // moved out with a junction close: no riding into it side by side - fall in behind whoever is on the left
     if (r.lat > 0.25 && (!onRoad || cat.first - r.u < 14))
       for (const { o, du } of g.lefts) vT = Math.min(vT, Math.max(0, o.v + (du - BIKE_LEN - S0_BIKE) / T_HEAD));
@@ -587,8 +607,13 @@ export function createBicycles(data, lanes, env, { perKm = 0, seed = 1, max = 60
    * One step of dt at town time t, after the cars' (their poses and speeds are this step's). ego: {x, y, yaw, v} or
    * null; egoPred: [[x, y]] where the ego will be shortly when it is about to turn (or nothing).
    */
-  function step(dt, t, ego, egoPred = null) {
+  /** egoLeft: the ego signals a left turn (traffic.js egoLeft; keisim World._ego_left_signal). */
+  function step(dt, t, ego, egoPred = null, egoLeft = false) {
     if (!riders.length) return;
+    // the cars signalling a left turn (SIGNAL_D before it, or on it): the riders stay behind them (move)
+    signals = [];
+    for (const c of env.cars) if (env.leftSignal(c)) signals.push({ x: c.xy[0], y: c.xy[1], yaw: c.yaw, v: c.v, hl: c.L / 2, hw: c.W / 2 });
+    if (ego && egoLeft) signals.push({ x: ego.x, y: ego.y, yaw: ego.yaw, v: ego.v, hl: env.ego.L / 2, hw: env.ego.W / 2 });
     const all = [];
     for (const c of env.cars) {
       carCircles(all, c.xy[0], c.xy[1], c.yaw, c.L, c.W, c.v, c, MARGIN_CAR);
