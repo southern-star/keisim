@@ -267,6 +267,11 @@ def test_right_turn_gap_acceptance():
     assert not tr.must_yield(conn, t_green, {pred: [car(L - 8.0, 0.0, b, ego=True, waits=True), car(L - 16.0, 0.0, b)]})
     assert not tr.must_yield(conn, t_green, {b: [car(s2 - 8.0, 0.0, ego=True, waits=True), car(s2 - 15.0, 0.0)]})
     assert tr.must_yield(conn, t_green, {b: [car(s2 - 2.0, 0.0, ego=True, waits=True)]})
+    # an NPC standing for a car its body would touch (TrafficConfig.npc_sweep, sweep_wait) does not come, even
+    # inside the crossing, and neither do the cars queued behind it on b and on the lane before it
+    assert not tr.must_yield(conn, t_green, {b: [car(s2 - 2.0, 0.0, waits=True), car(s2 - 9.0, 0.0)],
+                                             pred: [car(L - 4.0, 2.0, b)]})
+    assert tr.must_yield(conn, t_green, {b: [car(s2 - 2.0, 0.0)], pred: [car(L - 4.0, 2.0, b)]})
     t_red = next(t for t in np.arange(0, J.cycle, 0.1) if town.signal_state_for_lane(pred, t) != TL_GREEN
                  and town.signal_state_for_lane(pred, t + 3.0) != TL_GREEN)
     assert not tr.must_yield(conn, t_red, tables(L - 25.0, 6.0))          # stops at its red line
