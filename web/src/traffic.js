@@ -209,6 +209,7 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
   const truckLen = truckRoadLanes.reduce((a, L) => a + L.len, 0);
   const cars = [];
   let contacts = 0, lastContact = -1e9, npcContacts = 0, stopSignStops = 0, laneChanges = 0, rampPassages = 0;
+  let sweepHolds = 0;                                         // cars that stopped for a car their body would touch
   const touching = new Set();
   // parked cars (src/parked.js; off: null, and nothing else in here changes): who passes which group (c.pkGo), the
   // convoys (group -> cars set off in it), the groups the ego is out round, contacts with them, passes (tests)
@@ -1169,7 +1170,9 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
       c.v = Math.max(0, c.v + acc * dt);
       c.s += c.v * dt;
       c.stuck = c.v < 0.1 ? c.stuck + dt : 0;
-      c.sweepWait = ld.swept && c.v < 0.1;                   // standing for a car its body would touch: minArrival
+      const held = ld.swept && c.v < 0.1;                    // standing for a car its body would touch: minArrival
+      if (held && !c.sweepWait) sweepHolds++;
+      c.sweepWait = held;
     }
     for (const c of cars) c.leadId = c.leadNext;              // (the leaders of this step, for the next one's sweep)
     for (const c of cars) {
@@ -1263,7 +1266,7 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
       pkContacts = 0; npcPkContacts = 0; lastPkContact = -1e9; pkPasses = 0; pkFollows = 0; bikePkContacts = 0;
     }
     spawn(ego);
-    contacts = 0; npcContacts = 0; stopSignStops = 0; laneChanges = 0; rampPassages = 0; touching.clear();
+    contacts = 0; npcContacts = 0; stopSignStops = 0; laneChanges = 0; rampPassages = 0; sweepHolds = 0; touching.clear();
     if (bikes) { bikes.reset(ego); lastOcc = null; bikeContacts = 0; carBikeContacts = 0; lastBikeContact = -1e9; bikeTouching.clear(); }
   }
 
@@ -1273,6 +1276,7 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
     get bikes() { return bikes ? bikes.n : 0; }, get bikeContacts() { return bikeContacts; },
     get carBikeContacts() { return carBikeContacts; }, riders: bikes ? bikes.riders : [],
     get contacts() { return contacts; }, get npcContacts() { return npcContacts; }, get n() { return cars.length; },
+    get sweepHolds() { return sweepHolds; },
     get stopSignStops() { return stopSignStops; },             // full stops at 止まれ lines (tests)
     // parked cars (option parked): how many stand, the ego's contacts with one and the other cars' (tests), passes
     // over the centre line begun (pkPasses: the first of a convoy, pkFollows: following one), cars out round one now

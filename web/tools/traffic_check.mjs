@@ -219,6 +219,7 @@ for (const c of traffic.cars) h.update(`${c.id}:${c.xy[0].toFixed(4)},${c.xy[1].
 console.log(`contacts ${traffic.contacts} (ego) / ${traffic.npcContacts} (between cars)` +
   `${traffic.laneChanges !== undefined ? `, lane changes ${traffic.laneChanges}, ramp passages ${traffic.rampPassages}` : ''}` +
   `${useEgo ? `, ego lane changes ${egoChanges.size}` : ''}`);
+if (args.sweep !== '0') console.log(`cars that stopped for a standing car their body would touch on a turn: ${traffic.sweepHolds}`);
 console.log(`ego route: ${nav.changes().length} lane changes, ${nav.changes().filter((c) => c.ramp).length / 2} ramps planned`);
 if (nParked) {
   console.log(`parked cars ${traffic.parked}: passes over the centre line ${traffic.pkPasses} (first of a convoy) + ${traffic.pkFollows} (following one), ` +
