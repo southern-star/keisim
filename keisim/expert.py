@@ -19,7 +19,7 @@ from .parked import (PARKED_OWNER, PK_CLEAR, PK_DECIDE, PK_GAP0, PK_GIVE_ROOM, P
 from .route import LC_CHECK, LC_PUSH, LC_PUSH_TO, change_room, link_map
 from .traffic import (BIKE_END, BIKE_FREE, BIKE_IN, BIKE_KEEP, BIKE_LEFT, BIKE_LEFT_WAIT, BIKE_MIN, BIKE_OUT,
                       BIKE_PASS_DV, BIKE_PASS_V, CW_MARGIN, CW_REACH, PASS_SPEED, YIELD_GAP, Traffic, corridor_gaps,
-                      vehicle_circles)
+                      sweep_gaps, vehicle_circles)
 
 PATH_S = np.arange(1, 11) * 2.0          # label waypoints every 2 m up to 20 m
 LABEL_VERSION = 7                        # 3: yellow per traffic law; 4: at yellow, stop whenever the ego still can;
@@ -609,6 +609,13 @@ class Expert:
                                             np.array([[ego.x, ego.y]]), np.array([ego.yaw]), np.array([hl]),
                                             np.array([ego.WIDTH / 2]), cxy, cr, cow, csp, cyw,
                                             np.array([-1]), cmg[None, :])
+        if tr.cfg.npc_sweep and tr.n:   # as the NPCs (TrafficConfig.npc_sweep): the corners of its body on a turn
+            g_s, v_s, o_s = sweep_gaps(pts[None], cum[None], np.ones((1, len(pts)), bool),
+                                       route.curvature_at(sp)[None], np.array([[ego.x, ego.y]]), np.array([ego.yaw]),
+                                       np.array([hl]), np.array([ego.WIDTH / 2]), cxy, cr, cow, csp, cyw,
+                                       np.array([-1]), cmg[None, :])
+            if g_s[0] < gap[0]:
+                gap, lead_v, lead_o = g_s, v_s, o_s
         g = float(gap[0])
         if np.isfinite(g):
             g0 = self.GAP0_PED if lead_o[0] <= -2 else self.GAP0_VEH

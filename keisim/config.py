@@ -167,6 +167,15 @@ class TrafficConfig:
     # does. With light_past_line alone it held for the ego standing in the junction to turn right while the ego waited
     # for it (twophase 1019/9800 with crosswalks: for good). Off: light_past_line as before (round 10's data).
     past_line_light_only: bool = False
+    # The corners of an NPC's body on a turn (traffic.sweep_gaps): besides the tube along its path (its half width
+    # round each point), an NPC places its box on the path at each point out to SWEEP_AHEAD along the path's heading,
+    # and stops for the standing cars (the ego and other NPCs) that box would touch. On a sharp turn a long car's
+    # front corner swings out past the tube (bigjunction 3009/9801: a 6.9 m truck turning left drove its corner into
+    # the ego standing at its right turn). A car standing for one is not waited for by the give-way (min_arrival,
+    # sweep_wait: the right turn waiting at its wait point in a left turn's way goes first), and the expert places
+    # its own box the same way (it then passes such a car without touching it). Off by default: the old evaluations
+    # stay reproducible.
+    npc_sweep: bool = False
     # Crosswalks at signals (Town.ped_crossings: the zebras at the ends of the roads of two-phase signalised junctions).
     # crosswalks: the chance that a person walking up to such an end crosses there: they wait at the kerb for the
     # pedestrian green (the green of the cars crossing that road's flow, minus ped_flash s of flashing) and walk over

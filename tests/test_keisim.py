@@ -267,6 +267,11 @@ def test_right_turn_gap_acceptance():
     assert not tr.must_yield(conn, t_green, {pred: [car(L - 8.0, 0.0, b, ego=True, waits=True), car(L - 16.0, 0.0, b)]})
     assert not tr.must_yield(conn, t_green, {b: [car(s2 - 8.0, 0.0, ego=True, waits=True), car(s2 - 15.0, 0.0)]})
     assert tr.must_yield(conn, t_green, {b: [car(s2 - 2.0, 0.0, ego=True, waits=True)]})
+    # an NPC standing for a car its body would touch (TrafficConfig.npc_sweep, sweep_wait) does not come, even
+    # inside the crossing, and neither do the cars queued behind it on b and on the lane before it
+    assert not tr.must_yield(conn, t_green, {b: [car(s2 - 2.0, 0.0, waits=True), car(s2 - 9.0, 0.0)],
+                                             pred: [car(L - 4.0, 2.0, b)]})
+    assert tr.must_yield(conn, t_green, {b: [car(s2 - 2.0, 0.0)], pred: [car(L - 4.0, 2.0, b)]})
     t_red = next(t for t in np.arange(0, J.cycle, 0.1) if town.signal_state_for_lane(pred, t) != TL_GREEN
                  and town.signal_state_for_lane(pred, t + 3.0) != TL_GREEN)
     assert not tr.must_yield(conn, t_red, tables(L - 25.0, 6.0))          # stops at its red line
@@ -2207,3 +2212,39 @@ def test_action_delay():
     assert [v(float(k)) for k in range(1, 7)] == [0.0, 0.0, 0.0, 0.0, 1.0, 2.0]
     a = np.array([0.3, 0.2, 0.0])
     assert Delay(0, 0.0)(a) is a
+
+
+def test_npc_sweep_sees_the_corner_of_a_turn():
+    """TrafficConfig.npc_sweep (traffic.sweep_gaps): a long car turning sharply sees a car standing where its front
+    corner swings out past the tube along its path (bigjunction 3009/9801), and on a straight path it adds nothing
+    to the tube (corridor_gaps)."""
+    import math
+
+    from keisim.traffic import SWEEP_CORNER, corridor_gaps, sweep_gaps, vehicle_circles
+    hl, hw = np.array([3.45]), np.array([1.08])             # a 6.9 m x 2.15 m truck
+    R = 7.0                                                 # turning left round (0, R)
+    a = np.linspace(0.0, math.pi / 2, 12)
+    turn = np.stack([R * np.sin(a), R - R * np.cos(a)], -1)
+    pts = np.concatenate([turn, turn[-1] + np.outer(np.arange(1, 37) * 1.0, [0.0, 1.0])])[None]
+    cum = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(pts[0], axis=0).T))])[None]
+    valid = cum <= 30.0
+    curv = np.where(np.arange(pts.shape[1]) < 12, 1.0 / R, 0.0)[None]
+    origin, heading = pts[:, 0], np.zeros(1)
+    # a car standing outside the bend, 45 degrees round: clear of the tube, in the way of the truck's front corner
+    p = np.array([(R + 2.6) * math.sin(math.pi / 4), R - (R + 2.6) * math.cos(math.pi / 4)])
+    cxy, cr, cow = vehicle_circles(p[None], np.array([math.pi / 4]), np.array([4.4]), np.array([1.7]))
+    cow = np.full(len(cxy), -1)
+    obs = (cxy, cr, cow, np.zeros(len(cxy)), np.full(len(cxy), math.pi / 4))
+    tube = corridor_gaps(pts, cum, valid, origin, heading, hl, hw, *obs, np.array([0]), 0.35)
+    assert not np.isfinite(tube[0][0])
+    g, v, o = sweep_gaps(pts, cum, valid, curv, origin, heading, hl, hw, *obs, np.array([0]), 0.35)
+    assert 0.0 < g[0] < 5.0 and o[0] == -1 and v[0] == 0.0
+    # the same car beside a straight path at the same distance from it: nothing new
+    straight = np.stack([np.arange(48) * 1.0, np.zeros(48)], -1)[None]
+    cum_s = np.arange(48)[None] * 1.0
+    q = np.array([[6.0, -(hw[0] + cr[0] * SWEEP_CORNER + 0.05)]])
+    cxy2, cr2, _ = vehicle_circles(q, np.zeros(1), np.array([1.7]), np.array([1.7]))
+    obs2 = (cxy2, cr2, np.full(len(cxy2), -1), np.zeros(len(cxy2)), np.zeros(len(cxy2)))
+    g2, _, _ = sweep_gaps(straight, cum_s, cum_s <= 30.0, np.zeros((1, 48)), straight[:, 0], heading, hl, hw, *obs2,
+                          np.array([0]), 0.35)
+    assert not np.isfinite(g2[0])
