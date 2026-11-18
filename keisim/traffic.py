@@ -912,16 +912,20 @@ class Traffic:
         lookback = town.yield_lookback and not town.junctions[conn.junction].signalized
         for b, _, s2 in (conn.yields if yields is None else yields):
             vmax = 1.05 * lanes[b].speed_limit
+            held = False                                        # an NPC on b stands for a car its body would touch
             for s, v, L, ego, *_, waits in on_lane.get(b, ()):
                 d = s2 - (s + L / 2)
                 if waits and (d >= 3.0 or not ego):
-                    break                                       # the ego waits (an NPC: for a car its body would touch,
-                    #                                             sweep_wait), and the cars behind it queue behind it
+                    held = not ego                              # (sweep_wait): it and the cars on b and pred behind it
+                    break                                       # do not come; the ego waits, and the cars behind it
+                    #                                             queue behind it
                 if s - L / 2 > s2 + 1.5 or (moving_only and v < 0.5):
                     continue                                    # its rear is past the crossing (or it waits)
                 best = min(best, 0.0 if d < 3.0 else self._arrival(d, v, vmax, ego))
             if self.bikes is not None:
                 best = min(best, self._bike_arrival(b, s2, t, on_lane, moving_only))
+            if held:
+                continue
             pred = lanes[b].pred[0]
             # a car standing at the entry of one of pred's other connectors blocks the whole approach lane
             if any(e[1] < 0.5 and e[0] < 4.0 for c in lanes[pred].succ if c != b for e in on_lane.get(c, ())):
