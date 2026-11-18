@@ -160,6 +160,9 @@ SWEEP_CORNER = math.sqrt(2.0) / 1.05    # ... and a car's circle (vehicle_circle
 #                             this to reach the corners of its box
 SWEEP_MIN = 0.05            # m: ... for the cars whose front corner swings out more than this on their path's sharpest
 #                             bend within SWEEP_AHEAD (half_len^2 x curvature / 2)
+SWEEP_STAND = 0.5           # m/s: ... against the cars standing (slower than this): a moving one is left to the give-way
+#                             rules (an NPC turning left that stopped for the ego still coming up to its right turn's
+#                             wait point broke them: the ego, no longer waiting for it, drove into its nose)
 YIELD_GAP = 5.0             # s: a yielding turn goes only if no car with priority reaches the crossing sooner
 LC_GIVE_UP = 8.0            # s: an NPC waiting this long at the end of its lane change window stays in its lane (two
                             # cars side by side that want each other's lane would wait for ever)
@@ -310,8 +313,9 @@ def sweep_gaps(paths, cum, valid, curv, origin, heading, half_len, half_w, cxy, 
     point along the path's heading there: on a sharp turn a long car's front corner swings out past the tube by about
     half_len^2 / (2 R) (bigjunction 3009/9801: a 6.9 m truck turning left hit the front corner of the ego, standing
     at its right turn; the tube missed the ego by 0.4-0.7 m). Only the cars whose path turns that sharply (by more
-    than SWEEP_MIN) within SWEEP_AHEAD are tested, and only against the circles of cars (owners -1 .. PARKED_OWNER - 1:
-    the ego and the NPCs) that the tube misses there, each grown to the corners of its own box (SWEEP_CORNER).
+    than SWEEP_MIN) within SWEEP_AHEAD are tested, and only against the circles of standing cars (owners -1 ..
+    PARKED_OWNER - 1: the ego and the NPCs, slower than SWEEP_STAND) that the tube misses there, each grown to the
+    corners of its own box (SWEEP_CORNER).
     On straight paths the box is inside the tube. Arguments as for corridor_gaps, and curv (K, P), the path's
     curvature at each point; returns gap (K,), the distance the car's centre can go along the path before its box
     touches a circle (inf: none), lead_speed (K,) and lead_owner (K,) (-1 if none)."""
@@ -319,7 +323,7 @@ def sweep_gaps(paths, cum, valid, curv, origin, heading, half_len, half_w, cxy, 
     gap = np.full(K, np.inf)
     lead_v = np.zeros(K)
     lead_o = np.full(K, -1)
-    car = (cowner >= -1) & (cowner < PARKED_OWNER)
+    car = (cowner >= -1) & (cowner < PARKED_OWNER) & (np.abs(cspeed) < SWEEP_STAND)
     if K == 0 or not car.any():
         return gap, lead_v, lead_o
     win = valid & (cum <= SWEEP_AHEAD)
