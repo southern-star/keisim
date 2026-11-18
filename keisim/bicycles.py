@@ -465,7 +465,8 @@ class Bicycles:
         town, cfg = self.town, self.cfg
         lanes = town.lanes
         P = self.P
-        # ---- the cars signalling a left turn (SIGNAL_D before it, or on it): x, y, yaw, v, half length, half width
+        # ---- the cars signalling a left turn (SIGNAL_D before it, or on it): x, y, yaw, v, half length, half width,
+        # 1 for the ego
         sig = []
         tr = traffic
         for c in range(tr.n):
@@ -478,10 +479,10 @@ class Bicycles:
                 on = nx is not None and nx.kind == "conn" and nx.turn == "left" and \
                     cur_c.length - float(tr.s[c]) - float(tr.dims[c, 0]) / 2 <= SIGNAL_D
             if on:
-                sig.append((tr.xy[c, 0], tr.xy[c, 1], tr.yaw[c], tr.v[c], tr.dims[c, 0] / 2, tr.dims[c, 1] / 2))
+                sig.append((tr.xy[c, 0], tr.xy[c, 1], tr.yaw[c], tr.v[c], tr.dims[c, 0] / 2, tr.dims[c, 1] / 2, 0.0))
         if ego_left and ego_dims is not None:
-            sig.append((ego_xy[0], ego_xy[1], ego_yaw, ego_v, ego_dims[0] / 2, ego_dims[1] / 2))
-        sig = np.array(sig, float).reshape(-1, 6)
+            sig.append((ego_xy[0], ego_xy[1], ego_yaw, ego_v, ego_dims[0] / 2, ego_dims[1] / 2, 1.0))
+        sig = np.array(sig, float).reshape(-1, 7)
         # ---- lookahead paths: along the home line and moved out
         cats = [self._cat_of(i) for i in range(n)]
         idx = np.concatenate([np.arange(24), 24 + 2 * np.arange(P - 24)])
@@ -704,9 +705,10 @@ class Bicycles:
                     a_req = min(a_req, -(v * v - vl * vl) / (2.0 * max(room, 0.05)))
             # a car on the right signalling a left turn (SIGNAL_D): no coming up alongside it on its left, where its
             # driver may not see the rider when it turns (巻き込み): the rider stays behind it, and drops back from
-            # beside its rear half while it moves. One the rider is level with or ahead of goes on, and so does one
-            # beside a standing one (the car gives way to it; dropping back from a standing car is standing for good
-            # beside it, the car waiting for the rider: web/ town 1018 seed 9)
+            # beside its rear half. One the rider is level with or ahead of goes on, and so does one beside a standing
+            # car that is not the ego (the car gives way to it; dropping back from a standing car is standing for
+            # good beside it, the car waiting for the rider: web/ town 1018 seed 9). The ego may not wait for a rider
+            # it does not see: beside it the rider stays back, standing too, until it has gone
             if len(sig):
                 ub_i = np.array([math.cos(self.yaw[i]), math.sin(self.yaw[i])])
                 dd = sig[:, :2] - self.xy[i]
@@ -721,7 +723,7 @@ class Bicycles:
                         v_t = min(v_t, math.sqrt(vl * vl + 2.0 * b * room), vl + room / T_HEAD)
                         if v > vl:
                             a_req = min(a_req, -(v * v - vl * vl) / (2.0 * max(room, 0.05)))
-                    elif vl > 0.5:
+                    elif vl > 0.5 or sig[c, 6]:
                         v_t = min(v_t, vl - 1.0 if vl > 1.0 else 0.0)
             # moved out with a junction close: no riding into it side by side (the two may part there, one across
             # the other) - the rider falls in behind whoever on its left it has not passed
