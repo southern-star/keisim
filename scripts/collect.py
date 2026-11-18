@@ -360,6 +360,7 @@ def worker(wid, args, quota, out_dir, counter):
     cfg.traffic.ego_patience_s = args.ego_patience
     cfg.traffic.light_past_line = args.npc_past_line >= 1
     cfg.traffic.past_line_light_only = args.npc_past_line >= 2
+    cfg.traffic.npc_sweep = bool(args.npc_sweep)
     cfg.traffic.crosswalks = args.crosswalks
     if args.crosswalk_spawn is not None:
         cfg.traffic.crosswalk_spawn = args.crosswalk_spawn
@@ -627,6 +628,9 @@ def parse_args(argv=None):
     ap.add_argument("--npc_past_line", type=int, default=0, choices=[0, 1, 2],
                     help="1: NPCs standing a little past their stop line still obey its light "
                          "(TrafficConfig.light_past_line); 2: and only its light (past_line_light_only)")
+    ap.add_argument("--npc_sweep", type=int, default=0, choices=[0, 1],
+                    help="1: NPCs also place their body (a box) along their path, so the corners of a long car on a "
+                         "turn see the cars there (TrafficConfig.npc_sweep)")
     ap.add_argument("--crosswalks", type=float, default=0.0,
                     help="crosswalks at signals (TrafficConfig.crosswalks): the chance that a person at a two-phase "
                          "signal's road end crosses on the zebra with the pedestrian light; turning cars give way")
@@ -716,6 +720,7 @@ def main():
                **({"expert_wait_back": args.expert_wait_back} if args.expert_wait_back else {}),
                **({"ego_patience": args.ego_patience} if args.ego_patience else {}),
                **({"npc_past_line": args.npc_past_line} if args.npc_past_line else {}),
+               **({"npc_sweep": 1} if args.npc_sweep else {}),
                **({"crosswalks": args.crosswalks} if args.crosswalks > 0 else {}),
                **({"crosswalk_spawn": args.crosswalk_spawn} if args.crosswalk_spawn is not None else {}),
                **({"focus_crosswalk": args.focus_crosswalk} if args.focus_crosswalk > 0 else {}),

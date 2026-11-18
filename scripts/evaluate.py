@@ -153,6 +153,7 @@ def run_route(job):
     cfg.traffic.ego_patience_s = float(args.get("ego_patience", 0.0))
     cfg.traffic.light_past_line = int(args.get("npc_past_line", 0)) >= 1
     cfg.traffic.past_line_light_only = int(args.get("npc_past_line", 0)) >= 2
+    cfg.traffic.npc_sweep = bool(args.get("npc_sweep", False))
     cfg.traffic.crosswalks = float(args.get("crosswalks", 0.0))
     cfg.traffic.bicycles = float(args.get("bicycles", 0.0))
     cfg.traffic.parked = float(args.get("parked", 0.0))
@@ -482,6 +483,9 @@ def main():
                     help="1: NPCs standing a little past their stop line still obey its light "
                          "(TrafficConfig.light_past_line); 2: and only its light (past_line_light_only; the _bk8 "
                          "suites). Suffix _npcline / _npcline2 where it differs from the suite's")
+    ap.add_argument("--npc_sweep", type=int, default=None, choices=[0, 1],
+                    help="1: NPCs also place their body (a box) along their path, so the corners of a long car on a "
+                         "turn see the cars there (TrafficConfig.npc_sweep); suffix _nsw")
     ap.add_argument("--crosswalks", type=float, default=None,
                     help="crosswalks at signals: the chance that a person at a two-phase signal's road end crosses on "
                          "the zebra with the pedestrian light; turning cars give way (TrafficConfig.crosswalks; "
@@ -531,10 +535,11 @@ def main():
         args.suite = "osm"
     dflt = {"route_length": 600.0, "max_steps": 4000, "town_style": "classic", "jam_fixes": 0, "blocked_timeout": 90.0,
             "via_ramp": 0, "crosswalks": 0.0, "bicycles": 0.0, "bike_visible": 0, "npc_past_line": 0, "bike_sweep": 0,
+            "npc_sweep": 0,
             "parked": 0.0, "dart_out": 0.0, "cap_scale": 0, **SUITE_DEFAULTS.get(args.suite, {})}
     suite_style, suite_fixes, suite_timeout = dflt["town_style"], int(dflt["jam_fixes"]), dflt["blocked_timeout"]
     suite_cw, suite_bk, suite_bv = float(dflt["crosswalks"]), float(dflt["bicycles"]), int(dflt["bike_visible"])
-    suite_npc, suite_bs = int(dflt["npc_past_line"]), int(dflt["bike_sweep"])
+    suite_npc, suite_bs, suite_nsw = int(dflt["npc_past_line"]), int(dflt["bike_sweep"]), int(dflt["npc_sweep"])
     suite_pk, suite_do, suite_cap = float(dflt["parked"]), float(dflt["dart_out"]), int(dflt["cap_scale"])
     for k, v in dflt.items():
         if getattr(args, k) is None:
@@ -572,6 +577,7 @@ def main():
         ("" if args.blocked_timeout == suite_timeout else f"_wait{args.blocked_timeout:.0f}") + \
         (f"_pat{args.ego_patience:g}" if args.ego_patience else "") + \
         ("" if int(args.npc_past_line) == suite_npc else ({0: "_nonpcline", 1: "_npcline", 2: "_npcline2"}[int(args.npc_past_line)])) + \
+        ("" if int(args.npc_sweep) == suite_nsw else ("_nsw" if args.npc_sweep else "_nonsw")) + \
         ("" if args.crosswalks == suite_cw else f"_cw{args.crosswalks:g}") + \
         ("" if args.bicycles == suite_bk else f"_bk{args.bicycles:g}") + \
         ("" if int(args.bike_visible) == suite_bv else ("_bv" if args.bike_visible else "_nobv")) + \
@@ -595,7 +601,8 @@ def main():
          "red_hold": args.red_hold, "town_style": args.town_style, "jam_fixes": bool(args.jam_fixes),
          "blocked_timeout": args.blocked_timeout, "osm_bbox": args.osm_bbox, "yield_visible": bool(args.yield_visible),
          "rig": args.rig, "ego_patience": args.ego_patience, "via_ramp": bool(args.via_ramp),
-         "npc_past_line": int(args.npc_past_line), "crosswalks": args.crosswalks, "bicycles": args.bicycles,
+         "npc_past_line": int(args.npc_past_line), "npc_sweep": bool(args.npc_sweep), "crosswalks": args.crosswalks,
+         "bicycles": args.bicycles,
          "bike_visible": bool(args.bike_visible), "bike_sweep": bool(args.bike_sweep), "parked": args.parked,
          "dart_out": args.dart_out, "cap_scale": int(args.cap_scale),
          **({"expert_wait_back": args.expert_wait_back} if args.expert_wait_back else {}),
