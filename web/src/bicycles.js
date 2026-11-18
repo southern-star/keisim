@@ -490,7 +490,9 @@ export function createBicycles(data, lanes, env, { perKm = 0, seed = 1, max = 60
     }
     // a car on the right signalling a left turn (SIGNAL_D): no coming up alongside it on its left, where its driver
     // may not see the rider when it turns (巻き込み): the rider stays behind it, and drops back from beside its rear
-    // half. One the rider is level with or ahead of goes on (the car gives way to it). keisim Bicycles.step
+    // half while it moves. One the rider is level with or ahead of goes on, and so does one beside a standing one
+    // (the car gives way to it; dropping back from a standing car is standing beside it for good, the car waiting
+    // for the rider: town 1018 seed 9). keisim Bicycles.step
     if (signals.length) {
       const ux = Math.cos(r.yaw), uy = Math.sin(r.yaw);
       for (const c of signals) {
@@ -501,7 +503,7 @@ export function createBicycles(data, lanes, env, { perKm = 0, seed = 1, max = 60
           const room = Math.max(gap - S0_CAR, 0);
           vT = Math.min(vT, Math.sqrt(vl * vl + 2 * b * room), vl + room / T_HEAD);
           if (v > vl) aReq = Math.min(aReq, -(v * v - vl * vl) / (2 * Math.max(room, 0.05)));
-        } else vT = Math.min(vT, Math.max(vl - 1, 0));
+        } else if (vl > 0.5) vT = Math.min(vT, vl > 1 ? vl - 1 : 0);
       }
     }
     // moved out with a junction close: no riding into it side by side - fall in behind whoever is on the left

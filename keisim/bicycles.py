@@ -704,7 +704,9 @@ class Bicycles:
                     a_req = min(a_req, -(v * v - vl * vl) / (2.0 * max(room, 0.05)))
             # a car on the right signalling a left turn (SIGNAL_D): no coming up alongside it on its left, where its
             # driver may not see the rider when it turns (巻き込み): the rider stays behind it, and drops back from
-            # beside its rear half. One the rider is level with or ahead of goes on (the car gives way to it)
+            # beside its rear half while it moves. One the rider is level with or ahead of goes on, and so does one
+            # beside a standing one (the car gives way to it; dropping back from a standing car is standing for good
+            # beside it, the car waiting for the rider: web/ town 1018 seed 9)
             if len(sig):
                 ub_i = np.array([math.cos(self.yaw[i]), math.sin(self.yaw[i])])
                 dd = sig[:, :2] - self.xy[i]
@@ -719,8 +721,8 @@ class Bicycles:
                         v_t = min(v_t, math.sqrt(vl * vl + 2.0 * b * room), vl + room / T_HEAD)
                         if v > vl:
                             a_req = min(a_req, -(v * v - vl * vl) / (2.0 * max(room, 0.05)))
-                    else:
-                        v_t = min(v_t, max(vl - 1.0, 0.0))
+                    elif vl > 0.5:
+                        v_t = min(v_t, vl - 1.0 if vl > 1.0 else 0.0)
             # moved out with a junction close: no riding into it side by side (the two may part there, one across
             # the other) - the rider falls in behind whoever on its left it has not passed
             if self.lat[i] > 0.25 and (cur.kind != "road" or cat.first - u < 14.0):
