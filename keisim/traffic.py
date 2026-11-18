@@ -360,7 +360,9 @@ def sweep_gaps(paths, cum, valid, curv, origin, heading, half_len, half_w, cxy, 
     x = (diff * tk).sum(-1)
     y = diff[..., 1] * tk[..., 0] - diff[..., 0] * tk[..., 1]
     rc = (cr[ms] * SWEEP_CORNER)[:, None]
-    f = np.maximum(np.abs(x) - (half_len[ks][:, None] + rc), np.abs(y) - (half_w[ks][:, None] + rc))
+    ox = np.abs(x) - half_len[ks][:, None]                      # how far the circle's centre is out of the box
+    oy = np.abs(y) - half_w[ks][:, None]
+    f = np.where((ox > 0.0) | (oy > 0.0), np.hypot(np.maximum(ox, 0.0), np.maximum(oy, 0.0)), np.maximum(ox, oy)) - rc
     inside = valid[ks] & (f < 0.0)
     hit = inside.any(1)
     if not hit.any():
@@ -415,6 +417,7 @@ class Traffic:
         self.lead_gap = np.zeros(0)          # each car's first obstacle in its corridor at the last step: gap (m,
         self.lead_owner = np.zeros(0, int)   # inf: none) and whose (>= 0 a car, PARKED_OWNER + k a parked one, -1 the
                                              # ego, <= -2 a person)
+        self.sweep_wait = np.zeros(0, bool)  # TrafficConfig.npc_sweep: standing for a car its body would touch
         self.target_n = n
         self.has_yields = any(getattr(l, "yields", None) for l in town.lanes)
         self.has_lc = any(getattr(l, "links", None) for l in town.lanes)    # multi-lane roads, ramps: lane changes
@@ -843,13 +846,16 @@ class Traffic:
         visible: (n,) bool, only these NPCs are listed (see visible_from).
         With bicycles: ("bike", lane) -> their rows (Bicycles.add_to_tables; bikes_visible: only these of them)."""
         on_lane = {}
+        sw = getattr(self, "sweep_wait", ())
+        sw = sw if len(sw) == self.n else np.zeros(self.n, bool)
         for j in range(self.n):
             if visible is not None and not visible[j]:
                 continue
             r, k = self.route[j], self.ri[j]
             on_lane.setdefault(r[k], []).append((float(self.s[j]), float(self.v[j]), float(self.dims[j, 0]), False,
                                                  r[k + 1] if k + 1 < len(r) else None,
-                                                 r[k + 2] if k + 2 < len(r) else None, False))
+                                                 r[k + 2] if k + 2 < len(r) else None,
+                                                 bool(sw[j])))
         if ego_info is not None:
             lid, s, nxt, v, L, *more = ego_info
             on_lane.setdefault(lid, []).append((s, v, L, True, nxt, more[0] if more else None,
@@ -908,8 +914,9 @@ class Traffic:
             vmax = 1.05 * lanes[b].speed_limit
             for s, v, L, ego, *_, waits in on_lane.get(b, ()):
                 d = s2 - (s + L / 2)
-                if waits and d >= 3.0:
-                    break                                       # the ego waits, and the cars behind it queue behind it
+                if waits and (d >= 3.0 or not ego):
+                    break                                       # the ego waits (an NPC: for a car its body would touch,
+                    #                                             sweep_wait), and the cars behind it queue behind it
                 if s - L / 2 > s2 + 1.5 or (moving_only and v < 0.5):
                     continue                                    # its rear is past the crossing (or it waits)
                 best = min(best, 0.0 if d < 3.0 else self._arrival(d, v, vmax, ego))
@@ -1231,13 +1238,14 @@ class Traffic:
         margin = margin[None, :]
         gap, lead_v, lead_o = corridor_gaps(paths, relc, valid, self.xy, self.yaw, hl, self.dims[:, 1] / 2,
                                             cxy, cr, cow, csp, cyw, np.arange(n), margin)
+        swept = None
         if cfg.npc_sweep:           # the corners of the body on a turn: the cars the tube misses (sweep_gaps)
             g_s, v_s, o_s = sweep_gaps(paths, relc, valid, curv, self.xy, self.yaw, hl, self.dims[:, 1] / 2,
                                        cxy, cr, cow, csp, cyw, np.arange(n), margin)
-            closer = g_s < gap
-            gap = np.where(closer, g_s, gap)
-            lead_v = np.where(closer, v_s, lead_v)
-            lead_o = np.where(closer, o_s, lead_o)
+            swept = g_s < gap
+            gap = np.where(swept, g_s, gap)
+            lead_v = np.where(swept, v_s, lead_v)
+            lead_o = np.where(swept, o_s, lead_o)
         self.lead_gap, self.lead_owner = gap, lead_o      # kept for evaluate.py's standoffs only
         if pass_xy is not None and len(pass_xy):    # slow down to pass people walking beside the lane
             m = len(pass_xy)
@@ -1306,6 +1314,8 @@ class Traffic:
             self.xy[:, 1] -= np.cos(self.yaw) * side
             self.yaw = self.yaw - dyaw
         self.stuck = np.where(self.v < 0.1, self.stuck + dt, 0.0)
+        if swept is not None:       # standing for a car its body would touch: it does not come (min_arrival)
+            self.sweep_wait = swept & (self.v < 0.1)
         self.release_stuck(ego_xy, ego_yaw)
 
     def _integrate_shift(self, target, dt, swing=None):
