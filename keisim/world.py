@@ -5,7 +5,7 @@ import math
 
 import numpy as np
 
-from .bicycles import BIKE_LEN, BIKE_R, BIKE_W
+from .bicycles import BIKE_LEN, BIKE_R, BIKE_W, SIGNAL_D
 from .config import EnvConfig
 from .geometry import box_corners, obb_overlap
 from .route import link_map
@@ -166,7 +166,8 @@ class World:
         veh_yaw = np.append(tr.yaw, e.yaw)
         bk = self.bikes
         if bk is not None and bk.n:
-            bk.step(dt, self.t, tr, pd, e.xy, e.v, e.yaw, (exy, er), ego_info, self._ego_turning())
+            bk.step(dt, self.t, tr, pd, e.xy, e.v, e.yaw, (exy, er), ego_info, self._ego_turning(),
+                    ego_left=self._ego_left_signal(), ego_dims=(e.LENGTH, e.WIDTH))
             mv = bk.v > 0.8                 # the people on foot watch out for the moving ones as for cars
             veh_xy = np.vstack([veh_xy, bk.xy[mv]])
             veh_v = np.append(veh_v, bk.v[mv])
@@ -187,6 +188,21 @@ class World:
             trigger = near & (self.rng.random(pd.n) < self.cfg.traffic.ego_cross_rate * dt)
         pd.step(dt, veh_xy, veh_v, veh_yaw, trigger, t=self.t)
         self.t += dt
+
+    def _ego_left_signal(self):
+        """The ego signals a left turn: its front within SIGNAL_D of a left turn of its route, or on it (the riders do
+        not come up alongside it on its left: Bicycles.step)."""
+        r, s = self.route, self.ego_s
+        if r is None or s is None:
+            return False
+        k = r.lane_index_at(s)
+        lanes = self.town.lanes
+        cur = lanes[r.lanes[k]]
+        if cur.kind == "conn":
+            return cur.turn == "left"
+        nxt = lanes[r.lanes[k + 1]] if k + 1 < len(r.lanes) else None
+        return nxt is not None and nxt.kind == "conn" and nxt.turn == "left" and \
+            cur.length - r.local_s(s, k) - self.ego.LENGTH / 2 <= SIGNAL_D
 
     def _ego_turning(self):
         """Where the ego will be in 0.6, 1.2 and 1.8 s along its route while it turns at a junction or is within

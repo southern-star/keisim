@@ -66,6 +66,8 @@ FILTER_SIDE = 0.9           # m beside a car: closer than this the rider passes 
 FILTER_DV = 2.5             # m/s
 S0_BIKE, S0_CAR = 0.8, 1.4  # m: standing distance behind people and bikes / behind cars
 T_HEAD = 0.9                # s: time gap when following
+SIGNAL_D = 30.0             # m: a car signals a left turn from this far before it (道路交通法施行令 21 条: 30 m) until
+                            # it has turned; a rider does not come up alongside such a car on its left (巻き込み)
 LOOK_BACK = 0.6             # s: the look over the shoulder before moving out
 STUCK_S = 45.0              # s: a rider standing this long out of the ego's sight is put elsewhere
 
@@ -452,15 +454,34 @@ class Bicycles:
         return self.xy, self.yaw, pose, self.type, self.height, self.colors
 
     # ------------------------------------------------------------------- step
-    def step(self, dt, t, traffic, peds, ego_xy, ego_v, ego_yaw, ego_circ, ego_info=None, ego_pred=None):
+    def step(self, dt, t, traffic, peds, ego_xy, ego_v, ego_yaw, ego_circ, ego_info=None, ego_pred=None,
+             ego_left=False, ego_dims=None):
         """ego_circ: (centres, radii) of the ego's circles; ego_pred: (k, 2) where the ego will be shortly, when it
-        is about to turn (World.step)."""
+        is about to turn (World.step); ego_left: the ego signals a left turn (World._ego_left_signal), ego_dims its
+        (length, width)."""
         n = self.n
         if n == 0:
             return
         town, cfg = self.town, self.cfg
         lanes = town.lanes
         P = self.P
+        # ---- the cars signalling a left turn (SIGNAL_D before it, or on it): x, y, yaw, v, half length, half width
+        sig = []
+        tr = traffic
+        for c in range(tr.n):
+            r_c, k_c = tr.route[c], tr.ri[c]
+            cur_c = lanes[r_c[k_c]]
+            if cur_c.kind == "conn":
+                on = cur_c.turn == "left"
+            else:
+                nx = lanes[r_c[k_c + 1]] if k_c + 1 < len(r_c) else None
+                on = nx is not None and nx.kind == "conn" and nx.turn == "left" and \
+                    cur_c.length - float(tr.s[c]) - float(tr.dims[c, 0]) / 2 <= SIGNAL_D
+            if on:
+                sig.append((tr.xy[c, 0], tr.xy[c, 1], tr.yaw[c], tr.v[c], tr.dims[c, 0] / 2, tr.dims[c, 1] / 2))
+        if ego_left and ego_dims is not None:
+            sig.append((ego_xy[0], ego_xy[1], ego_yaw, ego_v, ego_dims[0] / 2, ego_dims[1] / 2))
+        sig = np.array(sig, float).reshape(-1, 6)
         # ---- lookahead paths: along the home line and moved out
         cats = [self._cat_of(i) for i in range(n)]
         idx = np.concatenate([np.arange(24), 24 + 2 * np.arange(P - 24)])
@@ -681,6 +702,25 @@ class Bicycles:
                 why_stop = why_stop or (vl < 0.5 and gap < v * v / (2 * 0.35) + 3.0)
                 if v > vl:
                     a_req = min(a_req, -(v * v - vl * vl) / (2.0 * max(room, 0.05)))
+            # a car on the right signalling a left turn (SIGNAL_D): no coming up alongside it on its left, where its
+            # driver may not see the rider when it turns (巻き込み): the rider stays behind it, and drops back from
+            # beside its rear half. One the rider is level with or ahead of goes on (the car gives way to it)
+            if len(sig):
+                ub_i = np.array([math.cos(self.yaw[i]), math.sin(self.yaw[i])])
+                dd = sig[:, :2] - self.xy[i]
+                lon_s = dd @ ub_i
+                rgt_s = dd[:, 0] * ub_i[1] - dd[:, 1] * ub_i[0]
+                same = np.cos(sig[:, 2] - self.yaw[i]) > 0.7
+                for c in np.nonzero(same & (lon_s > 0.0) & (lon_s < 30.0) & (rgt_s > 0.3) & (rgt_s < sig[:, 5] + 2.6))[0]:
+                    vl = max(float(sig[c, 3]), 0.0)
+                    gap_s = float(lon_s[c] - sig[c, 4]) - BIKE_LEN / 2
+                    if gap_s > 0.0:
+                        room = max(gap_s - S0_CAR, 0.0)
+                        v_t = min(v_t, math.sqrt(vl * vl + 2.0 * b * room), vl + room / T_HEAD)
+                        if v > vl:
+                            a_req = min(a_req, -(v * v - vl * vl) / (2.0 * max(room, 0.05)))
+                    else:
+                        v_t = min(v_t, max(vl - 1.0, 0.0))
             # moved out with a junction close: no riding into it side by side (the two may part there, one across
             # the other) - the rider falls in behind whoever on its left it has not passed
             if self.lat[i] > 0.25 and (cur.kind != "road" or cat.first - u < 14.0):
