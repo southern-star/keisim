@@ -1251,6 +1251,11 @@ class Traffic:
             g_s, v_s, o_s = sweep_gaps(paths, relc, valid, curv, self.xy, self.yaw, hl, self.dims[:, 1] / 2,
                                        cxy, cr, cow, csp, cyw, np.arange(n), margin)
             swept = g_s < gap
+            if len(self.lead_owner) == n:   # not for an NPC that waits for this car (its lead at the last step):
+                mutual = (o_s >= 0) & (o_s < n)   # two cars that wait for each other wait for ever (crosswalks_sub
+                j = np.where(mutual, o_s, 0)      # 2009/9850: a truck turning left in a junction stood for a truck
+                mutual &= self.lead_owner[j] == np.arange(n)    # waiting to turn right, which waited for it)
+                swept &= ~mutual
             gap = np.where(swept, g_s, gap)
             lead_v = np.where(swept, v_s, lead_v)
             lead_o = np.where(swept, o_s, lead_o)
