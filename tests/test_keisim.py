@@ -2413,7 +2413,8 @@ def test_bike_defer_skips_the_future_of_a_bicycle_braking_for_the_car():
 def test_bike_defer_riders_keep_out_of_where_a_turning_car_will_drive():
     """TrafficConfig.bike_defer (Bicycles._turning): a standing or slow car on a turn's connector counts for the
     riders, at least TURN_AHEAD m ahead of its front bumper along its path, where it will drive; off, only the moving
-    ones count, where their centre will be in 0.6-1.8 s (bigjunction 3005/9800)."""
+    ones count, where their centre will be in 0.6-1.8 s (bigjunction 3005/9800); not one giving way (Traffic.giving_way,
+    crosswalks 1010/9800)."""
     from keisim.bicycles import TURN_AHEAD
     env = _bike_env(10.0)
     env.reset(town_seed=5, episode_seed=2)
@@ -2439,4 +2440,7 @@ def test_bike_defer_riders_keep_out_of_where_a_turning_car_will_drive():
     assert (d > tr.dims[i, 0] / 2 + TURN_AHEAD[0] - 0.6).all()  # ahead of its front bumper
     tr.v[i] = 0.3                                           # crawling: the same, ahead of its front
     assert (bk._turning(tr)[2] == i).sum() == len(TURN_AHEAD)
+    tr.giving_way = np.zeros(tr.n, bool)
+    tr.giving_way[i] = True                                 # waiting at its wait point to give way: not there
+    assert not (bk._turning(tr)[2] == i).any()
     tr.cfg.bike_defer = False

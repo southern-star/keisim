@@ -465,6 +465,7 @@ class Traffic:
         self.shift_v = np.zeros(0)      # m/s: ... and how fast it is moving sideways
         self.shift_tgt = np.zeros(0)    # m: where the shift was heading at the last step (the corridor follows it)
         self._left_wait = {}            # car -> s it has waited before a left turn for a standing bicycle
+        self.giving_way = np.zeros(0, bool)     # bike_defer: held at a 止まれ line or a turn's wait point this step
         self.parked = None      # the ParkedCars (World, TrafficConfig.parked > 0)
         self.pk_go = {}         # car -> the parked-car group it has set off to pass over the centre line (_parked_gaps)
         self.pk_prof = {}       # car -> (s_lo, s_hi, how far out) of the group it moves out round (_shifted_paths)
@@ -1288,10 +1289,13 @@ class Traffic:
                     continue
                 if k + 1 < len(r) and self._clearing(i, r[k + 1]):
                     stop_gap[i] = d - 0.6
+        sg0 = stop_gap.copy() if cfg.bike_defer else None
         if town.stop_signs:          # 止まれ (Town.from_graph): stop once at the minor road's stop line
             self._stop_sign_gaps(stop_gap, hl)
         if self.has_yields:          # two-phase signals: turns wait for a gap in the oncoming traffic
             self._yield_gaps(stop_gap, t, ego_info, hl)
+        if sg0 is not None:          # (bike_defer: the riders do not keep out of the way of a car giving way)
+            self.giving_way = stop_gap < sg0
         if peds is not None and peds.cw_on:      # crosswalks at signals: give way to the people on them
             self._crosswalk_gaps(stop_gap, hl, peds, t)
         bike_pair = ()
