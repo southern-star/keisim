@@ -1637,6 +1637,8 @@ class Traffic:
         BIKE_MIN beside them, and so is where a moving one will be within 2.4 s (Bicycles.circles).
         Left turns (巻き込み確認): within BIKE_LEFT of its turn a car stops at the end of its lane while a bicycle on
         that lane is beside it or would be within BIKE_LEFT_T s, and lets it go first.
+        TrafficConfig.bike_defer: a car in a junction does not stop for where a bicycle braking for it would be
+        (_bike_defer).
         stop_gap is updated in place; self.shift is what World applies to the cars' positions."""
         bk = self.bikes
         n, nb = self.n, bk.n
@@ -1733,16 +1735,38 @@ class Traffic:
         me = np.full(n, -1)
         less = room[:, bow]
         hwid = self.dims[:, 1] / 2
+        m_min, m_free = BIKE_MIN - less, BIKE_FREE - less
+        if self.cfg.bike_defer:
+            skip = self._bike_defer(bow)
+            if skip is not None:
+                m_min, m_free = np.where(skip, -1e3, m_min), np.where(skip, -1e3, m_free)
         gap, lead_v, _ = corridor_gaps(paths, relc, valid, self.xy, self.yaw, hl, hwid, bxy, br, bow, bsp, byw, me,
-                                       BIKE_MIN - less)
+                                       m_min)
         g_free, v_free, _ = corridor_gaps(paths, relc, valid, self.xy, self.yaw, hl, hwid, bxy, br, bow, bsp, byw, me,
-                                          BIKE_FREE - less)
+                                          m_free)
         m = np.isfinite(g_free)
         if m.any():
             v_pass = np.maximum(BIKE_PASS_V, v_free[m] + BIKE_PASS_DV)
             vmax = vmax.copy()
             vmax[m] = np.minimum(vmax[m], np.sqrt(v_pass ** 2 + 3.0 * np.maximum(g_free[m], 0.0)))
         return gap, lead_v, vmax
+
+    def _bike_defer(self, bow):
+        """TrafficConfig.bike_defer: (N, M) bool, the circles of where a moving bicycle will be (Bicycles.circles'
+        predict, after its NCB own circles each) that car i leaves out: those of a bicycle that is braking or standing
+        for car i (Bicycles.lead), with car i on a connector. Each waited for the other's future: a right turn and a
+        bicycle coming straight on from the other way stopped nose to nose in the junction, the car's body already
+        across the bicycle's line, and stood so for good (bigjunction 3005/9800, 600 m). The car now goes on; it still
+        keeps BIKE_MIN from where the bicycle is. None: nothing to leave out."""
+        from .bicycles import NCB
+        bk, lanes, n = self.bikes, self.town.lanes, self.n
+        lead = getattr(bk, "lead", None)
+        pred = np.arange(len(bow)) >= NCB * bk.n
+        if lead is None or len(lead) != bk.n or not pred.any():
+            return None
+        conn = np.array([lanes[self.route[i][self.ri[i]]].kind == "conn" for i in range(n)], bool)
+        skip = pred[None, :] & conn[:, None] & (lead[bow][None, :] == np.arange(n)[:, None])
+        return skip if skip.any() else None
 
     def _shifted_paths(self, paths, relc):
         """The paths (N,P,2) of step(), moved to the right by where each car's shift (_bike_gaps) will be at each

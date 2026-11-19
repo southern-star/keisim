@@ -156,6 +156,7 @@ def run_route(job):
     cfg.traffic.npc_sweep = bool(args.get("npc_sweep", False))
     cfg.traffic.npc_axles = bool(args.get("npc_axles", False))
     cfg.traffic.box_fix = bool(args.get("box_fix", False))
+    cfg.traffic.bike_defer = bool(args.get("bike_defer", False))
     cfg.traffic.crosswalks = float(args.get("crosswalks", 0.0))
     cfg.traffic.bicycles = float(args.get("bicycles", 0.0))
     cfg.traffic.parked = float(args.get("parked", 0.0))
@@ -496,6 +497,9 @@ def main():
                          "NPC's route ends at its connector, and an NPC standing just over its line lets the cars "
                          "of the other signal groups clear the junction at its green (TrafficConfig.box_fix); "
                          "suffix _boxfix")
+    ap.add_argument("--bike_defer", type=int, default=None, choices=[0, 1],
+                    help="1: an NPC in a junction does not stop for where a bicycle braking for it will be "
+                         "(TrafficConfig.bike_defer); suffix _bdf")
     ap.add_argument("--crosswalks", type=float, default=None,
                     help="crosswalks at signals: the chance that a person at a two-phase signal's road end crosses on "
                          "the zebra with the pedestrian light; turning cars give way (TrafficConfig.crosswalks; "
@@ -545,12 +549,12 @@ def main():
         args.suite = "osm"
     dflt = {"route_length": 600.0, "max_steps": 4000, "town_style": "classic", "jam_fixes": 0, "blocked_timeout": 90.0,
             "via_ramp": 0, "crosswalks": 0.0, "bicycles": 0.0, "bike_visible": 0, "npc_past_line": 0, "bike_sweep": 0,
-            "npc_sweep": 0, "npc_axles": 0, "box_fix": 0,
+            "npc_sweep": 0, "npc_axles": 0, "box_fix": 0, "bike_defer": 0,
             "parked": 0.0, "dart_out": 0.0, "cap_scale": 0, **SUITE_DEFAULTS.get(args.suite, {})}
     suite_style, suite_fixes, suite_timeout = dflt["town_style"], int(dflt["jam_fixes"]), dflt["blocked_timeout"]
     suite_cw, suite_bk, suite_bv = float(dflt["crosswalks"]), float(dflt["bicycles"]), int(dflt["bike_visible"])
     suite_npc, suite_bs, suite_nsw = int(dflt["npc_past_line"]), int(dflt["bike_sweep"]), int(dflt["npc_sweep"])
-    suite_nax, suite_bf = int(dflt["npc_axles"]), int(dflt["box_fix"])
+    suite_nax, suite_bf, suite_bdf = int(dflt["npc_axles"]), int(dflt["box_fix"]), int(dflt["bike_defer"])
     suite_pk, suite_do, suite_cap = float(dflt["parked"]), float(dflt["dart_out"]), int(dflt["cap_scale"])
     for k, v in dflt.items():
         if getattr(args, k) is None:
@@ -591,6 +595,7 @@ def main():
         ("" if int(args.npc_sweep) == suite_nsw else ("_nsw" if args.npc_sweep else "_nonsw")) + \
         ("" if int(args.npc_axles) == suite_nax else ("_nax" if args.npc_axles else "_nonax")) + \
         ("" if int(args.box_fix) == suite_bf else ("_boxfix" if args.box_fix else "_noboxfix")) + \
+        ("" if int(args.bike_defer) == suite_bdf else ("_bdf" if args.bike_defer else "_nobdf")) + \
         ("" if args.crosswalks == suite_cw else f"_cw{args.crosswalks:g}") + \
         ("" if args.bicycles == suite_bk else f"_bk{args.bicycles:g}") + \
         ("" if int(args.bike_visible) == suite_bv else ("_bv" if args.bike_visible else "_nobv")) + \
@@ -615,7 +620,7 @@ def main():
          "blocked_timeout": args.blocked_timeout, "osm_bbox": args.osm_bbox, "yield_visible": bool(args.yield_visible),
          "rig": args.rig, "ego_patience": args.ego_patience, "via_ramp": bool(args.via_ramp),
          "npc_past_line": int(args.npc_past_line), "npc_sweep": bool(args.npc_sweep), "npc_axles": bool(args.npc_axles),
-         "box_fix": bool(args.box_fix), "crosswalks": args.crosswalks,
+         "box_fix": bool(args.box_fix), "bike_defer": bool(args.bike_defer), "crosswalks": args.crosswalks,
          "bicycles": args.bicycles,
          "bike_visible": bool(args.bike_visible), "bike_sweep": bool(args.bike_sweep), "parked": args.parked,
          "dart_out": args.dart_out, "cap_scale": int(args.cap_scale),

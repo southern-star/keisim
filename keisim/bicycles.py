@@ -196,6 +196,7 @@ class Bicycles:
         self.mode = z(0, dt=int)
         self.gear = z(0, dt=int)
         self.ss_done = z(0, dt=int)
+        self.lead = z(0, dt=int)            # whoever is in the way (corridor owner; -1 with nobody, or the ego)
         self.xy = z(0, 2)
         self.colors = z(0, 4, 3)            # frame, shirt, pants, skin (B, G, R)
         lanes = bike_lanes(town)
@@ -286,6 +287,7 @@ class Bicycles:
         self.mode = ap(self.mode, PEDAL)
         self.gear = ap(self.gear, len(T["gears"]) // 2)
         self.ss_done = ap(self.ss_done, -1)
+        self.lead = ap(self.lead, -1)
         self.xy = np.vstack([self.xy, p])
         self.colors = np.concatenate([self.colors, np.clip(col, 0, 255)[None]])
         self.n += 1
@@ -747,6 +749,7 @@ class Bicycles:
                 if v > 0.5:
                     self.stood[i] = 0.0
             self.gap[i], self.v_want[i] = gap, v_t
+            self.lead[i] = int(lead_o) if math.isfinite(gap) else -1
             # -- forces
             mode_was = self.mode[i]
             m = T["mass"]

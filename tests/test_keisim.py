@@ -2351,3 +2351,38 @@ def test_box_fix_waits_for_a_car_clearing_the_junction():
     assert not tr._clearing(i, mine.id)
     tr.v[j] = 2.0                                           # going on over it: it is entering
     assert tr._clearing(i, mine.id)
+
+
+def test_bike_defer_skips_the_future_of_a_bicycle_braking_for_the_car():
+    """TrafficConfig.bike_defer (Traffic._bike_defer): a car on a connector leaves out where a moving bicycle will be
+    (Bicycles.circles' predict) when that bicycle is braking for the car (Bicycles.lead), not the bicycle's own
+    circles, nor for a bicycle braking for someone else, nor for a car still on its lane (bigjunction 3005/9800)."""
+    from keisim.bicycles import NCB
+    env = _bike_env(10.0)
+    env.reset(town_seed=5, episode_seed=2)
+    for _ in range(5):                                      # (the riders' tracks are made as they ride)
+        env.step(env.expert_action())
+    tr, bk, lanes = env.world.traffic, env.world.bikes, env.world.town.lanes
+    tr.cfg.bike_defer = True
+    assert tr.n >= 2 and bk.n >= 2
+    conn = next(l for l in lanes if l.kind == "conn")
+    road = next(l for l in lanes if l.kind == "road")
+    i, other = 0, 1
+    for c in range(tr.n):
+        tr.route[c], tr.ri[c], tr.s[c] = [road.id], 0, 1.0
+    tr.route[i], tr.ri[i], tr.s[i] = [conn.id] + list(conn.succ[:1]), 0, 1.0
+    bk.v[:] = 0.0
+    j = next(b for b in range(bk.n) if bk._cat[b] is not None)
+    bk.v[j] = 3.0                                           # moving: its future is in the circles
+    bk.lead[:] = -1
+    bk.lead[j] = i                                          # braking for car i
+    bow = bk.circles(predict=True)[2]
+    pred = np.arange(len(bow)) >= NCB * bk.n
+    assert (bow[pred] == j).any()
+    skip = tr._bike_defer(bow)
+    assert skip is not None
+    assert skip[i][pred & (bow == j)].all() and not skip[i][~pred].any()     # its own circles still count
+    assert not skip[other].any()                                            # a car on its lane: as before
+    bk.lead[j] = other                                      # braking for another car: car i sees its future
+    assert tr._bike_defer(bow) is None
+    tr.cfg.bike_defer = False
