@@ -2357,8 +2357,8 @@ def test_bike_defer_skips_the_future_of_a_bicycle_braking_for_the_car():
     """TrafficConfig.bike_defer (Traffic._bike_defer): a car on a connector leaves out where a moving bicycle will be
     (Bicycles.circles' predict) when that bicycle is braking for a car on a connector of the same junction
     (Bicycles.lead: this car or another), not the bicycle's own circles; not for a bicycle braking for a car on its
-    lane or in another junction, nor one going the car's way, nor for a car still on its lane (bigjunction
-    3005/9800)."""
+    lane or in another junction, nor one from the car's own approach or going its way, nor for a car still on its
+    lane (bigjunction 3005/9800)."""
     from keisim.bicycles import NCB
     env = _bike_env(10.0)
     env.reset(town_seed=5, episode_seed=2)
@@ -2399,8 +2399,14 @@ def test_bike_defer_skips_the_future_of_a_bicycle_braking_for_the_car():
     bk.lead[j] = away
     assert not tr._bike_defer(bow, byw)[i].any()
     bk.lead[j] = i
-    tr.yaw[i] = bk.yaw[j] + 0.3                             # going its way (it follows the car): as before
-    assert not tr._bike_defer(bow, byw)[i].any()
+    lane_j = int(bk.lane[j])
+    bk.lane[j] = conn.pred[0]                               # from the car's own approach (it follows the car)
+    sk = tr._bike_defer(bow, byw)
+    assert sk is None or not sk[i].any()
+    bk.lane[j] = lane_j
+    tr.yaw[i] = bk.yaw[j] + 0.3                             # going its way: as before
+    sk = tr._bike_defer(bow, byw)
+    assert sk is None or not sk[i].any()
     tr.cfg.bike_defer = False
 
 
