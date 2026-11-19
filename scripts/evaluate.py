@@ -492,8 +492,10 @@ def main():
                     help="1: NPC bodies sit with both axles on their path, so a turning car's tail does not swing "
                          "out (TrafficConfig.npc_axles); suffix _nax")
     ap.add_argument("--box_fix", type=int, default=None, choices=[0, 1],
-                    help="1: the box rule also counts an NPC standing deep past its stop line, and checks when an "
-                         "NPC's route ends at its connector (TrafficConfig.box_fix); suffix _boxfix")
+                    help="1: the box rule also counts an NPC standing deep past its stop line, checks when an "
+                         "NPC's route ends at its connector, and an NPC standing just over its line lets the cars "
+                         "of the other signal groups clear the junction at its green (TrafficConfig.box_fix); "
+                         "suffix _boxfix")
     ap.add_argument("--crosswalks", type=float, default=None,
                     help="crosswalks at signals: the chance that a person at a two-phase signal's road end crosses on "
                          "the zebra with the pedestrian light; turning cars give way (TrafficConfig.crosswalks; "

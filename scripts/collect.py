@@ -636,7 +636,7 @@ def parse_args(argv=None):
     ap.add_argument("--npc_axles", type=int, default=0, choices=[0, 1],
                     help="1: NPC bodies sit with both axles on their path (TrafficConfig.npc_axles)")
     ap.add_argument("--box_fix", type=int, default=0, choices=[0, 1],
-                    help="1: the box rule's two fixes (TrafficConfig.box_fix)")
+                    help="1: the box rule's three fixes (TrafficConfig.box_fix)")
     ap.add_argument("--crosswalks", type=float, default=0.0,
                     help="crosswalks at signals (TrafficConfig.crosswalks): the chance that a person at a two-phase "
                          "signal's road end crosses on the zebra with the pedestrian light; turning cars give way")
