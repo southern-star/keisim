@@ -176,6 +176,20 @@ class TrafficConfig:
     # its own box the same way (it then passes such a car without touching it). Off by default: the old evaluations
     # stay reproducible.
     npc_sweep: bool = False
+    # Moving cars in junctions (off by default: the old evaluations stay reproducible):
+    # npc_axles: an NPC's body sits with both axles on its path (traffic.AXLE x its length behind and ahead of the
+    # centre), heading along them, instead of turning about its centre on the path: on a turn the tail swung out as
+    # far as the nose, into the car passing beside it (stress roadtypes 1010/9900, suburban 2003/9900: a 7.6 m truck
+    # turning left). The body now cuts in a little on the inside, as a real one does (traffic.Traffic._axles_pose).
+    npc_axles: bool = False
+    # box_fix: two holes in the box rule and the exit check (Traffic.step, box_occupants).
+    # - An NPC standing more than traffic.NPC_OVER past its stop line counts as inside the junction, as a moving one
+    #   does. One that had stopped 7 m in waited there through the red, then set off (past the line, the light no
+    #   longer binds it) across a car that had entered on its green at an empty box (stress roadtypes 1012/9901).
+    # - The check is also made when the NPC's route does not yet reach past the connector (it is extended first).
+    #   One that had stood long at its red had a route ending at its connector: at green it went in with no box
+    #   check, across two cars of another phase still inside (bigjunction 3006/9801).
+    box_fix: bool = False
     # Crosswalks at signals (Town.ped_crossings: the zebras at the ends of the roads of two-phase signalised junctions).
     # crosswalks: the chance that a person walking up to such an end crosses there: they wait at the kerb for the
     # pedestrian green (the green of the cars crossing that road's flow, minus ped_flash s of flashing) and walk over

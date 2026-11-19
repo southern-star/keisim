@@ -137,6 +137,11 @@ def change_pose(A, B, a0, lc, s):
 NCIRC = 4
 
 
+def lanes_len(town, r, k, s):
+    """Metres left along route r from s on its k-th lane to its end."""
+    return town.lanes[r[k]].length - s + sum(town.lanes[x].length for x in r[k + 1:])
+
+
 def vehicle_circles(xy, yaw, length, width):
     """Cover oriented boxes with NCIRC circles each (vectorised).
     Returns centres (N*NCIRC,2), radii (N*NCIRC,), owner index (N*NCIRC,)."""
@@ -171,6 +176,8 @@ LOOKBACK_LANE = 60.0        # m: min_arrival's look into the junction before a s
 STOP_SIGN_NPC_AT = 1.0      # m: 止まれ: NPCs stop with the front bumper this far before the line (as the expert)
 STOP_SIGN_NPC_ZONE = 3.0    # m: ... and the stop counts when they stand within this much of it
 NPC_OVER = 3.0              # m: TrafficConfig.light_past_line: a standing NPC this far past its stop line still obeys it
+#                             (TrafficConfig.box_fix: one further in is inside the junction for the box rule)
+AXLE = 0.3                  # TrafficConfig.npc_axles: the axles are this times the length ahead of and behind the centre
 # crosswalks at signals (TrafficConfig.crosswalks, Town.ped_crossings)
 CW_REACH = 4.0              # s: a car's stretch of a zebra is taken while someone on it (or setting off) gets there
 #                             sooner than this
@@ -816,12 +823,15 @@ class Traffic:
         the junction radius."""
         lanes = self.town.lanes
         box = {}
+        deep = self.cfg.box_fix
         for lid, cars in occ.items():
             L = lanes[lid]
             if L.kind == "conn":
                 box.setdefault(L.junction, set()).add(L.pred[0])
-            elif L.stop_s is not None and any(s + n / 2 > L.stop_s + 0.5 and v > 1.0 for s, v, n in cars):
-                box.setdefault(L.end_junction, set()).add(lid)     # past its stop line and moving: entering
+            elif L.stop_s is not None and any(s + n / 2 > L.stop_s + 0.5 and (v > 1.0 or (
+                    deep and s + n / 2 > L.stop_s + NPC_OVER)) for s, v, n in cars):
+                box.setdefault(L.end_junction, set()).add(lid)     # past its stop line and moving: entering (deep:
+                #                                                    or standing more than NPC_OVER past it, inside)
         if ego_xy is not None:
             for J in self.town.junctions:
                 if J.signalized and math.hypot(*(np.asarray(ego_xy) - J.pos)) < J.radius:
@@ -1193,6 +1203,11 @@ class Traffic:
                     k = r.index(lid, self.ri[i])
                 except ValueError:
                     continue
+                if k + 2 >= len(r) and cfg.box_fix:     # the route ends at the connector (it stood long at its
+                    rem = lanes_len(town, r, self.ri[i], self.s[i])     # line): first the lane after it
+                    self._extend(i, rem + 1.0)
+                    r = self.route[i]
+                    k = r.index(lid, self.ri[i])
                 if k + 2 < len(r):
                     if occ is None:
                         occ = self.occupancy()
@@ -1314,9 +1329,13 @@ class Traffic:
                 self.xy[i, 0], self.xy[i, 1], self.yaw[i] = change_pose(lanes[p["from"]], lanes[p["to"]], p["a0"],
                                                                         p["lc"], si)
             else:
-                poly = lanes[r[k]].poly
-                self.xy[i, 0], self.xy[i, 1] = poly.interp1(si)
-                self.yaw[i] = poly.heading1(si)
+                pose = self._axles_pose(i, k, si) if cfg.npc_axles else None
+                if pose is not None:        # both axles on the path (TrafficConfig.npc_axles)
+                    self.xy[i, 0], self.xy[i, 1], self.yaw[i] = pose
+                else:
+                    poly = lanes[r[k]].poly
+                    self.xy[i, 0], self.xy[i, 1] = poly.interp1(si)
+                    self.yaw[i] = poly.heading1(si)
         if (self.bikes is not None or self.parked is not None) and len(self.shift) == n and (self.shift > 1e-4).any():
             # the cars that have moved over to the right for a bicycle (or a parked car)
             # (the heading turns about the rear axle, 0.3 of the length behind the centre: the tail does not swing
@@ -1330,6 +1349,36 @@ class Traffic:
         if swept is not None:       # standing for a car its body would touch: it does not come (min_arrival)
             self.sweep_wait = swept & (self.v < 0.1)
         self.release_stuck(ego_xy, ego_yaw)
+
+    def _axles_pose(self, i, k, s):
+        """TrafficConfig.npc_axles: car i's pose with both axles on its path (AXLE x its length behind and ahead of
+        the centre along the route): the centre half way between them, the heading along them. On a turn the body
+        cuts in a little (by about (AXLE L)^2 / 2R) instead of turning about its centre on the path, where the tail
+        swings out as much as the nose (two trucks turning left swung their rear into the car passing beside them,
+        stress roadtypes 1010/9900, suburban 2003/9900). None where a point would be on a lane change's other lane
+        (the route has the two side by side)."""
+        lanes = self.town.lanes
+        r = self.route[i]
+        a = AXLE * float(self.dims[i, 0])
+        pts = []
+        for off in (-a, a):
+            q, t = k, s + off
+            while t < 0.0:
+                if q == 0 or r[q] in (getattr(lanes[r[q - 1]], "links", None) or ()):
+                    return None
+                q -= 1
+                t += lanes[r[q]].length
+            while t > lanes[r[q]].length:
+                if q + 1 >= len(r):
+                    t = lanes[r[q]].length
+                    break
+                if r[q + 1] in (getattr(lanes[r[q]], "links", None) or ()):
+                    return None
+                t -= lanes[r[q]].length
+                q += 1
+            pts.append(lanes[r[q]].poly.interp1(t))
+        (x0, y0), (x1, y1) = pts
+        return (x0 + x1) / 2, (y0 + y1) / 2, math.atan2(y1 - y0, x1 - x0)
 
     def _integrate_shift(self, target, dt, swing=None):
         """Sideways (self.shift, to the right): towards the target at BIKE_RATE at most, gently (BIKE_ACC); back to
