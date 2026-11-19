@@ -137,6 +137,11 @@ def change_pose(A, B, a0, lc, s):
 NCIRC = 4
 
 
+def lanes_len(town, r, k, s):
+    """Metres left along route r from s on its k-th lane to its end."""
+    return town.lanes[r[k]].length - s + sum(town.lanes[x].length for x in r[k + 1:])
+
+
 def vehicle_circles(xy, yaw, length, width):
     """Cover oriented boxes with NCIRC circles each (vectorised).
     Returns centres (N*NCIRC,2), radii (N*NCIRC,), owner index (N*NCIRC,)."""
@@ -171,6 +176,8 @@ LOOKBACK_LANE = 60.0        # m: min_arrival's look into the junction before a s
 STOP_SIGN_NPC_AT = 1.0      # m: 止まれ: NPCs stop with the front bumper this far before the line (as the expert)
 STOP_SIGN_NPC_ZONE = 3.0    # m: ... and the stop counts when they stand within this much of it
 NPC_OVER = 3.0              # m: TrafficConfig.light_past_line: a standing NPC this far past its stop line still obeys it
+#                             (TrafficConfig.box_fix: one further in is inside the junction for the box rule)
+AXLE = 0.3                  # TrafficConfig.npc_axles: the axles are this times the length ahead of and behind the centre
 # crosswalks at signals (TrafficConfig.crosswalks, Town.ped_crossings)
 CW_REACH = 4.0              # s: a car's stretch of a zebra is taken while someone on it (or setting off) gets there
 #                             sooner than this
@@ -306,7 +313,7 @@ def corridor_gaps(paths, cum, valid, origin, heading, half_len, half_w, cxy, cr,
 
 
 def sweep_gaps(paths, cum, valid, curv, origin, heading, half_len, half_w, cxy, cr, cowner, cspeed, cyaw, self_owner,
-               margin):
+               margin, axles=False):
     """TrafficConfig.npc_sweep: the cars that corridor_gaps' tube misses but the car's body would touch.
 
     The tube is the car's half width (plus the margin) round each point of its path. The body is a box placed at each
@@ -318,7 +325,10 @@ def sweep_gaps(paths, cum, valid, curv, origin, heading, half_len, half_w, cxy, 
     corners of its own box (SWEEP_CORNER).
     On straight paths the box is inside the tube. Arguments as for corridor_gaps, and curv (K, P), the path's
     curvature at each point; returns gap (K,), the distance the car's centre can go along the path before its box
-    touches a circle (inf: none), lead_speed (K,) and lead_owner (K,) (-1 if none)."""
+    touches a circle (inf: none), lead_speed (K,) and lead_owner (K,) (-1 if none).
+    axles (TrafficConfig.npc_axles): the box sits as the cars do then, half way between the path's points AXLE x the
+    length behind and ahead, heading along them; on a turn it cuts in, so the cars beside its body count too, not
+    only those ahead of its centre (suburban 2008/9851: a truck turning right cut in on a car standing beside it)."""
     K = len(paths)
     gap = np.full(K, np.inf)
     lead_v = np.zeros(K)
@@ -332,6 +342,25 @@ def sweep_gaps(paths, cum, valid, curv, origin, heading, half_len, half_w, cxy, 
         return gap, lead_v, lead_o
     act = np.nonzero(turn)[0]
     Pm = max(int(win[act].sum(1).max()), 2)                     # the points in the window (cum grows along the path)
+    box_c = box_t = None
+    if axles:                   # the box half way between the points AXLE x the length behind and ahead
+        box_c, box_t = np.zeros((K, Pm, 2)), np.zeros((K, Pm, 2))
+        for k in act:
+            nv = max(int(valid[k].sum()), 2)
+            P, c = paths[k, :nv], cum[k, :nv]
+            u0 = (P[1] - P[0]) / max(float(np.hypot(*(P[1] - P[0]))), 1e-9)
+            a = AXLE * 2.0 * float(half_len[k])
+
+            def at(q, P=P, c=c, u0=u0):
+                xy = np.stack([np.interp(q, c, P[:, 0]), np.interp(q, c, P[:, 1])], -1)
+                back = q < c[0]                             # behind the path's first point: along its first piece
+                xy[back] = P[0] + (q[back] - c[0])[:, None] * u0
+                return xy
+            q = cum[k, :Pm]
+            R, F = at(q - a), at(q + a)
+            box_c[k] = (R + F) / 2
+            d = F - R
+            box_t[k] = d / np.maximum(np.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None]
     paths, cum, valid = paths[:, :Pm], cum[:, :Pm], win[:, :Pm]
     cm = np.nonzero(car)[0]
     reach = SWEEP_AHEAD + half_len + 4.0
@@ -340,7 +369,8 @@ def sweep_gaps(paths, cum, valid, curv, origin, heading, half_len, half_w, cxy, 
     ds = cxy[ms] - origin[ks]
     u = np.stack([np.cos(heading), np.sin(heading)], -1)
     lon = (ds * u[ks]).sum(-1)
-    keep = (ds[:, 0] ** 2 + ds[:, 1] ** 2 < reach[ks] ** 2) & (cowner[ms] != self_owner[ks]) & (lon > -0.5)
+    keep = (ds[:, 0] ** 2 + ds[:, 1] ** 2 < reach[ks] ** 2) & (cowner[ms] != self_owner[ks]) & \
+        (lon > (-half_len[ks] if axles else -0.5))
     ks, ms = ks[keep], ms[keep]
     if len(ks) == 0:
         return gap, lead_v, lead_o
@@ -358,9 +388,13 @@ def sweep_gaps(paths, cum, valid, curv, origin, heading, half_len, half_w, cxy, 
     ks, ms, diff = ks[~seen], ms[~seen], diff[~seen]
     if len(ks) == 0:
         return gap, lead_v, lead_o
-    t = np.gradient(paths, axis=1)                              # the path's heading at each point
-    t /= np.maximum(np.hypot(t[..., 0], t[..., 1]), 1e-9)[..., None]
-    tk = t[ks]
+    if axles:
+        diff = cxy[ms][:, None, :] - box_c[ks]
+        tk = box_t[ks]
+    else:
+        t = np.gradient(paths, axis=1)                          # the path's heading at each point
+        t /= np.maximum(np.hypot(t[..., 0], t[..., 1]), 1e-9)[..., None]
+        tk = t[ks]
     x = (diff * tk).sum(-1)
     y = diff[..., 1] * tk[..., 0] - diff[..., 0] * tk[..., 1]
     rc = (cr[ms] * SWEEP_CORNER)[:, None]
@@ -816,12 +850,15 @@ class Traffic:
         the junction radius."""
         lanes = self.town.lanes
         box = {}
+        deep = self.cfg.box_fix
         for lid, cars in occ.items():
             L = lanes[lid]
             if L.kind == "conn":
                 box.setdefault(L.junction, set()).add(L.pred[0])
-            elif L.stop_s is not None and any(s + n / 2 > L.stop_s + 0.5 and v > 1.0 for s, v, n in cars):
-                box.setdefault(L.end_junction, set()).add(lid)     # past its stop line and moving: entering
+            elif L.stop_s is not None and any(s + n / 2 > L.stop_s + 0.5 and (v > 1.0 or (
+                    deep and s + n / 2 > L.stop_s + NPC_OVER)) for s, v, n in cars):
+                box.setdefault(L.end_junction, set()).add(lid)     # past its stop line and moving: entering (deep:
+                #                                                    or standing more than NPC_OVER past it, inside)
         if ego_xy is not None:
             for J in self.town.junctions:
                 if J.signalized and math.hypot(*(np.asarray(ego_xy) - J.pos)) < J.radius:
@@ -840,6 +877,40 @@ class Traffic:
                 return True
             if p != c.pred[0] and (mine is None or lanes[p].signal is None or lanes[p].signal[1] != mine[1]):
                 return True
+        return False
+
+    def _clearing(self, i, conn_id):
+        """TrafficConfig.box_fix: an NPC other than i inside `conn_id`'s junction as box_occupants counts them (on
+        one of its connectors, or past its stop line and moving or standing more than NPC_OVER past it), from an
+        approach of another signal group (box_busy), and not standing for car i (its lead): it is clearing the
+        junction."""
+        lanes = self.town.lanes
+        c = lanes[conn_id]
+        if c.kind != "conn":
+            return False
+        mine = lanes[c.pred[0]].signal
+        lead = self.lead_owner if len(self.lead_owner) == self.n else ()
+        for j in range(self.n):
+            L = lanes[self.route[j][self.ri[j]]]
+            if L.kind == "conn":
+                if L.junction != c.junction:
+                    continue
+                came = L.pred[0]
+            elif L.stop_s is not None and L.end_junction == c.junction:
+                front = float(self.s[j]) + self.dims[j, 0] / 2
+                if not front > L.stop_s + 0.5 or not (self.v[j] > 1.0 or front > L.stop_s + NPC_OVER):
+                    continue
+                came = L.id
+            else:
+                continue
+            if j == i or came == c.pred[0]:
+                continue
+            p = lanes[came].signal
+            if mine is not None and p is not None and p[1] == mine[1]:
+                continue
+            if len(lead) and lead[j] == i:
+                continue
+            return True
         return False
 
     # ------------------------------------------------------------------- yielding (two-phase signals)
@@ -1193,6 +1264,11 @@ class Traffic:
                     k = r.index(lid, self.ri[i])
                 except ValueError:
                     continue
+                if k + 2 >= len(r) and cfg.box_fix:     # the route ends at the connector (it stood long at its
+                    rem = lanes_len(town, r, self.ri[i], self.s[i])     # line): first the lane after it
+                    self._extend(i, rem + 1.0)
+                    r = self.route[i]
+                    k = r.index(lid, self.ri[i])
                 if k + 2 < len(r):
                     if occ is None:
                         occ = self.occupancy()
@@ -1200,6 +1276,18 @@ class Traffic:
                     if self.exit_blocked(r[k + 1], r[k + 2], self.dims[i, 0] + 3.0, occ, (ego_xy, ego_v)) or \
                             (box is not None and self.box_busy(r[k + 1], box)):
                         stop_gap[i] = d - 0.6
+            elif cfg.box_fix and st == TL_GREEN and d < -0.5:
+                # standing over its line at its green (past_line_light_only): it still lets the NPCs of the other
+                # signal groups inside the junction (_clearing) clear it first, not the ego (crosswalks_sub
+                # 2008/9850: it set off into a right turn finishing at the end of its green; the two stood nose to
+                # nose; bigjunction 3004/9800: the same with the right turn still 6.6 m past its own line)
+                r = self.route[i]
+                try:
+                    k = r.index(lid, self.ri[i])
+                except ValueError:
+                    continue
+                if k + 1 < len(r) and self._clearing(i, r[k + 1]):
+                    stop_gap[i] = d - 0.6
         if town.stop_signs:          # 止まれ (Town.from_graph): stop once at the minor road's stop line
             self._stop_sign_gaps(stop_gap, hl)
         if self.has_yields:          # two-phase signals: turns wait for a gap in the oncoming traffic
@@ -1249,7 +1337,7 @@ class Traffic:
         swept = None
         if cfg.npc_sweep:           # the corners of the body on a turn: the cars the tube misses (sweep_gaps)
             g_s, v_s, o_s = sweep_gaps(paths, relc, valid, curv, self.xy, self.yaw, hl, self.dims[:, 1] / 2,
-                                       cxy, cr, cow, csp, cyw, np.arange(n), margin)
+                                       cxy, cr, cow, csp, cyw, np.arange(n), margin, axles=cfg.npc_axles)
             swept = g_s < gap
             if len(self.lead_owner) == n:   # not for an NPC that waits for this car (its lead at the last step):
                 mutual = (o_s >= 0) & (o_s < n)   # two cars that wait for each other wait for ever (crosswalks_sub
@@ -1314,9 +1402,13 @@ class Traffic:
                 self.xy[i, 0], self.xy[i, 1], self.yaw[i] = change_pose(lanes[p["from"]], lanes[p["to"]], p["a0"],
                                                                         p["lc"], si)
             else:
-                poly = lanes[r[k]].poly
-                self.xy[i, 0], self.xy[i, 1] = poly.interp1(si)
-                self.yaw[i] = poly.heading1(si)
+                pose = self._axles_pose(i, k, si) if cfg.npc_axles else None
+                if pose is not None:        # both axles on the path (TrafficConfig.npc_axles)
+                    self.xy[i, 0], self.xy[i, 1], self.yaw[i] = pose
+                else:
+                    poly = lanes[r[k]].poly
+                    self.xy[i, 0], self.xy[i, 1] = poly.interp1(si)
+                    self.yaw[i] = poly.heading1(si)
         if (self.bikes is not None or self.parked is not None) and len(self.shift) == n and (self.shift > 1e-4).any():
             # the cars that have moved over to the right for a bicycle (or a parked car)
             # (the heading turns about the rear axle, 0.3 of the length behind the centre: the tail does not swing
@@ -1330,6 +1422,36 @@ class Traffic:
         if swept is not None:       # standing for a car its body would touch: it does not come (min_arrival)
             self.sweep_wait = swept & (self.v < 0.1)
         self.release_stuck(ego_xy, ego_yaw)
+
+    def _axles_pose(self, i, k, s):
+        """TrafficConfig.npc_axles: car i's pose with both axles on its path (AXLE x its length behind and ahead of
+        the centre along the route): the centre half way between them, the heading along them. On a turn the body
+        cuts in a little (by about (AXLE L)^2 / 2R) instead of turning about its centre on the path, where the tail
+        swings out as much as the nose (two trucks turning left swung their rear into the car passing beside them,
+        stress roadtypes 1010/9900, suburban 2003/9900). None where a point would be on a lane change's other lane
+        (the route has the two side by side)."""
+        lanes = self.town.lanes
+        r = self.route[i]
+        a = AXLE * float(self.dims[i, 0])
+        pts = []
+        for off in (-a, a):
+            q, t = k, s + off
+            while t < 0.0:
+                if q == 0 or r[q] in (getattr(lanes[r[q - 1]], "links", None) or ()):
+                    return None
+                q -= 1
+                t += lanes[r[q]].length
+            while t > lanes[r[q]].length:
+                if q + 1 >= len(r):
+                    t = lanes[r[q]].length
+                    break
+                if r[q + 1] in (getattr(lanes[r[q]], "links", None) or ()):
+                    return None
+                t -= lanes[r[q]].length
+                q += 1
+            pts.append(lanes[r[q]].poly.interp1(t))
+        (x0, y0), (x1, y1) = pts
+        return (x0 + x1) / 2, (y0 + y1) / 2, math.atan2(y1 - y0, x1 - x0)
 
     def _integrate_shift(self, target, dt, swing=None):
         """Sideways (self.shift, to the right): towards the target at BIKE_RATE at most, gently (BIKE_ACC); back to

@@ -2248,3 +2248,106 @@ def test_npc_sweep_sees_the_corner_of_a_turn():
     g2, _, _ = sweep_gaps(straight, cum_s, cum_s <= 30.0, np.zeros((1, 48)), straight[:, 0], heading, hl, hw, *obs2,
                           np.array([0]), 0.35)
     assert not np.isfinite(g2[0])
+
+
+def test_npc_axles_pose():
+    """TrafficConfig.npc_axles (Traffic._axles_pose): on a straight lane the pose is the lane's; on a turn the body
+    sits with both axles on the path, cutting in a little, so its outer rear corner swings out less than turning
+    about its centre on the path."""
+    import math
+
+    from keisim.config import town_config
+    cfg = EnvConfig()
+    cfg.render_rgb = cfg.render_seg = False
+    cfg.town = town_config("twophase")
+    env = KeiEnv(cfg)
+    env.reset(town_seed=1010, episode_seed=9400)
+    tr, lanes = env.world.traffic, env.world.town.lanes
+    for i in range(tr.n):                                   # a car mid-way along a straight lane
+        L = lanes[tr.route[i][tr.ri[i]]]
+        if L.kind == "road" and L.turn == "straight" and 10.0 < tr.s[i] < L.length - 10.0 and \
+                abs(L.poly.heading1(tr.s[i] - 4.0) - L.poly.heading1(tr.s[i] + 4.0)) < 1e-3:
+            x, y, yaw = tr._axles_pose(i, tr.ri[i], float(tr.s[i]))
+            px, py = L.poly.interp1(float(tr.s[i]))
+            assert math.hypot(x - px, y - py) < 0.02 and abs(yaw - L.poly.heading1(float(tr.s[i]))) < 1e-3
+            break
+    else:
+        raise AssertionError("no car on a straight lane")
+    # a car put on a left-turn connector: its centre moves in, towards the inside of the turn
+    i = 0
+    conn = next(l for l in lanes if l.kind == "conn" and l.turn == "left" and l.length > 8.0)
+    tr.route[i] = [conn.pred[0], conn.id] + list(conn.succ)
+    tr.ri[i] = 1
+    s = conn.length / 2
+    x, y, yaw = tr._axles_pose(i, 1, s)
+    px, py = conn.poly.interp1(s)
+    h = conn.poly.heading1(s)
+    left = -(x - px) * math.sin(h) + (y - py) * math.cos(h)  # towards the left (the inside of a left turn)
+    assert 0.02 < left < 0.6 and abs(math.atan2(math.sin(yaw - h), math.cos(yaw - h))) < 0.3
+
+
+def test_box_fix_counts_a_car_standing_deep_past_its_line():
+    """TrafficConfig.box_fix: an NPC standing more than NPC_OVER past its stop line is inside the junction for the
+    box rule; one just over the line, or standing short of it, is not (nor deep in with box_fix off)."""
+    from keisim.traffic import NPC_OVER
+    cfg = EnvConfig()
+    cfg.render_rgb = cfg.render_seg = False
+    cfg.traffic.box_rule = True
+    env = KeiEnv(cfg)
+    env.reset(town_seed=5, episode_seed=2)
+    tr, town = env.world.traffic, env.world.town
+    L = next(l for l in town.lanes if l.kind == "road" and l.stop_s is not None and l.signal)
+    deep = {L.id: [(L.stop_s + NPC_OVER + 0.5 - 2.25, 0.0, 4.5)]}
+    near = {L.id: [(L.stop_s + 1.0 - 2.25, 0.0, 4.5)]}
+    tr.cfg.box_fix = False
+    assert L.end_junction not in tr.box_occupants(deep)
+    tr.cfg.box_fix = True
+    assert L.id in tr.box_occupants(deep).get(L.end_junction, ())
+    assert L.end_junction not in tr.box_occupants(near)
+
+
+def test_box_fix_waits_for_a_car_clearing_the_junction():
+    """TrafficConfig.box_fix (Traffic._clearing): an NPC standing over its stop line at its green waits while an NPC
+    from an approach of another signal group is on one of the junction's connectors, but not for one from its own
+    approach or group, nor for one standing for it (crosswalks_sub 2008/9850), and for one still on its lane past
+    its stop line as box_occupants counts it (bigjunction 3004/9800)."""
+    from keisim.config import town_config
+    from keisim.traffic import NPC_OVER
+    cfg = EnvConfig()
+    cfg.render_rgb = cfg.render_seg = False
+    cfg.town = town_config("twophase")                      # (two approaches share each green)
+    env = KeiEnv(cfg)
+    env.reset(town_seed=5, episode_seed=2)
+    tr, town = env.world.traffic, env.world.town
+    lanes = town.lanes
+    J = next(j for j in town.junctions if j.signalized)
+    conns = [l for l in lanes if l.kind == "conn" and l.junction == J.id]
+    mine = conns[0]
+    grp = lanes[mine.pred[0]].signal[1]
+    other = next(c for c in conns if lanes[c.pred[0]].signal[1] != grp)
+    same = [c for c in conns if c.pred[0] != mine.pred[0] and lanes[c.pred[0]].signal[1] == grp]
+    own = [c for c in conns if c.pred[0] == mine.pred[0] and c.id != mine.id]
+    assert tr.n >= 2 and same and own
+    for j in range(tr.n):                                   # everybody else at the start of car i's lane
+        tr.route[j], tr.ri[j], tr.s[j], tr.v[j] = [mine.pred[0]], 0, 0.0, 0.0
+    i, j = 0, 1
+    tr.route[i], tr.ri[i], tr.s[i] = [mine.pred[0], mine.id] + list(mine.succ[:1]), 0, lanes[mine.pred[0]].stop_s
+    tr.lead_owner = np.full(tr.n, -1)
+    tr.route[j], tr.ri[j], tr.s[j] = [other.id] + list(other.succ[:1]), 0, other.length / 2
+    assert tr._clearing(i, mine.id)
+    tr.lead_owner[j] = i                                    # it stands for car i: car i goes
+    assert not tr._clearing(i, mine.id)
+    tr.lead_owner[j] = -1
+    for c in same + own:                                    # its own group or approach: they share the green
+        tr.route[j] = [c.id] + list(c.succ[:1])
+        assert not tr._clearing(i, mine.id)
+    # still on its lane, past its stop line (as box_occupants counts it): moving, or standing more than NPC_OVER in
+    A = lanes[other.pred[0]]
+    hl = tr.dims[j, 0] / 2
+    tr.route[j], tr.ri[j] = [A.id, other.id], 0
+    tr.s[j], tr.v[j] = A.stop_s + NPC_OVER + 0.5 - hl, 0.0
+    assert tr._clearing(i, mine.id)
+    tr.s[j] = A.stop_s + 1.0 - hl                           # just over its line, standing: it obeys its light
+    assert not tr._clearing(i, mine.id)
+    tr.v[j] = 2.0                                           # going on over it: it is entering
+    assert tr._clearing(i, mine.id)
