@@ -893,8 +893,8 @@ class Bicycles:
     def _turning(self, tr):
         """Where the cars that turn at a junction will be in 0.6, 1.2 and 1.8 s (one circle each): the cars moving on
         a turn's connector or within 12 m of one on their route -> xy, r, owner, v, yaw, the car's position now.
-        TrafficConfig.bike_defer: also the standing and slow ones, at least TURN_AHEAD m ahead of the front bumper
-        along the path, where they will drive when they go on, so that a rider does not stop in their way
+        TrafficConfig.bike_defer: also TURN_AHEAD m ahead of the front bumper along the path, the standing ones too,
+        where they will drive when they go on, so that a rider does not stop in their way
         (bigjunction 3005/9800: a rider stood 1.4 m from a car crawling up behind another to turn right across its
         line, in the car's way; neither could move)."""
         lanes = self.town.lanes
@@ -913,9 +913,9 @@ class Bicycles:
                 if not turn:
                     continue
                 off = tr.odo[j] - tr.c_odo0[j]
-                ahead = [tr.v[j] * tau for tau in (0.6, 1.2, 1.8)]
-                if self.cfg.bike_defer:     # (a slow one: at least where its front will be)
-                    ahead = [max(a, tr.dims[j, 0] / 2 + d) for a, d in zip(ahead, TURN_AHEAD)]
+                ahead = [tr.v[j] * tau for tau in (0.6, 1.2, 1.8)] if moving[j] else []
+                if self.cfg.bike_defer:     # and where its front will drive (a standing or slow one too)
+                    ahead = sorted(ahead + [tr.dims[j, 0] / 2 + d for d in TURN_AHEAD])
                 for a in ahead:
                     q = int(np.searchsorted(tr.c_cum[j], off + a))
                     if q >= tr.PC or not np.isfinite(tr.c_cum[j, q]):

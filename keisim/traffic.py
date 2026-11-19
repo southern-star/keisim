@@ -1737,7 +1737,7 @@ class Traffic:
         hwid = self.dims[:, 1] / 2
         m_min, m_free = BIKE_MIN - less, BIKE_FREE - less
         if self.cfg.bike_defer:
-            skip = self._bike_defer(bow)
+            skip = self._bike_defer(bow, byw)
             if skip is not None:
                 m_min, m_free = np.where(skip, -1e3, m_min), np.where(skip, -1e3, m_free)
         gap, lead_v, _ = corridor_gaps(paths, relc, valid, self.xy, self.yaw, hl, hwid, bxy, br, bow, bsp, byw, me,
@@ -1751,11 +1751,12 @@ class Traffic:
             vmax[m] = np.minimum(vmax[m], np.sqrt(v_pass ** 2 + 3.0 * np.maximum(g_free[m], 0.0)))
         return gap, lead_v, vmax
 
-    def _bike_defer(self, bow):
+    def _bike_defer(self, bow, byw):
         """TrafficConfig.bike_defer: (N, M) bool, the circles of where a moving bicycle will be (Bicycles.circles'
         predict, after its NCB own circles each) that car i, on a connector, leaves out: those of a bicycle that is
         braking or standing for a car on a connector of the same junction (Bicycles.lead: car i itself or another),
-        so it will not ride on into the junction as they predict. Each waited for the other's future: a right turn and
+        so it will not ride on into the junction as they predict; not a bicycle going the car's way (one following it
+        has it as its lead too: it rode up beside it). Each waited for the other's future: a right turn and
         a bicycle coming straight on from the other way stopped nose to nose in the junction, the car's body already
         across the bicycle's line, and stood so for good; the car turning behind it did the same while the bicycle
         still waited for the first (bigjunction 3005/9800, 600 m). The car now goes on; it still keeps BIKE_MIN from
@@ -1776,6 +1777,8 @@ class Traffic:
         lc = lead[bow]                          # the car each circle's bicycle brakes for
         lj = np.where((lc >= 0) & (lc < n), jn[np.clip(lc, 0, n - 1)], -1)
         skip = pred[None, :] & (jn[:, None] >= 0) & (lj[None, :] == jn[:, None])
+        if skip.any():                          # across its way or towards it, not along it
+            skip &= np.cos(byw[None, :] - self.yaw[:, None]) < 0.5
         return skip if skip.any() else None
 
     def _shifted_paths(self, paths, relc):
