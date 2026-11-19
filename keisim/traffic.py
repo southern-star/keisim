@@ -1753,19 +1753,29 @@ class Traffic:
 
     def _bike_defer(self, bow):
         """TrafficConfig.bike_defer: (N, M) bool, the circles of where a moving bicycle will be (Bicycles.circles'
-        predict, after its NCB own circles each) that car i leaves out: those of a bicycle that is braking or standing
-        for car i (Bicycles.lead), with car i on a connector. Each waited for the other's future: a right turn and a
-        bicycle coming straight on from the other way stopped nose to nose in the junction, the car's body already
-        across the bicycle's line, and stood so for good (bigjunction 3005/9800, 600 m). The car now goes on; it still
-        keeps BIKE_MIN from where the bicycle is. None: nothing to leave out."""
+        predict, after its NCB own circles each) that car i, on a connector, leaves out: those of a bicycle that is
+        braking or standing for a car on a connector of the same junction (Bicycles.lead: car i itself or another),
+        so it will not ride on into the junction as they predict. Each waited for the other's future: a right turn and
+        a bicycle coming straight on from the other way stopped nose to nose in the junction, the car's body already
+        across the bicycle's line, and stood so for good; the car turning behind it did the same while the bicycle
+        still waited for the first (bigjunction 3005/9800, 600 m). The car now goes on; it still keeps BIKE_MIN from
+        where the bicycle is. None: nothing to leave out."""
         from .bicycles import NCB
         bk, lanes, n = self.bikes, self.town.lanes, self.n
         lead = getattr(bk, "lead", None)
         pred = np.arange(len(bow)) >= NCB * bk.n
         if lead is None or len(lead) != bk.n or not pred.any():
             return None
-        conn = np.array([lanes[self.route[i][self.ri[i]]].kind == "conn" for i in range(n)], bool)
-        skip = pred[None, :] & conn[:, None] & (lead[bow][None, :] == np.arange(n)[:, None])
+        jn = np.full(n, -1)                     # the junction of each car on a connector (-1: on a lane)
+        for i in range(n):
+            L = lanes[self.route[i][self.ri[i]]]
+            if L.kind == "conn":
+                jn[i] = L.junction
+        if not (jn >= 0).any():
+            return None
+        lc = lead[bow]                          # the car each circle's bicycle brakes for
+        lj = np.where((lc >= 0) & (lc < n), jn[np.clip(lc, 0, n - 1)], -1)
+        skip = pred[None, :] & (jn[:, None] >= 0) & (lj[None, :] == jn[:, None])
         return skip if skip.any() else None
 
     def _shifted_paths(self, paths, relc):

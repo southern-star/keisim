@@ -32,6 +32,8 @@ from .parked import PARKED_OWNER, PK_BIKE_CLEAR
 
 BIKE_LEN, BIKE_W = 1.8, 0.6
 BIKE_R = 0.3                # the circles that cover a bike (NCB of them along it)
+TURN_AHEAD = (0.5, 2.0, 3.5)    # m: TrafficConfig.bike_defer: where a standing turning car will drive (ahead of its
+#                             front bumper along its path): riders keep out of it (Bicycles._turning)
 NCB = 3
 BIKE_EDGE = 0.5             # m: the bike's line from the edge of the road surface
 BIKE_OWNER = 1_000_000      # owner ids of bike circles in the bikes' own corridor check
@@ -890,11 +892,17 @@ class Bicycles:
 
     def _turning(self, tr):
         """Where the cars that turn at a junction will be in 0.6, 1.2 and 1.8 s (one circle each): the cars moving on
-        a turn's connector or within 12 m of one on their route -> xy, r, owner, v, yaw, the car's position now."""
+        a turn's connector or within 12 m of one on their route -> xy, r, owner, v, yaw, the car's position now.
+        TrafficConfig.bike_defer: also the standing and slow ones, at least TURN_AHEAD m ahead of the front bumper
+        along the path, where they will drive when they go on, so that a rider does not stop in their way
+        (bigjunction 3005/9800: a rider stood 1.4 m from a car crawling up behind another to turn right across its
+        line, in the car's way; neither could move)."""
         lanes = self.town.lanes
         xs, rs, os_, vs, ys, cs = [], [], [], [], [], []
         if tr.n and getattr(tr, "_cn", -1) == tr.n:
-            for j in np.nonzero(tr.v > 0.5)[0]:
+            moving = tr.v > 0.5
+            cars = np.arange(tr.n) if self.cfg.bike_defer else np.nonzero(moving)[0]
+            for j in cars:
                 r, k = tr.route[j], tr.ri[j]
                 cur = lanes[r[k]]
                 if cur.kind == "conn":
@@ -905,8 +913,11 @@ class Bicycles:
                 if not turn:
                     continue
                 off = tr.odo[j] - tr.c_odo0[j]
-                for tau in (0.6, 1.2, 1.8):
-                    q = int(np.searchsorted(tr.c_cum[j], off + tr.v[j] * tau))
+                ahead = [tr.v[j] * tau for tau in (0.6, 1.2, 1.8)]
+                if self.cfg.bike_defer:     # (a slow one: at least where its front will be)
+                    ahead = [max(a, tr.dims[j, 0] / 2 + d) for a, d in zip(ahead, TURN_AHEAD)]
+                for a in ahead:
+                    q = int(np.searchsorted(tr.c_cum[j], off + a))
                     if q >= tr.PC or not np.isfinite(tr.c_cum[j, q]):
                         break
                     xs.append(tr.c_pts[j, q])
