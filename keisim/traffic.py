@@ -879,6 +879,27 @@ class Traffic:
                 return True
         return False
 
+    def _clearing(self, i, conn_id):
+        """TrafficConfig.box_fix: an NPC other than i on a connector of `conn_id`'s junction from an approach of
+        another signal group (box_busy) and not standing for car i (its lead): it is clearing the junction."""
+        lanes = self.town.lanes
+        c = lanes[conn_id]
+        if c.kind != "conn":
+            return False
+        mine = lanes[c.pred[0]].signal
+        lead = self.lead_owner if len(self.lead_owner) == self.n else ()
+        for j in range(self.n):
+            L = lanes[self.route[j][self.ri[j]]]
+            if j == i or L.kind != "conn" or L.junction != c.junction or L.pred[0] == c.pred[0]:
+                continue
+            p = lanes[L.pred[0]].signal
+            if mine is not None and p is not None and p[1] == mine[1]:
+                continue
+            if len(lead) and lead[j] == i:
+                continue
+            return True
+        return False
+
     # ------------------------------------------------------------------- yielding (two-phase signals)
     def yield_tables(self, ego_info=None, visible=None, bikes_visible=None):
         """Who is where, for must_yield: lane -> [(s, v, length, is_ego, next lane, the lane after it, waits)], front
@@ -1242,6 +1263,17 @@ class Traffic:
                     if self.exit_blocked(r[k + 1], r[k + 2], self.dims[i, 0] + 3.0, occ, (ego_xy, ego_v)) or \
                             (box is not None and self.box_busy(r[k + 1], box)):
                         stop_gap[i] = d - 0.6
+            elif cfg.box_fix and st == TL_GREEN and d < -0.5:
+                # standing over its line at its green (past_line_light_only): it still lets the NPCs of the other
+                # signal groups on the junction's connectors clear it first, not the ego (crosswalks_sub 2008/9850:
+                # it set off into a right turn finishing at the end of its green; the two stood nose to nose)
+                r = self.route[i]
+                try:
+                    k = r.index(lid, self.ri[i])
+                except ValueError:
+                    continue
+                if k + 1 < len(r) and self._clearing(i, r[k + 1]):
+                    stop_gap[i] = d - 0.6
         if town.stop_signs:          # 止まれ (Town.from_graph): stop once at the minor road's stop line
             self._stop_sign_gaps(stop_gap, hl)
         if self.has_yields:          # two-phase signals: turns wait for a gap in the oncoming traffic

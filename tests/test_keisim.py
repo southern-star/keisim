@@ -2304,3 +2304,39 @@ def test_box_fix_counts_a_car_standing_deep_past_its_line():
     tr.cfg.box_fix = True
     assert L.id in tr.box_occupants(deep).get(L.end_junction, ())
     assert L.end_junction not in tr.box_occupants(near)
+
+
+def test_box_fix_waits_for_a_car_clearing_the_junction():
+    """TrafficConfig.box_fix (Traffic._clearing): an NPC standing over its stop line at its green waits while an NPC
+    from an approach of another signal group is on one of the junction's connectors, but not for one from its own
+    approach or group, nor for one standing for it (crosswalks_sub 2008/9850)."""
+    from keisim.config import town_config
+    cfg = EnvConfig()
+    cfg.render_rgb = cfg.render_seg = False
+    cfg.town = town_config("twophase")                      # (two approaches share each green)
+    env = KeiEnv(cfg)
+    env.reset(town_seed=5, episode_seed=2)
+    tr, town = env.world.traffic, env.world.town
+    lanes = town.lanes
+    J = next(j for j in town.junctions if j.signalized)
+    conns = [l for l in lanes if l.kind == "conn" and l.junction == J.id]
+    mine = conns[0]
+    grp = lanes[mine.pred[0]].signal[1]
+    other = next(c for c in conns if lanes[c.pred[0]].signal[1] != grp)
+    same = [c for c in conns if c.pred[0] != mine.pred[0] and lanes[c.pred[0]].signal[1] == grp]
+    own = [c for c in conns if c.pred[0] == mine.pred[0] and c.id != mine.id]
+    assert tr.n >= 2 and same and own
+    for j in range(tr.n):                                   # everybody else far away on road lanes
+        if lanes[tr.route[j][tr.ri[j]]].kind == "conn" and lanes[tr.route[j][tr.ri[j]]].junction == J.id:
+            tr.route[j], tr.ri[j] = [mine.pred[0]], 0
+    i, j = 0, 1
+    tr.route[i], tr.ri[i], tr.s[i] = [mine.pred[0], mine.id] + list(mine.succ[:1]), 0, lanes[mine.pred[0]].stop_s
+    tr.lead_owner = np.full(tr.n, -1)
+    tr.route[j], tr.ri[j], tr.s[j] = [other.id] + list(other.succ[:1]), 0, other.length / 2
+    assert tr._clearing(i, mine.id)
+    tr.lead_owner[j] = i                                    # it stands for car i: car i goes
+    assert not tr._clearing(i, mine.id)
+    tr.lead_owner[j] = -1
+    for c in same + own:                                    # its own group or approach: they share the green
+        tr.route[j] = [c.id] + list(c.succ[:1])
+        assert not tr._clearing(i, mine.id)
