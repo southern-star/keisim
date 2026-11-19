@@ -313,7 +313,7 @@ def corridor_gaps(paths, cum, valid, origin, heading, half_len, half_w, cxy, cr,
 
 
 def sweep_gaps(paths, cum, valid, curv, origin, heading, half_len, half_w, cxy, cr, cowner, cspeed, cyaw, self_owner,
-               margin):
+               margin, axles=False):
     """TrafficConfig.npc_sweep: the cars that corridor_gaps' tube misses but the car's body would touch.
 
     The tube is the car's half width (plus the margin) round each point of its path. The body is a box placed at each
@@ -325,7 +325,10 @@ def sweep_gaps(paths, cum, valid, curv, origin, heading, half_len, half_w, cxy, 
     corners of its own box (SWEEP_CORNER).
     On straight paths the box is inside the tube. Arguments as for corridor_gaps, and curv (K, P), the path's
     curvature at each point; returns gap (K,), the distance the car's centre can go along the path before its box
-    touches a circle (inf: none), lead_speed (K,) and lead_owner (K,) (-1 if none)."""
+    touches a circle (inf: none), lead_speed (K,) and lead_owner (K,) (-1 if none).
+    axles (TrafficConfig.npc_axles): the box sits as the cars do then, half way between the path's points AXLE x the
+    length behind and ahead, heading along them; on a turn it cuts in, so the cars beside its body count too, not
+    only those ahead of its centre (suburban 2008/9851: a truck turning right cut in on a car standing beside it)."""
     K = len(paths)
     gap = np.full(K, np.inf)
     lead_v = np.zeros(K)
@@ -339,6 +342,25 @@ def sweep_gaps(paths, cum, valid, curv, origin, heading, half_len, half_w, cxy, 
         return gap, lead_v, lead_o
     act = np.nonzero(turn)[0]
     Pm = max(int(win[act].sum(1).max()), 2)                     # the points in the window (cum grows along the path)
+    box_c = box_t = None
+    if axles:                   # the box half way between the points AXLE x the length behind and ahead
+        box_c, box_t = np.zeros((K, Pm, 2)), np.zeros((K, Pm, 2))
+        for k in act:
+            nv = max(int(valid[k].sum()), 2)
+            P, c = paths[k, :nv], cum[k, :nv]
+            u0 = (P[1] - P[0]) / max(float(np.hypot(*(P[1] - P[0]))), 1e-9)
+            a = AXLE * 2.0 * float(half_len[k])
+
+            def at(q, P=P, c=c, u0=u0):
+                xy = np.stack([np.interp(q, c, P[:, 0]), np.interp(q, c, P[:, 1])], -1)
+                back = q < c[0]                             # behind the path's first point: along its first piece
+                xy[back] = P[0] + (q[back] - c[0])[:, None] * u0
+                return xy
+            q = cum[k, :Pm]
+            R, F = at(q - a), at(q + a)
+            box_c[k] = (R + F) / 2
+            d = F - R
+            box_t[k] = d / np.maximum(np.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None]
     paths, cum, valid = paths[:, :Pm], cum[:, :Pm], win[:, :Pm]
     cm = np.nonzero(car)[0]
     reach = SWEEP_AHEAD + half_len + 4.0
@@ -347,7 +369,8 @@ def sweep_gaps(paths, cum, valid, curv, origin, heading, half_len, half_w, cxy, 
     ds = cxy[ms] - origin[ks]
     u = np.stack([np.cos(heading), np.sin(heading)], -1)
     lon = (ds * u[ks]).sum(-1)
-    keep = (ds[:, 0] ** 2 + ds[:, 1] ** 2 < reach[ks] ** 2) & (cowner[ms] != self_owner[ks]) & (lon > -0.5)
+    keep = (ds[:, 0] ** 2 + ds[:, 1] ** 2 < reach[ks] ** 2) & (cowner[ms] != self_owner[ks]) & \
+        (lon > (-half_len[ks] if axles else -0.5))
     ks, ms = ks[keep], ms[keep]
     if len(ks) == 0:
         return gap, lead_v, lead_o
@@ -365,9 +388,13 @@ def sweep_gaps(paths, cum, valid, curv, origin, heading, half_len, half_w, cxy, 
     ks, ms, diff = ks[~seen], ms[~seen], diff[~seen]
     if len(ks) == 0:
         return gap, lead_v, lead_o
-    t = np.gradient(paths, axis=1)                              # the path's heading at each point
-    t /= np.maximum(np.hypot(t[..., 0], t[..., 1]), 1e-9)[..., None]
-    tk = t[ks]
+    if axles:
+        diff = cxy[ms][:, None, :] - box_c[ks]
+        tk = box_t[ks]
+    else:
+        t = np.gradient(paths, axis=1)                          # the path's heading at each point
+        t /= np.maximum(np.hypot(t[..., 0], t[..., 1]), 1e-9)[..., None]
+        tk = t[ks]
     x = (diff * tk).sum(-1)
     y = diff[..., 1] * tk[..., 0] - diff[..., 0] * tk[..., 1]
     rc = (cr[ms] * SWEEP_CORNER)[:, None]
@@ -1264,7 +1291,7 @@ class Traffic:
         swept = None
         if cfg.npc_sweep:           # the corners of the body on a turn: the cars the tube misses (sweep_gaps)
             g_s, v_s, o_s = sweep_gaps(paths, relc, valid, curv, self.xy, self.yaw, hl, self.dims[:, 1] / 2,
-                                       cxy, cr, cow, csp, cyw, np.arange(n), margin)
+                                       cxy, cr, cow, csp, cyw, np.arange(n), margin, axles=cfg.npc_axles)
             swept = g_s < gap
             if len(self.lead_owner) == n:   # not for an NPC that waits for this car (its lead at the last step):
                 mutual = (o_s >= 0) & (o_s < n)   # two cars that wait for each other wait for ever (crosswalks_sub
