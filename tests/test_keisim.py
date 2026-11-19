@@ -2309,8 +2309,10 @@ def test_box_fix_counts_a_car_standing_deep_past_its_line():
 def test_box_fix_waits_for_a_car_clearing_the_junction():
     """TrafficConfig.box_fix (Traffic._clearing): an NPC standing over its stop line at its green waits while an NPC
     from an approach of another signal group is on one of the junction's connectors, but not for one from its own
-    approach or group, nor for one standing for it (crosswalks_sub 2008/9850)."""
+    approach or group, nor for one standing for it (crosswalks_sub 2008/9850), and for one still on its lane past
+    its stop line as box_occupants counts it (bigjunction 3004/9800)."""
     from keisim.config import town_config
+    from keisim.traffic import NPC_OVER
     cfg = EnvConfig()
     cfg.render_rgb = cfg.render_seg = False
     cfg.town = town_config("twophase")                      # (two approaches share each green)
@@ -2326,9 +2328,8 @@ def test_box_fix_waits_for_a_car_clearing_the_junction():
     same = [c for c in conns if c.pred[0] != mine.pred[0] and lanes[c.pred[0]].signal[1] == grp]
     own = [c for c in conns if c.pred[0] == mine.pred[0] and c.id != mine.id]
     assert tr.n >= 2 and same and own
-    for j in range(tr.n):                                   # everybody else far away on road lanes
-        if lanes[tr.route[j][tr.ri[j]]].kind == "conn" and lanes[tr.route[j][tr.ri[j]]].junction == J.id:
-            tr.route[j], tr.ri[j] = [mine.pred[0]], 0
+    for j in range(tr.n):                                   # everybody else at the start of car i's lane
+        tr.route[j], tr.ri[j], tr.s[j], tr.v[j] = [mine.pred[0]], 0, 0.0, 0.0
     i, j = 0, 1
     tr.route[i], tr.ri[i], tr.s[i] = [mine.pred[0], mine.id] + list(mine.succ[:1]), 0, lanes[mine.pred[0]].stop_s
     tr.lead_owner = np.full(tr.n, -1)
@@ -2340,3 +2341,13 @@ def test_box_fix_waits_for_a_car_clearing_the_junction():
     for c in same + own:                                    # its own group or approach: they share the green
         tr.route[j] = [c.id] + list(c.succ[:1])
         assert not tr._clearing(i, mine.id)
+    # still on its lane, past its stop line (as box_occupants counts it): moving, or standing more than NPC_OVER in
+    A = lanes[other.pred[0]]
+    hl = tr.dims[j, 0] / 2
+    tr.route[j], tr.ri[j] = [A.id, other.id], 0
+    tr.s[j], tr.v[j] = A.stop_s + NPC_OVER + 0.5 - hl, 0.0
+    assert tr._clearing(i, mine.id)
+    tr.s[j] = A.stop_s + 1.0 - hl                           # just over its line, standing: it obeys its light
+    assert not tr._clearing(i, mine.id)
+    tr.v[j] = 2.0                                           # going on over it: it is entering
+    assert tr._clearing(i, mine.id)

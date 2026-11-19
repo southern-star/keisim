@@ -880,8 +880,10 @@ class Traffic:
         return False
 
     def _clearing(self, i, conn_id):
-        """TrafficConfig.box_fix: an NPC other than i on a connector of `conn_id`'s junction from an approach of
-        another signal group (box_busy) and not standing for car i (its lead): it is clearing the junction."""
+        """TrafficConfig.box_fix: an NPC other than i inside `conn_id`'s junction as box_occupants counts them (on
+        one of its connectors, or past its stop line and moving or standing more than NPC_OVER past it), from an
+        approach of another signal group (box_busy), and not standing for car i (its lead): it is clearing the
+        junction."""
         lanes = self.town.lanes
         c = lanes[conn_id]
         if c.kind != "conn":
@@ -890,9 +892,20 @@ class Traffic:
         lead = self.lead_owner if len(self.lead_owner) == self.n else ()
         for j in range(self.n):
             L = lanes[self.route[j][self.ri[j]]]
-            if j == i or L.kind != "conn" or L.junction != c.junction or L.pred[0] == c.pred[0]:
+            if L.kind == "conn":
+                if L.junction != c.junction:
+                    continue
+                came = L.pred[0]
+            elif L.stop_s is not None and L.end_junction == c.junction:
+                front = float(self.s[j]) + self.dims[j, 0] / 2
+                if not front > L.stop_s + 0.5 or not (self.v[j] > 1.0 or front > L.stop_s + NPC_OVER):
+                    continue
+                came = L.id
+            else:
                 continue
-            p = lanes[L.pred[0]].signal
+            if j == i or came == c.pred[0]:
+                continue
+            p = lanes[came].signal
             if mine is not None and p is not None and p[1] == mine[1]:
                 continue
             if len(lead) and lead[j] == i:
@@ -1265,8 +1278,9 @@ class Traffic:
                         stop_gap[i] = d - 0.6
             elif cfg.box_fix and st == TL_GREEN and d < -0.5:
                 # standing over its line at its green (past_line_light_only): it still lets the NPCs of the other
-                # signal groups on the junction's connectors clear it first, not the ego (crosswalks_sub 2008/9850:
-                # it set off into a right turn finishing at the end of its green; the two stood nose to nose)
+                # signal groups inside the junction (_clearing) clear it first, not the ego (crosswalks_sub
+                # 2008/9850: it set off into a right turn finishing at the end of its green; the two stood nose to
+                # nose; bigjunction 3004/9800: the same with the right turn still 6.6 m past its own line)
                 r = self.route[i]
                 try:
                     k = r.index(lid, self.ri[i])

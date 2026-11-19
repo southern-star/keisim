@@ -190,9 +190,10 @@ class TrafficConfig:
     #   One that had stood long at its red had a route ending at its connector: at green it went in with no box
     #   check, across two cars of another phase still inside (bigjunction 3006/9801).
     # - With past_line_light_only, an NPC standing over its line (within NPC_OVER) at its green still waits while an
-    #   NPC of another signal group is on one of the junction's connectors (Traffic._clearing; not for the ego, nor
-    #   for a car standing for it). It went straight on at its green into a right turn finishing at the end of its
-    #   own green; the two stood nose to nose for good (crosswalks_sub 2008/9850).
+    #   NPC of another signal group is inside the junction as the box rule counts them (Traffic._clearing; not for
+    #   the ego, nor for a car standing for it). It went straight on at its green into a right turn finishing at the
+    #   end of its own green; the two stood nose to nose for good (crosswalks_sub 2008/9850; bigjunction 3004/9800,
+    #   the right turn still on its lane, 6.6 m past its line).
     box_fix: bool = False
     # Crosswalks at signals (Town.ped_crossings: the zebras at the ends of the roads of two-phase signalised junctions).
     # crosswalks: the chance that a person walking up to such an end crosses there: they wait at the kerb for the
