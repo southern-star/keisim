@@ -913,17 +913,18 @@ class Bicycles:
                 if not turn:
                     continue
                 off = tr.odo[j] - tr.c_odo0[j]
-                ahead = [tr.v[j] * tau for tau in (0.6, 1.2, 1.8)] if moving[j] else []
-                if self.cfg.bike_defer:     # and where its front will drive (a standing or slow one too)
-                    ahead = sorted(ahead + [tr.dims[j, 0] / 2 + d for d in TURN_AHEAD])
-                for a in ahead:
+                ahead = [(tr.v[j] * tau, tr.v[j]) for tau in (0.6, 1.2, 1.8)] if moving[j] else []
+                if self.cfg.bike_defer:     # and where its front will drive (a standing or slow one too), a place
+                    #                         to keep out of, not a car to follow (speed 0)
+                    ahead = sorted(ahead + [(tr.dims[j, 0] / 2 + d, 0.0) for d in TURN_AHEAD])
+                for a, va in ahead:
                     q = int(np.searchsorted(tr.c_cum[j], off + a))
                     if q >= tr.PC or not np.isfinite(tr.c_cum[j, q]):
                         break
                     xs.append(tr.c_pts[j, q])
                     rs.append(tr.dims[j, 1] / 2)
                     os_.append(j)
-                    vs.append(tr.v[j])
+                    vs.append(va)
                     ys.append(tr.yaw[j])
                     cs.append(tr.xy[j])
         if not xs:
