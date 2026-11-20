@@ -2531,16 +2531,18 @@ def test_bike_hook_riders_drop_back_when_too_close():
 
 
 def test_bike_hook_new_riders_are_clear_of_the_cars():
-    """TrafficConfig.bike_hook (Bicycles._free): a new rider has the whole bike, not just a BIKE_R circle at its
-    centre, clear of the car circles (a rider put just behind a car reached into it: suburban 2009/9851)."""
+    """TrafficConfig.bike_hook (Bicycles._free): a new rider has all three of the bike's circles clear of the car
+    circles, not only its middle one (a rider put just behind a car reached into it: suburban 2009/9851); beside a
+    car, as before."""
     from keisim.bicycles import BIKE_LEN, BIKE_R
     _, tr, bk, *_ = _hook_scene()
     cxy, cr = np.array([[0.0, 0.0]]), np.array([0.78])
-    p = np.array([cr[0] + BIKE_R + 0.45 + 0.2, 0.0])       # clear of a BIKE_R circle, not of the bike's ends
     far = np.array([[1e5, 1e5]])
+    behind = np.array([cr[0] + BIKE_R + 0.45 + 0.2, 0.0])  # its middle circle clear, its front one not
+    beside = np.array([0.0, cr[0] + BIKE_R + 0.45 + 0.05])
+    clear = np.array([cr[0] + BIKE_LEN / 2 + 0.45 + 0.05, 0.0])
     for hook in (False, True):
         tr.cfg.bike_hook = hook
-        assert bk._free(p, far, 1.0, cxy, cr, skip=None if bk.n == 0 else np.arange(bk.n)) == (not hook)
-        q = np.array([cr[0] + BIKE_LEN / 2 + 0.45 + 0.05, 0.0])
-        assert bk._free(q, far, 1.0, cxy, cr, skip=np.arange(bk.n))
+        for p, h, ok in ((behind, np.pi, not hook), (beside, 0.0, True), (clear, np.pi, True)):
+            assert bk._free(p, far, 1.0, cxy, cr, skip=np.arange(bk.n), h=h) == ok, (hook, p)
     tr.cfg.bike_hook = False

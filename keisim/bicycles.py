@@ -245,13 +245,15 @@ class Bicycles:
             self._try_add(lid, float(rng.uniform(3.0, L - 3.0)), avoid_xy, avoid_r, car_xy, car_r)
 
     # --------------------------------------------------------------- spawning
-    def _free(self, p, avoid_xy, avoid_r, car_xy, car_r, skip=None):
+    def _free(self, p, avoid_xy, avoid_r, car_xy, car_r, skip=None, h=None):
         if avoid_xy is not None and len(avoid_xy) and np.min(np.hypot(*(avoid_xy - p).T)) < avoid_r:
             return False
-        # bike_hook: the whole bike clear of the car circles, not just a BIKE_R circle at its centre (a rider put
-        # 0.6 m behind a car's rear circle reaches 0.3 m into the car: suburban 2009/9851, stress roadtypes 1016/9901)
-        rb = BIKE_LEN / 2 if self.cfg.bike_hook else BIKE_R
-        if car_xy is not None and len(car_xy) and np.any(np.hypot(*(car_xy - p).T) < car_r + rb + 0.45):
+        q = p[None]
+        if self.cfg.bike_hook and h is not None:   # bike_hook: all of the bike's circles (heading h), not only the
+            q = bike_circles(p[None], np.array([h]))[0]  # middle one (a rider put just behind a car reached 0.3 m
+            #                                          into it: suburban 2009/9851, stress roadtypes 1016/9901)
+        if car_xy is not None and len(car_xy) and \
+                np.any(np.hypot(*(car_xy[None] - q[:, None]).transpose(2, 0, 1)) < car_r[None] + BIKE_R + 0.45):
             return False
         if self.n:
             d = np.hypot(*(self.xy - p).T)
@@ -267,7 +269,7 @@ class Bicycles:
         u = tr.at(s)
         j = int(np.clip(np.searchsorted(tr.cum, u), 1, len(tr.cum) - 1))
         p = tr.pts[j]
-        if not self._free(p, avoid_xy, avoid_r, car_xy, car_r):
+        if not self._free(p, avoid_xy, avoid_r, car_xy, car_r, h=float(tr.heading[j])):
             return False
         ty = int(rng.choice(len(TYPES), p=[t["p"] for t in TYPES]))
         T = TYPES[ty]
@@ -358,7 +360,7 @@ class Bicycles:
             u = float(rng.uniform(3.0, tr.length - 3.0))
             j = int(np.clip(np.searchsorted(tr.cum, u), 1, len(tr.cum) - 1))
             p = tr.pts[j]
-            if not self._free(p, avoid_xy, 60.0, car_xy, car_r, skip=i):
+            if not self._free(p, avoid_xy, 60.0, car_xy, car_r, skip=i, h=float(tr.heading[j])):
                 continue
             self.route[i] = [lid]
             self._cat[i] = None
@@ -563,7 +565,6 @@ class Bicycles:
         from .traffic import corridor_gaps
         tr = traffic
         cxy, cr, cow = tr.circles()
-        circ0 = cxy, cr
         if cfg.bike_hook and tr.n:
             sxy, sow = car_side_points(tr.xy, tr.yaw, tr.dims[:, 0], tr.dims[:, 1])
             cxy, cr, cow = np.concatenate([cxy, sxy]), np.concatenate([cr, np.full(len(sxy), SIDE_R)]), \
@@ -898,7 +899,7 @@ class Bicycles:
             look_t = -1.0 if self.look_t[i] > 0.0 else 0.0
             self.look[i] += float(np.clip(look_t - self.look[i], -dt / 0.2, dt / 0.25))
             self.stuck[i] = self.stuck[i] + dt if v_new < 0.1 else 0.0
-        self._release(ego_xy, ego_yaw, *circ0)
+        self._release(ego_xy, ego_yaw, cxy, cr)        # (bike_hook: with the cars' side points)
 
     def _side_clear(self, i, vxy):
         """No car level with rider i on its right, where it would walk its bicycle out to."""

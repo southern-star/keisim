@@ -216,8 +216,10 @@ class TrafficConfig:
     # - A rider closer than its standing distance to whoever is in its way drops back, as in the browser, instead of
     #   riding on at their speed (a rider following a car round a right turn rode into its rear corner: stress
     #   roadtypes 1013/9900).
-    # - New riders are put with the whole bike clear of the cars, not only a BIKE_R circle at its centre (a rider put
-    #   just behind a car reached into it: suburban 2009/9851, stress roadtypes 1016/9901).
+    # - New riders are put with all three of the bike's circles clear of the cars' circles and side points, not
+    #   only its middle one (a rider put just behind a car reached 0.3 m into it: suburban 2009/9851, stress
+    #   roadtypes 1016/9901). A 0.9 m circle round the bike's centre would keep riders from starting beside the cars
+    #   on the kerb, and the routes took longer.
     # Off by default: the old evaluations stay reproducible.
     bike_hook: bool = False
     # Crosswalks at signals (Town.ped_crossings: the zebras at the ends of the roads of two-phase signalised junctions).
