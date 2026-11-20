@@ -552,6 +552,7 @@ def main():
     suite_npc, suite_bs, suite_nsw = int(dflt["npc_past_line"]), int(dflt["bike_sweep"]), int(dflt["npc_sweep"])
     suite_nax, suite_bf = int(dflt["npc_axles"]), int(dflt["box_fix"])
     suite_pk, suite_do, suite_cap = float(dflt["parked"]), float(dflt["dart_out"]), int(dflt["cap_scale"])
+    suite_len = float(dflt["route_length"])
     for k, v in dflt.items():
         if getattr(args, k) is None:
             setattr(args, k, v)
@@ -601,11 +602,15 @@ def main():
         (f"_wb{args.expert_wait_back:g}" if args.expert_wait_back else "") + \
         (f"_delay{args.expert_delay:g}" if args.expert_delay else "") + \
         ("_act" if args.expert_delay and args.expert_delay_mode == "action" else "")
+    # the failure logs of a run at another route length go to a folder of their own: the routes keep their town and
+    # episode, so (round 13) parked at 600 m wrote over the 2.5 km logs of the same routes; the output file's name
+    # (--out) stays the caller's choice, as before
+    flen = "" if args.route_length == suite_len else f"_{args.route_length:g}m"
     if args.osm_town:
         suffix = suffix.replace("_twophase", "")
-        fail_dir = os.path.join("runs", "failures", args.osm_town, f"{tag}{suffix}")
+        fail_dir = os.path.join("runs", "failures", args.osm_town, f"{tag}{suffix}{flen}")
     else:
-        fail_dir = os.path.join("runs", "failures", f"{tag}_{args.suite}{suffix}")
+        fail_dir = os.path.join("runs", "failures", f"{tag}_{args.suite}{suffix}{flen}")
     a = {"agent": args.agent, "ckpt": args.ckpt, "route_length": args.route_length, "weather": args.weather,
          "max_steps": args.max_steps, "videos": args.videos, "video_dir": args.video_dir, "tag": tag,
          "dense": args.dense, "renderer": args.renderer, "keiview_roads": args.keiview_roads, "fail_dir": fail_dir,
