@@ -46,6 +46,9 @@ const EGO = { L: 4.5, W: 1.85 };
 // keisim TrafficConfig.npc_sweep (traffic.sweep_gaps): a car whose front corner swings out more than MIN on the sharpest
 // bend of its path within AHEAD places its body there, against the cars standing (slower than STAND)
 const SWEEP = { AHEAD: 25.0, MIN: 0.05, STAND: 0.5 };
+// keisim TrafficConfig.npc_axles (traffic.AXLE): a car's body sits with both axles on its path, AXLE x its length
+// behind and ahead of its centre, heading along them (on a turn it cuts in instead of swinging its tail out)
+const AXLE = 0.3;
 // keisim/traffic.py BIKE_*: the room a car leaves beside a bicycle (under MIN it follows, from FREE it passes at its
 // own speed, between them at PASS_V or PASS_DV faster than the rider), how it moves over inside its lane (KEEP from
 // the lane's edge, from IN[0]..IN[1] m before the rider to OUT[0]..OUT[1] m past it, at RATE m/s sideways at most,
@@ -173,7 +176,7 @@ function wideLanes(lanes) {
  * ego's route position and next signalised junction), so the other cars know which lane or connector the ego is on.
  */
 export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesPerKm = 0, parked: parkedPerKm = 0,
-  sweep = true } = {}) {
+  sweep = true, axles = true, boxFix = true, bikeDefer = true } = {}) {
   let st = seed >>> 0 || 1;
   const rnd = () => ((st = (st * 1664525 + 1013904223) >>> 0) / 4294967296);
   const junctions = new Map(data.junctions.map((j) => [j.id, j]));
@@ -210,6 +213,7 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
   const cars = [];
   let contacts = 0, lastContact = -1e9, npcContacts = 0, stopSignStops = 0, laneChanges = 0, rampPassages = 0;
   let sweepHolds = 0;                                         // cars that stopped for a car their body would touch
+  let npcConnContacts = 0;                                    // contacts between cars, one of them on a connector
   const touching = new Set();
   // parked cars (src/parked.js; off: null, and nothing else in here changes): who passes which group (c.pkGo), the
   // convoys (group -> cars set off in it), the groups the ego is out round, contacts with them, passes (tests)
@@ -239,6 +243,11 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
     ahead: (c, d) => c.route.pointAt(c.s + d),
     single: (c, r) => single(c, r),
     parked,
+    bikeDefer,
+    way(c) {                                                  // the approach and exit lanes of its next (or this) turn
+      const g = c.route.segs[c.seg], cc = g.kind === 'conn' ? g.conn : c.route.segs[c.seg + 1] && c.route.segs[c.seg + 1].conn;
+      return cc ? { from: cc.from, to: cc.to } : null;
+    },
   }, { perKm: bikesPerKm, seed: seed + 100 }) : null;
 
   /** keisim Town._make_yields: inside every signalised junction, a connector yields to the connectors of the other
@@ -424,7 +433,8 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
 
   /** Who is where: cars on every lane (front first, with the connector they take next), on every connector, and the
    *  signal phases of the approaches of the cars inside every signalised junction (keisim box_occupants: a car past
-   *  its stop line that is still moving, i.e. went in at the end of yellow, counts too). The ego is placed by its
+   *  its stop line that is still moving, i.e. went in at the end of yellow, counts too; with boxFix also one standing
+   *  there). The ego is placed by its
    *  route (egoNav); inside a signalised junction without one, it blocks every approach. */
   function occupancy(ego, en) {
     const onLane = new Map(), onConn = new Map(), box = new Map();
@@ -433,7 +443,10 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
       if (g.kind === 'lane') {
         const nx = c.route.segs[c.seg + 1], s = g.lo + (c.s - g.s0);
         push(onLane, g.lane.id, { s, v: c.v, L: c.L, next: nx && nx.kind === 'conn' ? nx.conn : null, waits: c.sweepWait });
-        if (phaseOf.has(g.lane.id) && s + c.L / 2 > g.lane.len - STOP_SETBACK + 0.5 && c.v > 1.0) {
+        // (boxFix, keisim TrafficConfig.box_fix: standing there too. Past its line a car here no longer obeys its light,
+        // so it goes in when the cars ahead go on; one that had stopped there behind a queue in the junction set off
+        // across the cars that had come in at their green while it stood)
+        if (phaseOf.has(g.lane.id) && s + c.L / 2 > g.lane.len - STOP_SETBACK + 0.5 && (c.v > 1.0 || boxFix)) {
           push(box, g.lane.to, phaseOf.get(g.lane.id));
         }
       } else if (g.kind === 'change') {                // on both lanes while it changes (mid-lane: no box)
@@ -512,6 +525,20 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
     return best;
   }
 
+  /** keisim TrafficConfig.npc_axles (Traffic._axles_pose): car c's pose at route position s with both axles on its
+   *  path (AXLE x its length behind and ahead), the centre half way between them, heading along them -> [[x, y], yaw].
+   *  On a turn the body cuts in a little instead of turning about its centre on the path, where the tail swings out as
+   *  far as the nose (keisim: two trucks turning left swung their rear into the car passing beside them). Behind the
+   *  route's start the rear point goes on along its first piece. */
+  function axlesPose(c, s) {
+    const a = AXLE * c.L;
+    let R;
+    if (s - a >= 0) R = c.route.pointAt(s - a);
+    else { const p = c.route.pointAt(0), h = c.route.headingAt(0); R = [p[0] + (s - a) * Math.cos(h), p[1] + (s - a) * Math.sin(h)]; }
+    const F = c.route.pointAt(s + a);
+    return [[(R[0] + F[0]) / 2, (R[1] + F[1]) / 2], Math.atan2(F[1] - R[1], F[0] - R[0])];
+  }
+
   /** The nearest car (or the ego) ahead on the car's path: its centre within 1.9 m of a path point. Lane graph towns
    *  also test the circles at the front and back of every body (half a width in from each end, like keisim's
    *  vehicle_circles): at their big junctions a right turn waits deeper inside, where the left turn from the same
@@ -520,7 +547,9 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
    *  (its box along the path's heading) at the points of its path out to SWEEP.AHEAD, against the standing cars the
    *  test above missed there; on a sharp turn a long car's front corner swings out past it (keisim bigjunction
    *  3009/9801: a truck turning left drove its corner into the ego standing at its right turn). Not against a car that
-   *  waits for this one (its leader at the last step): the two would wait for each other.
+   *  waits for this one (its leader at the last step): the two would wait for each other. With axles the box sits as
+   *  the bodies do (axlesPose), and the cars beside the body count too, not only those ahead of its centre (keisim
+   *  suburban 2008/9851: a truck turning right cut in on a car standing beside it).
    *  Returns { gap, vl, who (the leader: a car's id, -1 the ego, null none), swept (found by the body test) }. */
   function leader(c, ego) {
     let gap = Infinity, vl = 0, who = null, swept = false;
@@ -559,7 +588,7 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
     if (sweep) {
       const hl = c.L / 2, hw = c.W / 2, ux = Math.cos(c.yaw), uy = Math.sin(c.yaw);
       const near = others.filter((o) => !o.seen && Math.abs(o.v) < SWEEP.STAND && o.lead !== c.id &&
-        (o.xy[0] - c.xy[0]) * ux + (o.xy[1] - c.xy[1]) * uy > -0.5 &&
+        (o.xy[0] - c.xy[0]) * ux + (o.xy[1] - c.xy[1]) * uy > (axles ? -hl : -0.5) &&   // (axles: beside the body too)
         Math.hypot(o.xy[0] - c.xy[0], o.xy[1] - c.xy[1]) < SWEEP.AHEAD + hl + o.L / 2 + 2);
       if (near.length) {
         let k = 0, h0 = c.route.headingAt(c.s);
@@ -570,7 +599,7 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
         }
         if (hl * hl * k / 2 > SWEEP.MIN) {
           const box = (a) => {                                // the body with its centre a m along the path
-            const p = c.route.pointAt(c.s + a), h = c.route.headingAt(c.s + a);
+            const [p, h] = axles ? axlesPose(c, c.s + a) : [c.route.pointAt(c.s + a), c.route.headingAt(c.s + a)];
             if (moved) { const o = shiftAt(c, a); p[0] += Math.sin(h) * o; p[1] -= Math.cos(h) * o; }
             return [p[0], p[1], h, hl, hw];
           };
@@ -753,6 +782,33 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
     return null;
   }
 
+  /** Lanes a and b are the same road's (the same lane, or lanes of the same direction side by side). */
+  const sameRoad = (a, b) => !!a && !!b && (a === b || (a.siblings || []).includes(b));
+
+  /** keisim TrafficConfig.bike_defer (Traffic._bike_defer): the riders whose future (bicycles.circles' predict) car c,
+   *  on connector piece g, leaves out: braking or standing for a car on a connector of the same junction (r.leadOwn:
+   *  c itself or another), so they will not ride on into it as predicted; from another approach, coming across or
+   *  towards the car, and not leaving by its exit (a rider following it from its own approach has it as its lead too;
+   *  one going straight on into the road a left turn goes into falls in beside the car). Each had braked for the
+   *  other's future: a right turn and a rider coming straight on from the other way stopped nose to nose in the
+   *  junction, the car's body across the rider's line, for good (keisim bigjunction 3005/9800). The car keeps BIKE.MIN
+   *  from where the rider is. -> Set of riders, or null. */
+  function deferred(c, g, near) {
+    let out = null;
+    for (const r of near) {
+      const o = r.leadOwn;
+      if (!o || !o.route || !o.route.segs) continue;            // (a car: not the ego, a rider or a parked car)
+      const og = o.route.segs[o.seg];
+      if (!og || og.kind !== 'conn' || og.junction !== g.junction) continue;
+      if (Math.cos(r.yaw - c.yaw) >= 0.5) continue;
+      const nx = bikes.nextPiece(r);
+      const came = r.piece.turn ? r.piece.from : r.piece, exit = r.piece.turn ? r.piece.to : nx && nx.turn ? nx.to : null;
+      if (sameRoad(came, g.conn.from) || sameRoad(exit, g.conn.to)) continue;
+      (out || (out = new Set())).add(r);
+    }
+    return out;
+  }
+
   /** keisim Traffic._bike_gaps for one car -> {gap, vl: the bicycle it follows (gap Infinity: none), vcap: the speed
    *  to pass one at, stop: the gap to its stop for a rider beside it before a left turn}. It also moves the car's
    *  shift (how far right of its line it drives). bc: the riders' circles, with where they will be shortly. pk: the
@@ -827,8 +883,10 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
       const gp = Math.max(-l - hl - BIKE.HALF, 0);            // the rider is ahead: follow it
       if (gp < res.gap) { res.gap = gp; res.vl = r.v; }
     }
-    const a = corridorGap(px, py, BIKE_PATH, n, px[0], py[0], h0, hl, hw, obs, (o) => (behind.has(o.own) ? -Infinity : BIKE.MIN - less(o)));
-    const f = corridorGap(px, py, BIKE_PATH, n, px[0], py[0], h0, hl, hw, obs, (o) => (behind.has(o.own) ? -Infinity : BIKE.FREE - less(o)));
+    const defer = bikeDefer && g.kind === 'conn' ? deferred(c, g, near) : null;
+    const skip = (o) => behind.has(o.own) || (defer !== null && o.pred && defer.has(o.own));
+    const a = corridorGap(px, py, BIKE_PATH, n, px[0], py[0], h0, hl, hw, obs, (o) => (skip(o) ? -Infinity : BIKE.MIN - less(o)));
+    const f = corridorGap(px, py, BIKE_PATH, n, px[0], py[0], h0, hl, hw, obs, (o) => (skip(o) ? -Infinity : BIKE.FREE - less(o)));
     if (a.gap < res.gap) { res.gap = a.gap; res.vl = a.v; }
     if (f.gap < Infinity) res.vcap = Math.sqrt(Math.max(BIKE.PASS_V, f.v + BIKE.PASS_DV) ** 2 + 3 * Math.max(f.gap, 0));
     return res;
@@ -1079,6 +1137,7 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
     for (const c of cars) {
       const k = c.seg, g = c.route.segs[k], segs = c.route.segs;
       const v0 = graph ? c.vf * speedLimit(c) : 10 * c.vf;
+      c.givingWay = false;                                    // (bikeDefer: held by a 止まれ line or a wait point now)
       // curve speed envelope over the next 30 m (keisim: sqrt(vc^2 + 4 d))
       let vmax = v0;
       for (let a = 2; a <= 30; a += 4) {
@@ -1130,6 +1189,7 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
           if (c.ssDone === sg.lane.id || d < -0.5 || d > LOOK) break;
           if (c.v < 0.05 && d <= STOP_SIGN_NPC_ZONE) { c.ssDone = sg.lane.id; stopSignStops++; break; }
           const gs = d + IDM.s0 - STOP_SIGN_NPC_AT;          // the IDM stands still s0 behind the gap
+          c.givingWay = true;
           if (gs < gap) { gap = gs; vl = 0; }
           break;
         }
@@ -1147,6 +1207,7 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
         }
         if (yc && dW >= -0.5 && dW <= 40 && !(c.v > 1 && dW < c.v * c.v / 8) && minArrival(yc, t, occ) < YIELD_GAP) {
           const gw = Math.max(dW, 0) + IDM.s0 - 0.3;          // the IDM stands still s0 behind the gap: at the point
+          c.givingWay = true;
           if (gw < gap) { gap = gw; vl = 0; }
         }
       }
@@ -1179,8 +1240,8 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
       c.route.extend(c.s + 80, c.s);
       c.s -= c.route.trim(c.s);
       c.seg = c.route.segAt(c.s);
-      c.xy = c.route.pointAt(c.s);
-      c.yaw = c.route.headingAt(c.s);
+      if (axles) [c.xy, c.yaw] = axlesPose(c, c.s);          // both axles on the path (keisim npc_axles)
+      else { c.xy = c.route.pointAt(c.s); c.yaw = c.route.headingAt(c.s); }
       if ((bikes || parked) && (c.shift > 0 || c.shiftV !== 0)) {   // moved right (keisim World: Traffic.shift)
         const dyaw = Math.atan2(c.shiftV, Math.max(c.v, 2)), side = c.shift + 0.3 * c.L * Math.sin(dyaw);
         c.xy[0] += Math.sin(c.yaw) * side; c.xy[1] -= Math.cos(c.yaw) * side; c.yaw -= dyaw;
@@ -1238,7 +1299,10 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
         const a = cars[i], b = cars[j], key = a.id * 1000 + b.id;
         const near = Math.abs(a.xy[0] - b.xy[0]) < 8 && Math.abs(a.xy[1] - b.xy[1]) < 8 &&
           boxesOverlap([a.xy[0], a.xy[1], a.yaw, a.L / 2, a.W / 2], [b.xy[0], b.xy[1], b.yaw, b.L / 2, b.W / 2]);
-        if (near && !touching.has(key)) { touching.add(key); npcContacts++; } else if (!near) touching.delete(key);
+        if (near && !touching.has(key)) {
+          touching.add(key); npcContacts++;
+          if (a.route.segs[a.seg].kind === 'conn' || b.route.segs[b.seg].kind === 'conn') npcConnContacts++;
+        } else if (!near) touching.delete(key);
       }
     }
   }
@@ -1266,7 +1330,8 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
       pkContacts = 0; npcPkContacts = 0; lastPkContact = -1e9; pkPasses = 0; pkFollows = 0; bikePkContacts = 0;
     }
     spawn(ego);
-    contacts = 0; npcContacts = 0; stopSignStops = 0; laneChanges = 0; rampPassages = 0; sweepHolds = 0; touching.clear();
+    contacts = 0; npcContacts = 0; npcConnContacts = 0; stopSignStops = 0; laneChanges = 0; rampPassages = 0; sweepHolds = 0;
+    touching.clear();
     if (bikes) { bikes.reset(ego); lastOcc = null; bikeContacts = 0; carBikeContacts = 0; lastBikeContact = -1e9; bikeTouching.clear(); }
   }
 
@@ -1277,6 +1342,7 @@ export function createTraffic(data, lanes, { count = 24, seed = 1, bikes: bikesP
     get carBikeContacts() { return carBikeContacts; }, riders: bikes ? bikes.riders : [],
     get contacts() { return contacts; }, get npcContacts() { return npcContacts; }, get n() { return cars.length; },
     get sweepHolds() { return sweepHolds; },
+    get npcConnContacts() { return npcConnContacts; },          // between cars, one of them on a connector (tests)
     get stopSignStops() { return stopSignStops; },             // full stops at 止まれ lines (tests)
     // parked cars (option parked): how many stand, the ego's contacts with one and the other cars' (tests), passes
     // over the centre line begun (pkPasses: the first of a convoy, pkFollows: following one), cars out round one now

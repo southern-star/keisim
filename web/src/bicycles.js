@@ -14,6 +14,9 @@ import { PK } from './parked.js';
 
 export const BIKE_LEN = 1.8, BIKE_W = 0.6, BIKE_R = 0.3;
 const NCB = 3;                    // circles along a bike
+// keisim bicycles.TURN_AHEAD (TrafficConfig.bike_defer): m ahead of a turning car's front bumper along its path where it
+// will drive; the riders crossing its way keep out of there, standing or slow as it may be
+const TURN_AHEAD = [0.5, 2.0, 3.5];
 const BIKE_EDGE = 0.5;            // m from the road's edge to the rider's line
 const G = 9.81, RHO = 1.2, WHEELBASE = 1.08;
 const B_MAX = 4.5, TAU_V = 1.1;
@@ -313,7 +316,7 @@ export function createBicycles(data, lanes, env, { perKm = 0, seed = 1, max = 60
       const r = { id: riders.length, type: ty, T, cruise, rgb, v: cruise * uni(0.6, 1.0), acc: 0, out: OUT * uni(0.9, 1.15),
         dwell: 1, crank: uni(0, 2 * Math.PI), wheel: uni(0, 2 * Math.PI), roll: 0, steer: 0, foot: 0, look: 0, lookT: 0,
         effort: 0.3, wob: uni(0, 2 * Math.PI), wobF: uni(0.55, 0.9), a0: uni(...T.a0), pmax: uni(...T.pmax),
-        alat: uni(...T.alat), react: uni(0.3, 1.1), wait: 0, stood: 0, gap: Infinity, vWant: 0, yawrate: 0,
+        alat: uni(...T.alat), react: uni(0.3, 1.1), wait: 0, stood: 0, gap: Infinity, vWant: 0, yawrate: 0, leadOwn: null,
         height: uni(1.5, 1.82), shiftT: 0, mode: PEDAL, gear: T.gears.length >> 1 };
       put(r, s);
       riders.push(r);
@@ -405,7 +408,15 @@ export function createBicycles(data, lanes, env, { perKm = 0, seed = 1, max = 60
       if (l === undefined) { l = env.single(o.own, r); one.set(o.own, l); }
       return l;
     };
+    // bikeDefer: where a turning car will drive does not count for a rider from its approach (one behind it), nor for
+    // one leaving the junction by its exit (it goes the same way after the car): keisim Bicycles._front_margin. One
+    // going straight on into the road a left turn went into stopped beside the car, fell in behind it at its speed and
+    // touched its side as it turned (keisim stress roadtypes 1019/9901)
+    const nx = r.route[r.ri + 1];
+    const came = r.piece.turn ? r.piece.from : r.piece, exit = r.piece.turn ? r.piece.to : nx && nx.turn ? nx.to : null;
+    const road = (a, b) => !!a && !!b && (a === b || (a.siblings || []).includes(b));
     const mAll = (o) => {
+      if (o.front && (road(came, o.front.from) || road(exit, o.front.to))) return -Infinity;
       if (o.car) { const l = single(o); if (l !== null) return l > SINGLE_AHEAD ? MARGIN_SINGLE : Math.min(o.m, 0); }
       // the ego standing beside or behind a rider that has stood for a while: it is waiting for the rider, who goes on
       if (o.car && !o.parked && !o.own.route && o.v < 0.3 && r.egoGo > 0 && (o.own.x - r.x) * ux + (o.own.y - r.y) * uy < 1) return Math.min(o.m, 0);
@@ -524,6 +535,7 @@ export function createBicycles(data, lanes, env, { perKm = 0, seed = 1, max = 60
       if (v > 0.5) r.stood = 0;
     }
     r.gap = lead.gap; r.vWant = vT;
+    r.leadOwn = lead.gap < Infinity && lead.o ? lead.o.own : null;   // who is in the way (the cars: keisim Bicycles.lead)
     // -- forces: what the legs give, rolling and air drag, the brakes
     const m = T.mass;
     const aCoast = v > 0.02 ? -(T.crr * G + 0.5 * RHO * T.cda * v * v / m) : 0;
@@ -625,6 +637,17 @@ export function createBicycles(data, lanes, env, { perKm = 0, seed = 1, max = 60
         if (!p) break;
         all.push({ x: p[0], y: p[1], r: c.W / 2, v: c.v, yaw: c.yaw, own: c, car: true, m: MARGIN_TURN, cx: c.xy[0], cy: c.xy[1] });
       }
+      // bikeDefer (keisim Bicycles._turning): and where its front will drive, a standing or slow one too, a place to
+      // keep out of (speed 0), not a car to follow; not for one giving way (it waits for the rider: keisim crosswalks
+      // 1010/9800); only for the riders crossing its way (sense: front)
+      if (env.bikeDefer && !c.givingWay && env.turning(c)) {
+        const way = env.way(c);
+        for (const d of TURN_AHEAD) {
+          const p = env.ahead(c, c.L / 2 + d);
+          if (!p) break;
+          all.push({ x: p[0], y: p[1], r: c.W / 2, v: 0, yaw: c.yaw, own: c, car: true, m: MARGIN_TURN, cx: c.xy[0], cy: c.xy[1], front: way });
+        }
+      }
     }
     if (ego) {
       carCircles(all, ego.x, ego.y, ego.yaw, env.ego.L, env.ego.W, ego.v, ego, MARGIN_CAR);
@@ -662,7 +685,8 @@ export function createBicycles(data, lanes, env, { perKm = 0, seed = 1, max = 60
         const uu = r.u + r.v * tau;
         if (uu > total) break;
         const q = at(r.cat, uu);
-        out.push({ x: q[0] + Math.sin(q[2]) * r.lat, y: q[1] - Math.cos(q[2]) * r.lat, r: BIKE_R, v: r.v, yaw: r.yaw, own: r, bike: true, m: 0 });
+        out.push({ x: q[0] + Math.sin(q[2]) * r.lat, y: q[1] - Math.cos(q[2]) * r.lat, r: BIKE_R, v: r.v, yaw: r.yaw, own: r, bike: true, m: 0,
+          pred: true });
       }
     }
     return out;

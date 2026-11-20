@@ -13,6 +13,8 @@
 //                                               behind one and nobody comes the other way within 70 m, else it waits)
 //                                [--watch ID --from T0 --to T1]   (rider ID and the cars near it at every step)
 //                                [--sweep 0]   (the cars do not place their body along a sharp turn: src/traffic.js leader)
+//                                [--axles 0] [--boxfix 0] [--bikedefer 0]   (src/traffic.js axlesPose, occupancy, deferred
+//                                               and bicycles.js TURN_AHEAD; all on by default, like the demo)
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -38,7 +40,7 @@ const roadKm = lanes.reduce((a, l) => a + l.len, 0) / 1000;
 const count = Number(args.cars) || Math.min(40, Math.round(roadKm * 12));
 const nBikes = Number(args.bikes || 0), nParked = Number(args.parked || 0);
 const traffic = createTraffic(data, lanes, { count, seed: Number(args.seed || 7), bikes: nBikes, ...(nParked ? { parked: nParked } : {}),
-  sweep: args.sweep !== '0' });
+  sweep: args.sweep !== '0', axles: args.axles !== '0', boxFix: args.boxfix !== '0', bikeDefer: args.bikedefer !== '0' });
 
 const DT = 0.05;
 const p0 = nav.start();
@@ -216,7 +218,7 @@ function explainBikes(t) {
 
 const h = createHash('sha256');
 for (const c of traffic.cars) h.update(`${c.id}:${c.xy[0].toFixed(4)},${c.xy[1].toFixed(4)},${c.yaw.toFixed(4)},${c.v.toFixed(4)};`);
-console.log(`contacts ${traffic.contacts} (ego) / ${traffic.npcContacts} (between cars)` +
+console.log(`contacts ${traffic.contacts} (ego) / ${traffic.npcContacts} (between cars, ${traffic.npcConnContacts} in a junction)` +
   `${traffic.laneChanges !== undefined ? `, lane changes ${traffic.laneChanges}, ramp passages ${traffic.rampPassages}` : ''}` +
   `${useEgo ? `, ego lane changes ${egoChanges.size}` : ''}`);
 if (args.sweep !== '0') console.log(`cars that stopped for a standing car their body would touch on a turn: ${traffic.sweepHolds}`);
