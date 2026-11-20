@@ -213,10 +213,10 @@ class TrafficConfig:
     #     side (巻き込み: bigjunction 3008/9801, 600 m, with npc_sweep, npc_axles, box_fix and bike_defer).
     #   - A rider stood 0.04 m from the rear corner of a 7.5 m truck standing at an angle, and the corner swung into
     #     it as the truck turned right (stress twophase 1012/9900).
-    # - A car on a right turn's connector counts as one signalling left (the SIGNAL_D rule) for the riders leaving
-    #   the junction by its exit road: they keep behind it, not beside it. With the side points, a rider turning
-    #   right on the outside of a 7 m truck's turn followed its side, came up beside its rear, and the rear swung out
-    #   into it (suburban 2004/9851, 600 m).
+    # - A car on a right turn's connector counts as one signalling left (the SIGNAL_D rule) for the riders turning
+    #   right with it, out by the same road: they keep behind it, not beside it. With the side points, a rider
+    #   turning right on the outside of a 7 m truck's turn followed its side, came up beside its rear, and the rear
+    #   swung out into it (suburban 2004/9851, 600 m).
     # - A rider closer than its standing distance to whoever is in its way drops back, as in the browser, instead of
     #   riding on at their speed (a rider following a car round a right turn rode into its rear corner: stress
     #   roadtypes 1013/9900).
@@ -225,6 +225,10 @@ class TrafficConfig:
     #   roadtypes 1016/9901). A 0.9 m circle round the bike's centre would keep riders from starting beside the cars
     #   on the kerb, and the routes took longer. A new rider starts no faster than it can stop for a car ahead (a
     #   rider put 2.3 m behind a car at 6 m/s rode into it as it stopped: stress roadtypes 1013/9901).
+    # - People standing at a zebra's kerb for their light are passed closely (bicycles.MARGIN_KERB), as the cars pass
+    #   them: a rider just out of a left turn stood behind someone waiting 0.8 m to its side, the truck turning behind
+    #   it stood on the zebra, and the person could not cross for the truck: none of the three moved again
+    #   (bigjunction 3003/9801, 2.5 km).
     # Off by default: the old evaluations stay reproducible.
     bike_hook: bool = False
     # Crosswalks at signals (Town.ped_crossings: the zebras at the ends of the roads of two-phase signalised junctions).

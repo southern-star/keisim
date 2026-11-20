@@ -2603,3 +2603,28 @@ def test_bike_hook_new_riders_start_no_faster_than_they_can_stop():
         bk.xy[-1] += 1e5
     assert v0[False] > 1.0 and v0[True] < 0.5
     tr.cfg.bike_hook = False
+
+
+def test_bike_hook_riders_pass_people_waiting_at_the_kerb_closely():
+    """TrafficConfig.bike_hook (MARGIN_KERB): someone standing at a zebra's kerb for their light is passed closely, as
+    the cars pass them. With the margin of someone walking along the road a rider just out of a left turn stood behind
+    a person waiting 0.8 m to its side; the truck turning behind it stood on the zebra, and the person, who set off at
+    their green, met the truck and walked back: none of the three moved again (bigjunction 3003/9801)."""
+    env, tr, bk, j, _, ride = _hook_scene()
+    pd = env.world.peds
+    assert pd.n
+    pd.xy[:] = (3e4, 3e4)                                   # (everyone else out of the way)
+    cat = bk._cat_of(j)
+    k = int(np.searchsorted(cat.cum, bk.u[j] + 1.8))
+    h = cat.head[k]
+    q = 0
+    pd.xy[q] = cat.pts[k] + np.array([np.sin(h), -np.cos(h)]) * (bk.lat[j] - 0.8)     # 1.8 m ahead, 0.8 m left
+    pd.vel[q] = 0.0
+    for mode in (pd.WALK, pd.WAIT):
+        pd.mode[q] = mode
+        for hook in (False, True):
+            tr.cfg.bike_hook = hook
+            bk.v[j] = 2.0
+            ride()
+            assert (int(bk.lead[j]) == -2 - q) == (mode == pd.WALK or not hook), (mode, hook)
+    tr.cfg.bike_hook = False

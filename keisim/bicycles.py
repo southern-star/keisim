@@ -63,6 +63,12 @@ MARGIN_CAR = 0.2            # m beside a car (filtering past a queue needs this 
 MARGIN_BIKE = 0.25
 MARGIN_WALK = 0.25          # someone walking along the road
 MARGIN_CROSS = 0.55         # someone crossing it
+MARGIN_KERB = 0.1           # TrafficConfig.bike_hook: someone standing at a zebra's kerb for their light (as the cars:
+#                             passed closely. With MARGIN_WALK a rider just out of a left turn stood 0.5 m behind
+#                             someone waiting 0.8 m to its side, too soon after the junction to move out round them; the
+#                             truck turning behind it stood on the zebra for the rider, so the person, who set off at
+#                             their green, met the truck and walked back to their spot beside the rider: none of the
+#                             three moved again. bigjunction 3003/9801, 2.5 km)
 MARGIN_TURN = 0.15          # where a turning car will be
 SIDE_STEP = 1.2             # TrafficConfig.bike_hook: points along each car's long sides, at most this far apart
 #                             (car_side_points: the three circles leave a car's corners, and its sides between them,
@@ -610,6 +616,8 @@ class Bicycles:
         if peds is not None and peds.n:
             cross = peds.mode == peds.CROSS
             pm = np.where(cross, MARGIN_CROSS, MARGIN_WALK)
+            if cfg.bike_hook:                   # bike_hook: the people waiting at a zebra's kerb, passed closely
+                pm = np.where(peds.waiting_at_kerb(), MARGIN_KERB, pm)
             parts.append((peds.xy, np.full(peds.n, 0.35), -2 - np.arange(peds.n), peds.vel, peds.yaw, pm))
             if cross.any():
                 ci = np.nonzero(cross)[0]
