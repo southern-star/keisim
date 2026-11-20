@@ -778,10 +778,11 @@ class Bicycles:
                 lon_s = dd @ ub_i
                 rgt_s = dd[:, 0] * ub_i[1] - dd[:, 1] * ub_i[0]
                 same = np.cos(sig[:, 2] - self.yaw[i]) > 0.7
-                if cfg.bike_hook and (sig[:, 7] >= 0).any():     # a right turn's car: for the riders leaving its way
-                    r_i, k_i = self.route[i], self.ri[i]
+                if cfg.bike_hook and (sig[:, 7] >= 0).any():     # a right turn's car: for the riders turning right
+                    r_i, k_i = self.route[i], self.ri[i]           # with it, out by the same road
                     j_c = k_i if lanes[r_i[k_i]].kind == "conn" else k_i + 1
-                    ex = lanes[r_i[j_c + 1]] if j_c + 1 < len(r_i) and lanes[r_i[j_c]].kind == "conn" else None
+                    ex = lanes[r_i[j_c + 1]] if j_c + 1 < len(r_i) and lanes[r_i[j_c]].kind == "conn" and \
+                        lanes[r_i[j_c]].turn == "right" else None
                     mine = [] if ex is None else [ex.id] + list(ex.siblings)
                     same &= (sig[:, 7] < 0) | np.isin(sig[:, 7], mine)
                 for c in np.nonzero(same & (lon_s > 0.0) & (lon_s < 30.0) & (rgt_s > 0.3) & (rgt_s < sig[:, 5] + 2.6))[0]:
