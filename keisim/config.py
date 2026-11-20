@@ -213,6 +213,10 @@ class TrafficConfig:
     #     side (巻き込み: bigjunction 3008/9801, 600 m, with npc_sweep, npc_axles, box_fix and bike_defer).
     #   - A rider stood 0.04 m from the rear corner of a 7.5 m truck standing at an angle, and the corner swung into
     #     it as the truck turned right (stress twophase 1012/9900).
+    # - A car on a right turn's connector counts as one signalling left (the SIGNAL_D rule) for the riders leaving
+    #   the junction by its exit road: they keep behind it, not beside it. With the side points, a rider turning
+    #   right on the outside of a 7 m truck's turn followed its side, came up beside its rear, and the rear swung out
+    #   into it (suburban 2004/9851, 600 m).
     # - A rider closer than its standing distance to whoever is in its way drops back, as in the browser, instead of
     #   riding on at their speed (a rider following a car round a right turn rode into its rear corner: stress
     #   roadtypes 1013/9900).

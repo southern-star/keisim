@@ -502,23 +502,29 @@ class Bicycles:
         lanes = town.lanes
         P = self.P
         # ---- the cars signalling a left turn (SIGNAL_D before it, or on it): x, y, yaw, v, half length, half width,
-        # 1 for the ego
+        # 1 for the ego, -1. bike_hook: and the cars on a right turn's connector, with the lane they leave the junction
+        # by (for the riders going that way only: a rider turning right on the outside of a 7 m truck's right turn
+        # followed its side, came up beside its rear, and the rear swung out into it: suburban 2004/9851)
         sig = []
         tr = traffic
         for c in range(tr.n):
             r_c, k_c = tr.route[c], tr.ri[c]
             cur_c = lanes[r_c[k_c]]
+            exit_c = -1
             if cur_c.kind == "conn":
                 on = cur_c.turn == "left"
+                if cfg.bike_hook and cur_c.turn == "right" and k_c + 1 < len(r_c):
+                    on, exit_c = True, r_c[k_c + 1]
             else:
                 nx = lanes[r_c[k_c + 1]] if k_c + 1 < len(r_c) else None
                 on = nx is not None and nx.kind == "conn" and nx.turn == "left" and \
                     cur_c.length - float(tr.s[c]) - float(tr.dims[c, 0]) / 2 <= SIGNAL_D
             if on:
-                sig.append((tr.xy[c, 0], tr.xy[c, 1], tr.yaw[c], tr.v[c], tr.dims[c, 0] / 2, tr.dims[c, 1] / 2, 0.0))
+                sig.append((tr.xy[c, 0], tr.xy[c, 1], tr.yaw[c], tr.v[c], tr.dims[c, 0] / 2, tr.dims[c, 1] / 2, 0.0,
+                            exit_c))
         if ego_left and ego_dims is not None:
-            sig.append((ego_xy[0], ego_xy[1], ego_yaw, ego_v, ego_dims[0] / 2, ego_dims[1] / 2, 1.0))
-        sig = np.array(sig, float).reshape(-1, 7)
+            sig.append((ego_xy[0], ego_xy[1], ego_yaw, ego_v, ego_dims[0] / 2, ego_dims[1] / 2, 1.0, -1))
+        sig = np.array(sig, float).reshape(-1, 8)
         # ---- lookahead paths: along the home line and moved out
         cats = [self._cat_of(i) for i in range(n)]
         idx = np.concatenate([np.arange(24), 24 + 2 * np.arange(P - 24)])
@@ -761,6 +767,12 @@ class Bicycles:
                 lon_s = dd @ ub_i
                 rgt_s = dd[:, 0] * ub_i[1] - dd[:, 1] * ub_i[0]
                 same = np.cos(sig[:, 2] - self.yaw[i]) > 0.7
+                if cfg.bike_hook and (sig[:, 7] >= 0).any():     # a right turn's car: for the riders leaving its way
+                    r_i, k_i = self.route[i], self.ri[i]
+                    j_c = k_i if lanes[r_i[k_i]].kind == "conn" else k_i + 1
+                    ex = lanes[r_i[j_c + 1]] if j_c + 1 < len(r_i) and lanes[r_i[j_c]].kind == "conn" else None
+                    mine = [] if ex is None else [ex.id] + list(ex.siblings)
+                    same &= (sig[:, 7] < 0) | np.isin(sig[:, 7], mine)
                 for c in np.nonzero(same & (lon_s > 0.0) & (lon_s < 30.0) & (rgt_s > 0.3) & (rgt_s < sig[:, 5] + 2.6))[0]:
                     vl = max(float(sig[c, 3]), 0.0)
                     gap_s = float(lon_s[c] - sig[c, 4]) - BIKE_LEN / 2

@@ -2546,3 +2546,34 @@ def test_bike_hook_new_riders_are_clear_of_the_cars():
         for p, h, ok in ((behind, np.pi, not hook), (beside, 0.0, True), (clear, np.pi, True)):
             assert bk._free(p, far, 1.0, cxy, cr, skip=np.arange(bk.n), h=h) == ok, (hook, p)
     tr.cfg.bike_hook = False
+
+
+def test_bike_hook_riders_keep_behind_a_car_turning_right_their_way():
+    """TrafficConfig.bike_hook (the left-signal rule, SIGNAL_D): a car on a right turn's connector counts as one
+    signalling left for the riders leaving the junction by its exit road: they do not ride up beside it (a rider
+    turning right on the outside of a 7 m truck's turn came up beside its rear, and the rear swung out into it:
+    suburban 2004/9851). Not for a rider leaving by another road."""
+    env, tr, bk, j, place, ride = _hook_scene()
+    lanes = env.world.town.lanes
+    rights = [l for l in lanes if l.kind == "conn" and l.turn == "right" and l.succ and l.length > 8.0]
+    conn = rights[0]
+    other = next(l for l in rights if l.succ[0] != conn.succ[0] and l.succ[0] not in lanes[conn.succ[0]].siblings)
+    i = 0
+    tr.dims[i, :2] = (3.4, 1.48)
+    out = {}
+    for hook, car_conn in ((False, conn), (True, other), (True, conn)):
+        tr.cfg.bike_hook = hook
+        bk.route[j], bk.ri[j], bk._cat[j], bk.u[j] = [conn.id, conn.succ[0]], 0, None, 1.0
+        cat = bk._cat_of(j)
+        k = int(np.searchsorted(cat.cum, 1.0))
+        bk.xy[j], bk.yaw[j], bk.lat[j], bk.lane[j] = cat.pts[k], cat.head[k], 0.0, conn.id
+        tr.route[i], tr.ri[i] = [car_conn.id, car_conn.succ[0]], 0
+        bk.v[j] = 2.5
+        for _ in range(8):
+            tr.v[i] = 2.5
+            place(i, 0.5, 1.6)                 # beside it, its left side 0.86 m right of the rider's centre
+            ride()
+        out[(hook, car_conn.id)] = float(bk.v[j])
+    assert out[(True, conn.id)] < out[(False, conn.id)] - 0.4          # falls back behind it
+    assert abs(out[(True, other.id)] - out[(False, conn.id)]) < 0.1     # another exit: as before
+    tr.cfg.bike_hook = False
