@@ -33,10 +33,16 @@
 > Sapporo), it completes 701 (v0.10: 671) with 22 collisions (v0.10: 43); paired sign tests give p = 0.002 for the
 > failed routes and p = 0.01 for the routes with a collision or a red light. On 150 KeiView routes it completes 137
 > (v0.10: 135).
+> **v0.12.0, KeiPilot Mc (mc14),** has the same cameras and size, and two more DAgger rounds from v0.11.0: people on
+> crosswalks, big junctions, bicycles, then parked cars and people darting out (`docs/multicam/rounds/`). On the same
+> 740 KeiSim routes it completes 713 (v0.11: 701), with a collision or a red light on 11 routes (v0.11: 24, p = 0.015)
+> and no collision on Sapporo's 300 (v0.11: 7). On 150 KeiView routes it completes 144 (v0.11: 137). Parked cars are
+> not learned well yet: of 40 KeiSim routes with parked cars it completes 13 (7 before that round) and clips a parked
+> car on 8.
 > Both drive in the browser too, with no install and with surrounding traffic:
 > <https://southern-star.github.io/keisim/?pilot=mc> (KeiPilot Mc) and <https://southern-star.github.io/keisim/?pilot=1>
 > (v0.10), with onnxruntime-web on WebGPU, or WASM.
-> Quick start: `bash setup.sh`, download `keipilot_mc.pt` from Release v0.11.0, then
+> Quick start: `bash setup.sh`, download `keipilot_mc.pt` from Release v0.12.0, then
 > `uv run scripts/demo.py --agent model --ckpt runs/keipilot_mc.pt --show`.
 
 ![gallery](docs/gallery.jpg)
@@ -72,6 +78,46 @@ KeiPilot がブラウザの中で KeiView の街を運転します。インス�
 手続き生成なので「学習に使っていない街」で汎化を測れます（学習: town 0–399、評価: town 1000–1009）。
 
 ## 2. 結果 (すべて `runs/eval/*.json`)
+
+### KeiPilot Mc (v0.12.0): 横断歩道・大きな交差点・自転車・路上駐車
+
+KeiPilot Mc v0.12.0 (mc14) は、v0.11.0 (mc12) と同じ 2 台のカメラ、同じ大きさのモデルです。v0.11.0 から、DAgger をさらに 2 回重ねました。
+* 12 回目 (mc13): 横断歩道を渡る人、大きな交差点の街 (`bigjunction`)、自転車 ([docs/multicam/rounds/round12.sh](docs/multicam/rounds/round12.sh))。
+* 13 回目 (mc14): 路上駐車と飛び出し ([docs/multicam/rounds/round13.sh](docs/multicam/rounds/round13.sh))。
+
+v0.11.0 と、同じコード・同じルートで比べました (安全層はどちらも標準の `--brake_hold --red_hold --yield_hold 4 1 3.5 4 0.5 0.5 10`)。
+
+| 完走 / 衝突 / 信号無視 | ルート | v0.11 (mc12) | **v0.12 (mc14)** |
+|---|---|---|---|
+| KeiSim: 手続き型の街 (600 m、長距離、long3c〜long3f) | 320 | 304 / 6 / 2 | **313 / 2 / 1** |
+| KeiSim: 片側 2 車線の町とランプ | 120 | 106 / 9 / 0 | 102 / 8 / 0 |
+| KeiSim: 札幌 (評価用の町) | 300 | 291 / 7 / 0 | **298 / 0 / 0** |
+| **KeiSim の計** | 740 | 701 / 22 / 2 | **713 / 10 / 1** |
+| KeiView: 手続き型の街 (long3c、その高密度) | 40 | 37 / 1 / 0 | 40 / 0 / 0 |
+| KeiView: 片側 2 車線の町とランプ | 50 | 42 / 4 / 0 | 45 / 2 / 0 |
+| KeiView: 札幌 | 60 | 58 / 1 / 0 | 59 / 1 / 0 |
+| **KeiView の計** | 150 | 137 / 6 / 0 | **144 / 3 / 0** |
+| KeiSim: 横断歩道と大きな交差点 (crosswalks、crosswalks_sub、bigjunction) | 60 | 41 / 10 / 1 | 48 / 4 / 1 |
+| KeiView: 横断歩道と大きな交差点 (crosswalks、bigjunction) | 40 | 29 / 4 / 2 | 27 / 4 / 0 |
+| KeiSim: 自転車あり (上の 3 つのスイートの `_bk8`) | 60 | — | 45 / 3 / 0 |
+| KeiSim: 路上駐車 (`parked`、2.5 km と 600 m) | 40 | — | 13 / 11 / 0 |
+| KeiView: 路上駐車 (2.5 km) | 20 | — | 0 / 9 / 0 |
+| カーブの試験コース (11 回目のコース、KeiSim と KeiView) | 46 回 | 接触 0 回 | 接触 0 回 |
+
+* 同じルートどうしで比べた符号検定です (片方だけが失敗したルートの数)。
+  - KeiSim の計: 衝突か信号無視のあったルートは、v0.11 だけが 19 本、v0.12 だけが 6 本です (p = 0.015)。完走しなかったルートは 29 本と 17 本です (p = 0.10)。
+  - 札幌 (KeiSim): 衝突か信号無視は 7 本と 0 本です (p = 0.016)。v0.11 の弱点だった、優先道路で譲り損ねる衝突が 300 ルートで出ていません。
+  - KeiView の計: 完走しなかったルートは 10 本と 3 本です (p = 0.09)。片側 2 車線の町 (KeiSim) は差がありません (6 本と 10 本、p = 0.45)。
+* 自転車ありのスイートは、PR #53・#55 で自転車の動きが変わったあとのコードで測りました。v0.11 の値は前のコードなので比べていません。同じコードの mc13 は 49 / 4 / 0 です (差は有意ではありません)。
+* 路上駐車 (`--suite parked`): 道の種類の街 (roadtypes) に、縁石 1 km あたり 4 台の駐車車両と、その前から飛び出す子どもがいます (`--dart_out 0.6`)。エキスパートは 2.5 km も 600 m も 20/20 です。
+  - 13 回目の前の mc13 は 7 / 2 / 0 (KeiView 0 / 0 / 0) で、40 本中 30 本で駐車車両の後ろに止まったままでした。
+  - v0.12 は止まったままが 12 本に減り、2.5 km の平均速度も 4.4 km/h から 9.0 km/h (エキスパート 13.7 km/h) に上がりました。
+  - そのかわり、駐車車両のすぐ後ろで止まってから出て、その角に当たることがあります (衝突 11 本のうち 8 本、KeiView は 9 本すべて)。
+* 残る弱点 ([docs/roadmap.md](docs/roadmap.md) の残タスク):
+  - 上の、駐車車両に近づきすぎて止まり、よけて出るときに当たるもの。
+  - エキスパートなら進める場面で止まり続ける: KeiView の大きな交差点では、信号を正しく読んだまま、青のあいだも止まっています (20 本中 5 本、mc13 は 1 本)。KeiSim の片側 2 車線でも 6 本です (mc13 は 0 本)。
+  - 交差点の中で、自車を待つ対向車の進路に入って止まり、どちらも動けなくなる (向かい合い、12 回目の新しいスイートの 120 本中 13 本)。
+* 結果は `runs/eval/keipilot_mc14_*`、`runs/eval/osm_sapporo/keipilot_mc14_*`、`runs/eval/curve/mc14_*` です (v0.11 は `keipilot_mc12_*`)。
 
 ### KeiPilot Mc (v0.11.0): 前向きの 2 台のカメラ
 
@@ -136,6 +182,7 @@ DS = Route Completion × 違反ペナルティ（車両 ×0.60、歩行者 ×0.5
 | **KeiPilot v0.9** (+ 実在の町 (札幌) の学習、安全層つき) | **1.000** | **1.000** | 0.985 | **1.000** |
 | **KeiPilot v0.10** (+ 止まれと、止まってからの距離の入力、安全層つき) | **1.000** | **1.000** | 0.985 | **1.000** |
 | **KeiPilot Mc (v0.11)** (+ 前向きの 2 台のカメラ、安全層つき) | **1.000** | 0.985 | **1.000** | **1.000** |
+| **KeiPilot Mc (v0.12)** (+ 横断歩道・大きな交差点・自転車・路上駐車、安全層つき) | **1.000** | **1.000** | **1.000** | **1.000** |
 
 * **KeiPilot v0.2**: 未見の街 80 ルート (48.7 km) で、**完走率 100%、違反 0 件**。
   - 内訳は、上の KeiSim の 40 ルートと、KeiView (6 章) の 40 ルートです。
@@ -162,6 +209,7 @@ DS = Route Completion × 違反ペナルティ（車両 ×0.60、歩行者 ×0.5
   - 高密度交通の 1 本は、右折して交差点を出たあと、止まりかけた前の車に向かって加速し直し、時速 9 km で追突したものです。
 * **KeiPilot Mc (v0.11)**: KeiSim の 4 スイート 80 ルートはすべて完走しました (v0.10 が完走しなかった既知の街の 1 本も完走)。減点は、未見の街 B の 1 本 (街 1005) の信号無視 1 件です。
   - 黄信号のあいだ、前の車について交差点へ進みました。エキスパートが止まると決めてから 0.7 秒遅れてブレーキをかけたため止まりきれず、赤になって 1.2 秒後に、時速 12 km で停止線を越えました。
+* **KeiPilot Mc (v0.12)**: KeiSim の 4 スイート 80 ルートをすべて完走し、違反は 0 件です。
 * KeiPilot v0.1 (DAgger) は、未見の街 40 ルートで完走率 100%、衝突 0 件でした。
   - 減点は信号無視 5 件 (0.21/km) です。
   - 高密度交通では 20 本中 19 本を完走しました (歩行者との接触 1 件)。
@@ -786,7 +834,7 @@ docs/                    ギャラリー画像, 上面図, ハイライト動画
                          multicam.md: KeiPilot Mc の説明、multicam/rounds/: その学習の各回のスクリプト
                          roadmap.md: 今後の方針と残タスク
 runs/eval/               評価結果 JSON (README の数値の出所)。学習済みモデルは GitHub Releases の
-                         keipilot_mc.pt / keipilot_mc.onnx (v0.11.0、KeiPilot Mc) と keipilot.pt / keipilot.onnx (v0.10.0)
+                         keipilot_mc.pt / keipilot_mc.onnx (v0.12.0、KeiPilot Mc) と keipilot.pt / keipilot.onnx (v0.10.0)
 data/                    収集データ (リポジトリ外, 約 3 GB。scripts/collect.py で再生成できる)
 ```
 
@@ -1484,12 +1532,12 @@ nav command + target point + 自車速度 ─→ 条件埋め込み ┤
 ```bash
 git clone https://github.com/southern-star/keisim.git && cd keisim
 bash setup.sh
-gh release download v0.11.0 -R southern-star/keisim -p keipilot_mc.pt -D runs   # KeiPilot Mc (30 MB)
+gh release download v0.12.0 -R southern-star/keisim -p keipilot_mc.pt -D runs   # KeiPilot Mc (30 MB)
 gh release download v0.10.0 -R southern-star/keisim -p keipilot.pt -D runs      # v0.10、1 台のカメラ (30 MB)
 ```
 
-`gh` がない場合は `curl -L --create-dirs -o runs/keipilot_mc.pt https://github.com/southern-star/keisim/releases/download/v0.11.0/keipilot_mc.pt` でも取得できます (v0.10 は `v0.10.0/keipilot.pt`)。
-Release v0.11.0 にはブラウザ版用の `keipilot_mc.onnx` が、Release v0.10.0 には `keipilot.onnx` があります。
+`gh` がない場合は `curl -L --create-dirs -o runs/keipilot_mc.pt https://github.com/southern-star/keisim/releases/download/v0.12.0/keipilot_mc.pt` でも取得できます (v0.10 は `v0.10.0/keipilot.pt`)。
+Release v0.12.0 にはブラウザ版用の `keipilot_mc.onnx` が、Release v0.10.0 には `keipilot.onnx` があります。KeiPilot Mc の前の版 (v0.11) は Release v0.11.0 にあります。
 以前のモデルは、v0.9 が Release v0.9.0 に、v0.8 が Release v0.8.0 に、v0.7 が Release v0.7.0 に、v0.6 が Release v0.6.0 に、v0.5 が Release v0.5.0 に、v0.2 が Release v0.2.0 に、v0.1 のカメラのみのモデル (`keipilot.pt`, `keipilot_kv.pt`) が Release v0.1.0 にあります。どれも今のコードでそのまま読み込めます。
 
 `nvidia-smi` を見て PyTorch のビルドを自動で選び、`.venv` を作ります（このPCでは約 1.5 分）。
@@ -1745,6 +1793,9 @@ uv run --with onnx --with onnxruntime scripts/export_onnx.py runs/keipilot_v24/l
 #        各回に実際に走らせたスクリプトは docs/multicam/rounds/ (round1.sh 〜 round11.sh、上から順に)
 uv run scripts/export_weights.py runs/keipilot_mc12/last.pt runs/keipilot_mc.pt   # Release v0.11.0 の keipilot_mc.pt
 uv run --with onnx --with onnxruntime scripts/export_onnx.py runs/keipilot_mc12/last.pt web/models/keipilot_mc.onnx   # Release v0.11.0 の keipilot_mc.onnx (入力 imgs)
+# v0.12 (KeiPilot Mc): v0.11 から 2 回の DAgger (round12.sh: 横断歩道・大きな交差点・自転車 → mc13、round13.sh: 路上駐車 → mc14)
+uv run scripts/export_weights.py runs/keipilot_mc14/last.pt runs/keipilot_mc.pt   # Release v0.12.0 の keipilot_mc.pt
+uv run --with onnx --with onnxruntime scripts/export_onnx.py runs/keipilot_mc14/last.pt web/models/keipilot_mc.onnx   # Release v0.12.0 の keipilot_mc.onnx
 
 # 実在の町の評価 (安全層つき、20 ルートずつ。README はエピソード 100〜 / 200〜 / 300〜 の 60 ルート)
 E="uv run scripts/evaluate.py --agent model --ckpt runs/keipilot.pt --brake_hold --red_hold --osm_town osm_sapporo --routes 20"
@@ -1862,13 +1913,13 @@ uv run scripts/demo.py --agent model --ckpt runs/keipilot_kv_dagger/last.pt --re
 ```
 
 学習済みの重み（fp16, 30 MB）は Release にあります。
-v0.11 の `keipilot_mc.pt` (KeiPilot Mc) と v0.10 の `keipilot.pt` は、どちらも KeiSim と KeiView の両方で使えます。
+v0.12 の `keipilot_mc.pt` (KeiPilot Mc) と v0.10 の `keipilot.pt` は、どちらも KeiSim と KeiView の両方で使えます。
 この節の手順で作ったカメラのみのモデルは、v0.1.0 の `keipilot_kv.pt` です。
 
 ```bash
 gh release download v0.10.0 -R southern-star/keisim -p keipilot.pt -D runs
 uv run scripts/demo.py --agent model --ckpt runs/keipilot.pt --renderer keiview --town 1001 --episode 3 --out runs/demo_kv.mp4
-gh release download v0.11.0 -R southern-star/keisim -p keipilot_mc.pt -D runs
+gh release download v0.12.0 -R southern-star/keisim -p keipilot_mc.pt -D runs
 uv run scripts/demo.py --agent model --ckpt runs/keipilot_mc.pt --renderer keiview --town 1001 --episode 3 --out runs/demo_kv_mc.mp4
 ```
 
