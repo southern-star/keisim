@@ -32,6 +32,8 @@ from .parked import PARKED_OWNER, PK_BIKE_CLEAR
 
 BIKE_LEN, BIKE_W = 1.8, 0.6
 BIKE_R = 0.3                # the circles that cover a bike (NCB of them along it)
+TURN_AHEAD = (0.5, 2.0, 3.5)    # m: TrafficConfig.bike_defer: where a standing turning car will drive (ahead of its
+#                             front bumper along its path): riders keep out of it (Bicycles._turning)
 NCB = 3
 BIKE_EDGE = 0.5             # m: the bike's line from the edge of the road surface
 BIKE_OWNER = 1_000_000      # owner ids of bike circles in the bikes' own corridor check
@@ -196,6 +198,7 @@ class Bicycles:
         self.mode = z(0, dt=int)
         self.gear = z(0, dt=int)
         self.ss_done = z(0, dt=int)
+        self.lead = z(0, dt=int)            # whoever is in the way (corridor owner; -1 with nobody, or the ego)
         self.xy = z(0, 2)
         self.colors = z(0, 4, 3)            # frame, shirt, pants, skin (B, G, R)
         lanes = bike_lanes(town)
@@ -286,6 +289,7 @@ class Bicycles:
         self.mode = ap(self.mode, PEDAL)
         self.gear = ap(self.gear, len(T["gears"]) // 2)
         self.ss_done = ap(self.ss_done, -1)
+        self.lead = ap(self.lead, -1)
         self.xy = np.vstack([self.xy, p])
         self.colors = np.concatenate([self.colors, np.clip(col, 0, 255)[None]])
         self.n += 1
@@ -573,6 +577,9 @@ class Bicycles:
             u = np.stack([np.cos(self.yaw), np.sin(self.yaw)], -1)
             lon = ((t_car[None] - self.xy[:, None]) * u[:, None]).sum(-1)
             margin[:, a:a + n_turn] = np.where(lon > -1.5, MARGIN_TURN, -np.inf)
+            front = getattr(self, "_turn_front", [])
+            if any(f is not None for f in front[:n_turn]):
+                self._front_margin(margin, a, front[:n_turn])
         hl = np.full(n, BIKE_LEN / 2)
         hw = np.full(n, BIKE_W / 2)
         me = BIKE_OWNER + np.arange(n)
@@ -747,6 +754,7 @@ class Bicycles:
                 if v > 0.5:
                     self.stood[i] = 0.0
             self.gap[i], self.v_want[i] = gap, v_t
+            self.lead[i] = int(lead_o) if math.isfinite(gap) else -1
             # -- forces
             mode_was = self.mode[i]
             m = T["mass"]
@@ -885,13 +893,49 @@ class Bicycles:
         near[i] = False
         return not near.any()
 
+    def _front_margin(self, margin, a, front):
+        """TrafficConfig.bike_defer: the points ahead of a turning car's front bumper (_turning; front[c]: the car's
+        approach and exit lanes) count only for the riders crossing its way: not for one from the car's own approach
+        (it follows the car), nor one leaving the junction by the car's exit (it goes the same way after it). One
+        going straight on into the road a left turn went into stopped beside the car for them, then fell in behind
+        it at its speed and touched its side as it turned (stress roadtypes 1019/9901, suburban 2001/9900)."""
+        lanes = self.town.lanes
+
+        def road(lid):
+            return {lid} | set(getattr(lanes[lid], "siblings", None) or ()) if lid >= 0 else set()
+        ways = []
+        for i in range(self.n):
+            r, k = self.route[i], int(self.ri[i])
+            came = lanes[r[k]].pred[0] if lanes[r[k]].kind == "conn" and lanes[r[k]].pred else r[k]
+            kc = k if lanes[r[k]].kind == "conn" else k + 1
+            ex = r[kc + 1] if kc + 1 < len(r) and lanes[r[kc]].kind == "conn" else -1
+            ways.append((came, ex))
+        for c, f in enumerate(front):
+            if f is None:
+                continue
+            same = road(f[0])
+            out = road(f[1])
+            for i, (came, ex) in enumerate(ways):
+                if came in same or (ex >= 0 and ex in out):
+                    margin[i, a + c] = -np.inf
+
     def _turning(self, tr):
         """Where the cars that turn at a junction will be in 0.6, 1.2 and 1.8 s (one circle each): the cars moving on
-        a turn's connector or within 12 m of one on their route -> xy, r, owner, v, yaw, the car's position now."""
+        a turn's connector or within 12 m of one on their route -> xy, r, owner, v, yaw, the car's position now.
+        TrafficConfig.bike_defer: also TURN_AHEAD m ahead of the front bumper along the path, the standing ones too,
+        where they will drive when they go on, so that a rider does not stop in their way; not for a car giving way
+        (Traffic.giving_way: at a turn's wait point or a 止まれ line, it waits for the rider to go first)
+        (bigjunction 3005/9800: a rider stood 1.4 m from a car crawling up behind another to turn right across its
+        line, in the car's way; neither could move)."""
         lanes = self.town.lanes
         xs, rs, os_, vs, ys, cs = [], [], [], [], [], []
+        self._turn_front = []           # bike_defer: per circle, None or the car's (approach, exit) lanes
         if tr.n and getattr(tr, "_cn", -1) == tr.n:
-            for j in np.nonzero(tr.v > 0.5)[0]:
+            moving = tr.v > 0.5
+            cars = np.arange(tr.n) if self.cfg.bike_defer else np.nonzero(moving)[0]
+            gw = getattr(tr, "giving_way", ())
+            gw = gw if len(gw) == tr.n else np.zeros(tr.n, bool)
+            for j in cars:
                 r, k = tr.route[j], tr.ri[j]
                 cur = lanes[r[k]]
                 if cur.kind == "conn":
@@ -902,14 +946,22 @@ class Bicycles:
                 if not turn:
                     continue
                 off = tr.odo[j] - tr.c_odo0[j]
-                for tau in (0.6, 1.2, 1.8):
-                    q = int(np.searchsorted(tr.c_cum[j], off + tr.v[j] * tau))
+                ahead = [(tr.v[j] * tau, tr.v[j]) for tau in (0.6, 1.2, 1.8)] if moving[j] else []
+                if self.cfg.bike_defer and not gw[j]:   # and where its front will drive (a standing or slow
+                    #                         one too), a place to keep out of, not a car to follow (speed 0); not
+                    #                         for one waiting to give way (it waits for the rider: crosswalks 1010/9800)
+                    ahead = sorted(ahead + [(tr.dims[j, 0] / 2 + d, 0.0) for d in TURN_AHEAD])
+                    kc = k if cur.kind == "conn" else k + 1             # its connector on the route
+                    way = (lanes[r[kc]].pred[0] if lanes[r[kc]].pred else r[kc], r[kc + 1] if kc + 1 < len(r) else -1)
+                for a, va in ahead:
+                    q = int(np.searchsorted(tr.c_cum[j], off + a))
                     if q >= tr.PC or not np.isfinite(tr.c_cum[j, q]):
                         break
                     xs.append(tr.c_pts[j, q])
                     rs.append(tr.dims[j, 1] / 2)
                     os_.append(j)
-                    vs.append(tr.v[j])
+                    vs.append(va)
+                    self._turn_front.append(way if self.cfg.bike_defer and va == 0.0 and a >= tr.dims[j, 0] / 2 else None)
                     ys.append(tr.yaw[j])
                     cs.append(tr.xy[j])
         if not xs:

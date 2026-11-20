@@ -2351,3 +2351,96 @@ def test_box_fix_waits_for_a_car_clearing_the_junction():
     assert not tr._clearing(i, mine.id)
     tr.v[j] = 2.0                                           # going on over it: it is entering
     assert tr._clearing(i, mine.id)
+
+
+def test_bike_defer_skips_the_future_of_a_bicycle_braking_for_the_car():
+    """TrafficConfig.bike_defer (Traffic._bike_defer): a car on a connector leaves out where a moving bicycle will be
+    (Bicycles.circles' predict) when that bicycle is braking for a car on a connector of the same junction
+    (Bicycles.lead: this car or another), not the bicycle's own circles; not for a bicycle braking for a car on its
+    lane or in another junction, nor one from the car's own approach or going its way, nor for a car still on its
+    lane (bigjunction 3005/9800)."""
+    from keisim.bicycles import NCB
+    env = _bike_env(10.0)
+    env.reset(town_seed=5, episode_seed=2)
+    for _ in range(5):                                      # (the riders' tracks are made as they ride)
+        env.step(env.expert_action())
+    tr, bk, lanes = env.world.traffic, env.world.bikes, env.world.town.lanes
+    tr.cfg.bike_defer = True
+    assert tr.n >= 4 and bk.n >= 2
+    conn = next(l for l in lanes if l.kind == "conn")
+    twin = next(l for l in lanes if l.kind == "conn" and l.junction == conn.junction and l.id != conn.id)
+    far = next(l for l in lanes if l.kind == "conn" and l.junction != conn.junction)
+    road = next(l for l in lanes if l.kind == "road")
+    i, other, near, away = 0, 1, 2, 3
+    for c in range(tr.n):
+        tr.route[c], tr.ri[c], tr.s[c] = [road.id], 0, 1.0
+    for c, L in ((i, conn), (near, twin), (away, far)):
+        tr.route[c], tr.ri[c], tr.s[c] = [L.id] + list(L.succ[:1]), 0, 1.0
+    bk.v[:] = 0.0
+    j = next(b for b in range(bk.n) if bk._cat[b] is not None)
+    bk.v[j] = 3.0                                           # moving: its future is in the circles
+    bk.lead[:] = -1
+    bk.lead[j] = i                                          # braking for car i
+    for c in (i, near, away):                               # coming across the cars' way
+        tr.yaw[c] = bk.yaw[j] + np.pi / 2
+    _, _, bow, _, byw = bk.circles(predict=True)
+    pred = np.arange(len(bow)) >= NCB * bk.n
+    fut = pred & (bow == j)
+    assert fut.any()
+    skip = tr._bike_defer(bow, byw)
+    assert skip is not None
+    assert skip[i][fut].all() and not skip[i][~pred].any()  # its own circles still count
+    assert skip[near][fut].all()                            # (in the same junction: it will not ride on either)
+    assert not skip[other].any() and not skip[away].any()   # a car on its lane, or in another junction: as before
+    bk.lead[j] = near                                       # braking for the other car in the junction: the same
+    assert tr._bike_defer(bow, byw)[i][fut].all()
+    bk.lead[j] = other                                      # braking for a car on its lane: car i sees its future
+    assert tr._bike_defer(bow, byw) is None
+    bk.lead[j] = away
+    assert not tr._bike_defer(bow, byw)[i].any()
+    bk.lead[j] = i
+    lane_j = int(bk.lane[j])
+    bk.lane[j] = conn.pred[0]                               # from the car's own approach (it follows the car)
+    sk = tr._bike_defer(bow, byw)
+    assert sk is None or not sk[i].any()
+    bk.lane[j] = lane_j
+    tr.yaw[i] = bk.yaw[j] + 0.3                             # going its way: as before
+    sk = tr._bike_defer(bow, byw)
+    assert sk is None or not sk[i].any()
+    tr.cfg.bike_defer = False
+
+
+def test_bike_defer_riders_keep_out_of_where_a_turning_car_will_drive():
+    """TrafficConfig.bike_defer (Bicycles._turning): a standing or slow car on a turn's connector counts for the
+    riders, at least TURN_AHEAD m ahead of its front bumper along its path, where it will drive; off, only the moving
+    ones count, where their centre will be in 0.6-1.8 s (bigjunction 3005/9800); not one giving way (Traffic.giving_way,
+    crosswalks 1010/9800)."""
+    from keisim.bicycles import TURN_AHEAD
+    env = _bike_env(10.0)
+    env.reset(town_seed=5, episode_seed=2)
+    for _ in range(5):
+        env.step(env.expert_action())
+    tr, bk, lanes = env.world.traffic, env.world.bikes, env.world.town.lanes
+    conn = next(l for l in lanes if l.kind == "conn" and l.turn != "straight" and l.length > 15.0)
+    road = next(l for l in lanes if l.kind == "road")
+    i = 0
+    for c in range(tr.n):
+        tr.route[c], tr.ri[c], tr.s[c], tr.v[c] = [road.id], 0, 1.0, 0.0
+    tr.route[i], tr.ri[i], tr.s[i] = [conn.id] + list(conn.succ[:1]), 0, 2.0
+    tr._refresh(i)
+    tr.xy[i] = conn.poly.interp1(2.0)
+    tr.cfg.bike_defer = False
+    xy, _, own, *_ = bk._turning(tr)
+    assert not (own == i).any()                             # standing: not there (off)
+    tr.cfg.bike_defer = True
+    xy, _, own, *_ = bk._turning(tr)
+    pts = xy[own == i]
+    assert len(pts) == len(TURN_AHEAD)
+    d = np.hypot(*(pts - tr.xy[i]).T)
+    assert (d > tr.dims[i, 0] / 2 + TURN_AHEAD[0] - 0.6).all()  # ahead of its front bumper
+    tr.v[i] = 0.3                                           # crawling: the same, ahead of its front
+    assert (bk._turning(tr)[2] == i).sum() == len(TURN_AHEAD)
+    tr.giving_way = np.zeros(tr.n, bool)
+    tr.giving_way[i] = True                                 # waiting at its wait point to give way: not there
+    assert not (bk._turning(tr)[2] == i).any()
+    tr.cfg.bike_defer = False

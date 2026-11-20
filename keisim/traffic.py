@@ -465,6 +465,7 @@ class Traffic:
         self.shift_v = np.zeros(0)      # m/s: ... and how fast it is moving sideways
         self.shift_tgt = np.zeros(0)    # m: where the shift was heading at the last step (the corridor follows it)
         self._left_wait = {}            # car -> s it has waited before a left turn for a standing bicycle
+        self.giving_way = np.zeros(0, bool)     # bike_defer: held at a 止まれ line or a turn's wait point this step
         self.parked = None      # the ParkedCars (World, TrafficConfig.parked > 0)
         self.pk_go = {}         # car -> the parked-car group it has set off to pass over the centre line (_parked_gaps)
         self.pk_prof = {}       # car -> (s_lo, s_hi, how far out) of the group it moves out round (_shifted_paths)
@@ -1288,10 +1289,13 @@ class Traffic:
                     continue
                 if k + 1 < len(r) and self._clearing(i, r[k + 1]):
                     stop_gap[i] = d - 0.6
+        sg0 = stop_gap.copy() if cfg.bike_defer else None
         if town.stop_signs:          # 止まれ (Town.from_graph): stop once at the minor road's stop line
             self._stop_sign_gaps(stop_gap, hl)
         if self.has_yields:          # two-phase signals: turns wait for a gap in the oncoming traffic
             self._yield_gaps(stop_gap, t, ego_info, hl)
+        if sg0 is not None:          # (bike_defer: the riders do not keep out of the way of a car giving way)
+            self.giving_way = stop_gap < sg0
         if peds is not None and peds.cw_on:      # crosswalks at signals: give way to the people on them
             self._crosswalk_gaps(stop_gap, hl, peds, t)
         bike_pair = ()
@@ -1637,6 +1641,8 @@ class Traffic:
         BIKE_MIN beside them, and so is where a moving one will be within 2.4 s (Bicycles.circles).
         Left turns (巻き込み確認): within BIKE_LEFT of its turn a car stops at the end of its lane while a bicycle on
         that lane is beside it or would be within BIKE_LEFT_T s, and lets it go first.
+        TrafficConfig.bike_defer: a car in a junction does not stop for where a bicycle braking for it would be
+        (_bike_defer).
         stop_gap is updated in place; self.shift is what World applies to the cars' positions."""
         bk = self.bikes
         n, nb = self.n, bk.n
@@ -1733,16 +1739,68 @@ class Traffic:
         me = np.full(n, -1)
         less = room[:, bow]
         hwid = self.dims[:, 1] / 2
+        m_min, m_free = BIKE_MIN - less, BIKE_FREE - less
+        if self.cfg.bike_defer:
+            skip = self._bike_defer(bow, byw)
+            if skip is not None:
+                m_min, m_free = np.where(skip, -1e3, m_min), np.where(skip, -1e3, m_free)
         gap, lead_v, _ = corridor_gaps(paths, relc, valid, self.xy, self.yaw, hl, hwid, bxy, br, bow, bsp, byw, me,
-                                       BIKE_MIN - less)
+                                       m_min)
         g_free, v_free, _ = corridor_gaps(paths, relc, valid, self.xy, self.yaw, hl, hwid, bxy, br, bow, bsp, byw, me,
-                                          BIKE_FREE - less)
+                                          m_free)
         m = np.isfinite(g_free)
         if m.any():
             v_pass = np.maximum(BIKE_PASS_V, v_free[m] + BIKE_PASS_DV)
             vmax = vmax.copy()
             vmax[m] = np.minimum(vmax[m], np.sqrt(v_pass ** 2 + 3.0 * np.maximum(g_free[m], 0.0)))
         return gap, lead_v, vmax
+
+    def _bike_defer(self, bow, byw):
+        """TrafficConfig.bike_defer: (N, M) bool, the circles of where a moving bicycle will be (Bicycles.circles'
+        predict, after its NCB own circles each) that car i, on a connector, leaves out: those of a bicycle that is
+        braking or standing for a car on a connector of the same junction (Bicycles.lead: car i itself or another),
+        so it will not ride on into the junction as they predict; only a bicycle from another approach of the
+        junction, coming across or towards the car, and not leaving by the car's exit (one following it from its
+        own approach has it as its lead too, and rode up beside it; one going straight on into the road a left turn
+        went into fell in beside the car and touched it). Each waited for the other's future: a right turn and
+        a bicycle coming straight on from the other way stopped nose to nose in the junction, the car's body already
+        across the bicycle's line, and stood so for good; the car turning behind it did the same while the bicycle
+        still waited for the first (bigjunction 3005/9800, 600 m). The car now goes on; it still keeps BIKE_MIN from
+        where the bicycle is. None: nothing to leave out."""
+        from .bicycles import NCB
+        bk, lanes, n = self.bikes, self.town.lanes, self.n
+        lead = getattr(bk, "lead", None)
+        pred = np.arange(len(bow)) >= NCB * bk.n
+        if lead is None or len(lead) != bk.n or not pred.any():
+            return None
+        jn = np.full(n, -1)                     # the junction of each car on a connector (-1: on a lane)
+        came = np.full(n, -1)                   # ... and the lane it came from
+        for i in range(n):
+            L = lanes[self.route[i][self.ri[i]]]
+            if L.kind == "conn":
+                jn[i], came[i] = L.junction, L.pred[0]
+        if not (jn >= 0).any():
+            return None
+        lc = lead[bow]                          # the car each circle's bicycle brakes for
+        lj = np.where((lc >= 0) & (lc < n), jn[np.clip(lc, 0, n - 1)], -1)
+        skip = pred[None, :] & (jn[:, None] >= 0) & (lj[None, :] == jn[:, None])
+        if skip.any():                          # from another approach, across its way or towards it
+            skip &= np.cos(byw[None, :] - self.yaw[:, None]) < 0.5
+            bl = [lanes[int(x)].pred[0] if lanes[int(x)].kind == "conn" and lanes[int(x)].pred else int(x)
+                  for x in bk.lane]             # the lane each rider came from
+            ex = []                             # ... and the lane it leaves the junction by (-1: not known)
+            for b in range(bk.n):
+                r, k = bk.route[b], int(bk.ri[b])
+                if lanes[r[k]].kind != "conn":
+                    k += 1
+                ex.append(r[k + 1] if k + 1 < len(r) and lanes[r[k]].kind == "conn" else -1)   # (k < len(r) then)
+            for i in np.nonzero(skip.any(1))[0]:
+                road = {int(came[i])} | set(getattr(lanes[came[i]], "siblings", None) or ())
+                r, k = self.route[i], self.ri[i]
+                out = {r[k + 1]} | set(getattr(lanes[r[k + 1]], "siblings", None) or ()) if k + 1 < len(r) else set()
+                mine = np.array([bl[b] in road or ex[b] in out for b in range(bk.n)], bool)
+                skip[i] &= ~mine[bow]
+        return skip if skip.any() else None
 
     def _shifted_paths(self, paths, relc):
         """The paths (N,P,2) of step(), moved to the right by where each car's shift (_bike_gaps) will be at each

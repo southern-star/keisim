@@ -195,6 +195,17 @@ class TrafficConfig:
     #   end of its own green; the two stood nose to nose for good (crosswalks_sub 2008/9850; bigjunction 3004/9800,
     #   the right turn still on its lane, 6.6 m past its line).
     box_fix: bool = False
+    # bike_defer: in a junction, a car and a bicycle crossing each other's line do not both wait for the other.
+    # - An NPC on a connector does not stop for where a bicycle will be (Bicycles.circles' predict) when that bicycle
+    #   is braking or standing for a car on a connector of the same junction (Bicycles.lead: the NPC or another): it
+    #   goes on, still clear of where the bicycle is (Traffic._bike_defer).
+    # - The riders keep out of where a standing or slow turning car will drive when it goes on: at least
+    #   bicycles.TURN_AHEAD m ahead of its front bumper along its path (Bicycles._turning).
+    # Each had braked for the other's future: a right turn and a bicycle coming straight on from the other way
+    # stopped nose to nose in the junction, the car's body across the bicycle's line, and stood so for good; then the
+    # rider stopped 1.4 m from the car turning behind it, in its way (bigjunction 3005/9800, 600 m, with npc_sweep,
+    # npc_axles and box_fix). Off by default: the old evaluations stay reproducible.
+    bike_defer: bool = False
     # Crosswalks at signals (Town.ped_crossings: the zebras at the ends of the roads of two-phase signalised junctions).
     # crosswalks: the chance that a person walking up to such an end crosses there: they wait at the kerb for the
     # pedestrian green (the green of the cars crossing that road's flow, minus ped_flash s of flashing) and walk over
