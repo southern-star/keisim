@@ -266,11 +266,15 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
   // surrounding traffic (src/traffic.js): on by default, off with ?traffic=0 or the HUD button / T (the choice is
   // remembered in this browser); ?cars=N cars; ?bikes=N bicycles per road km (src/bicycles.js; none without it);
   // ?parked=N parked cars per km of the kerbs they may stand at (src/parked.js; none without it; they go with the cars);
-  // ?sweep=0: the cars do not place their body along a sharp turn (src/traffic.js leader; on by default)
+  // ?sweep=0: the cars do not place their body along a sharp turn (src/traffic.js leader; on by default); ?axles=0: the
+  // cars' bodies turn about their centre on the path (axlesPose); ?boxfix=0: a car standing past its stop line does not
+  // count as inside the junction; ?bikedefer=0: a car in a junction and a rider crossing its way wait for each other's
+  // future as before (deferred, bicycles.js TURN_AHEAD) (all three on by default)
   const roadKm = lanes.reduce((a, l) => a + l.len, 0) / 1000;
   const traffic = createTraffic(T.data, lanes, { count: Number(params.get('cars')) || Math.min(40, Math.round(roadKm * 12)), seed: 7,
     bikes: Math.max(0, Math.min(Number(params.get('bikes')) || 0, 30)),
-    parked: Math.max(0, Math.min(Number(params.get('parked')) || 0, 20)), sweep: params.get('sweep') !== '0' });
+    parked: Math.max(0, Math.min(Number(params.get('parked')) || 0, 20)), sweep: params.get('sweep') !== '0',
+    axles: params.get('axles') !== '0', boxFix: params.get('boxfix') !== '0', bikeDefer: params.get('bikedefer') !== '0' });
   const drawActors = () => ctx.services.actors.update(traffic.drawList(car.x, car.y), [], traffic.bikeList(car.x, car.y));
   const TRAFFIC_KEY = 'keipilot.traffic';
   let stored = null;
