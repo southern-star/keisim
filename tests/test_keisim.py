@@ -2577,3 +2577,29 @@ def test_bike_hook_riders_keep_behind_a_car_turning_right_their_way():
     assert out[(True, conn.id)] < out[(False, conn.id)] - 0.4          # falls back behind it
     assert abs(out[(True, other.id)] - out[(False, conn.id)]) < 0.1     # another exit: as before
     tr.cfg.bike_hook = False
+
+
+def test_bike_hook_new_riders_start_no_faster_than_they_can_stop():
+    """TrafficConfig.bike_hook (Bicycles._try_add): a new rider just behind a car starts no faster than it can stop
+    for it (a rider put 2.3 m behind a car at 6 m/s rode into it as it stopped: stress roadtypes 1013/9901)."""
+    from keisim.bicycles import bike_lanes, bike_track
+    env, tr, bk, *_ = _hook_scene()
+    town = env.world.town
+    lid = max(bike_lanes(town), key=lambda l: town.lanes[l].length)
+    trk = bike_track(town, lid)
+    s = town.lanes[lid].length / 2
+    k = int(np.clip(np.searchsorted(trk.cum, trk.at(s)), 1, len(trk.cum) - 1))
+    p, h = trk.pts[k], trk.heading[k]
+    cxy = (p + 3.0 * np.array([np.cos(h), np.sin(h)]))[None]  # a car's circle 3 m ahead
+    cr = np.array([0.78])
+    bk.xy[:] += 1e5                                         # (the other riders out of the way)
+    far = np.array([[1e6, 1e6]])
+    v0 = {}
+    for hook in (False, True):
+        tr.cfg.bike_hook = hook
+        bk.rng = np.random.default_rng(1)
+        assert bk._try_add(lid, s, far, 1.0, cxy, cr)
+        v0[hook] = float(bk.v[-1])
+        bk.xy[-1] += 1e5
+    assert v0[False] > 1.0 and v0[True] < 0.5
+    tr.cfg.bike_hook = False

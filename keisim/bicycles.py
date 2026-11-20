@@ -284,7 +284,18 @@ class Bicycles:
         self._cat.append(None)
         self.ri = ap(self.ri, 0)
         self.u = ap(self.u, u)
-        self.v = ap(self.v, cruise * rng.uniform(0.6, 1.0))
+        v0 = cruise * rng.uniform(0.6, 1.0)
+        if self.cfg.bike_hook and car_xy is not None and len(car_xy):   # no faster than it can stop for a car
+            h = float(tr.heading[j])                                    # ahead (a rider put 2.3 m behind one at
+            ub = np.array([math.cos(h), math.sin(h)])                   # 6 m/s rode into it as it stopped:
+            rel = np.asarray(car_xy) - p                                # stress roadtypes 1013/9901)
+            lon = rel @ ub
+            lat = np.abs(rel[:, 0] * ub[1] - rel[:, 1] * ub[0])
+            ahead = (lon > 0.0) & (lat < car_r + BIKE_W / 2 + MARGIN_CAR)
+            if ahead.any():
+                room = float(np.min(lon[ahead] - car_r[ahead])) - BIKE_LEN / 2 - S0_CAR
+                v0 = min(v0, math.sqrt(2.0 * 1.5 * max(room, 0.0)))
+        self.v = ap(self.v, v0)
         self.acc = ap(self.acc, 0.0)
         self.lat = ap(self.lat, 0.0)
         self.lat_t = ap(self.lat_t, 0.0)

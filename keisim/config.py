@@ -223,7 +223,8 @@ class TrafficConfig:
     # - New riders are put with all three of the bike's circles clear of the cars' circles and side points, not
     #   only its middle one (a rider put just behind a car reached 0.3 m into it: suburban 2009/9851, stress
     #   roadtypes 1016/9901). A 0.9 m circle round the bike's centre would keep riders from starting beside the cars
-    #   on the kerb, and the routes took longer.
+    #   on the kerb, and the routes took longer. A new rider starts no faster than it can stop for a car ahead (a
+    #   rider put 2.3 m behind a car at 6 m/s rode into it as it stopped: stress roadtypes 1013/9901).
     # Off by default: the old evaluations stay reproducible.
     bike_hook: bool = False
     # Crosswalks at signals (Town.ped_crossings: the zebras at the ends of the roads of two-phase signalised junctions).
