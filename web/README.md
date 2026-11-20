@@ -215,7 +215,8 @@ cd web && node tools/serve.mjs                    # → http://localhost:5174/?p
     - ブラウザ版には人がいないので、子どもの飛び出しはありません。
 
     ![路上駐車（town 1018、?parked=4）: 自車 (v0.10) は赤い駐車車両の後ろで止まり、後ろの緑の車は中央線を越えて追い越す](../docs/keiview_parked.jpg)
-    - KeiPilot（v0.10、Mc v0.11）は駐車車両を学習していないので、後ろで止まったまま動かないことがあります。90 秒動けないと最初からやり直します。
+    - KeiPilot v0.10 は駐車車両を学習していないので、後ろで止まったまま動かないことがあります。90 秒動けないと最初からやり直します。
+    - KeiPilot Mc（v0.12）は駐車車両を学習しましたが、まだ途中です。追い越せることが増えた一方で、すぐ後ろで止まってから出て、駐車車両の角に当たることがあります（KeiSim の評価で 40 ルート中 8 本）。
   - 描画が重いときは、画面の「周りの車」ボタンか T キーで消せます（選んだ設定はブラウザに残ります）。`?traffic=0` でも消せます。周りの車の描画は、1 台を材質ごとに 1 つのメッシュにまとめて軽くしています（車 24 台が見えているとき、描画命令は 520 → 740、RTX 3060・1280×720 で 1 フレームあたり 2〜3 ms 増）。
 - カメラから 70 m 以内の周りの車は、詳しい形のモデル（`src/world/cars.js`）で描きます。
   - 車種は KeiSim が決めた車の大きさで選びます。軽ハイトワゴン、軽ハッチ、軽トラ（白い軽に多い）、コンパクト、セダン、SUV、ミニバン、小型トラックの 8 種類です。
@@ -287,12 +288,12 @@ Linux では Vulkan を使い、GPU の WebGPU で推論します。フラグな
 
 ### KeiPilot Mc（`?pilot=mc`）
 
-`?pilot=mc` を付けると、前向きの 2 台のカメラで運転する KeiPilot Mc（v0.11.0、[../docs/multicam.md](../docs/multicam.md)）が走ります。
+`?pilot=mc` を付けると、前向きの 2 台のカメラで運転する KeiPilot Mc（v0.12.0、[../docs/multicam.md](../docs/multicam.md)）が走ります。
 公開版: <https://southern-star.github.io/keisim/?pilot=mc>
 
 ```bash
-uv run --with onnx --with onnxruntime scripts/export_onnx.py runs/keipilot_mc12/last.pt web/models/keipilot_mc.onnx
-#   （または Release v0.11.0 の keipilot_mc.onnx を web/models/ に置く）
+uv run --with onnx --with onnxruntime scripts/export_onnx.py runs/keipilot_mc14/last.pt web/models/keipilot_mc.onnx
+#   （または Release v0.12.0 の keipilot_mc.onnx を web/models/ に置く。v0.11.0 は keipilot_mc12）
 cd web && node tools/serve.mjs                    # → http://localhost:5174/?pilot=mc&town=1000
 node tools/pilot_check.mjs --pilot mc --town curve_weak_w1 --sec 90   # headless Chrome で（--images DIR でモデルへの入力画像も）
 ```
