@@ -19,9 +19,9 @@ from torch.utils.data import DataLoader, WeightedRandomSampler
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from keipilot.data import DrivingDataset, load_shards  # noqa: E402
+from keipilot.data import FUTURE_HORIZONS, STEP_S, DrivingDataset, future_index, load_shards  # noqa: E402
 from keipilot.model import KeiPilot, channels_last, compute_loss  # noqa: E402
-from keisim.config import N_SEM  # noqa: E402
+from keisim.config import N_SEM, SEM  # noqa: E402
 from keisim.expert import YELLOW_VERSION  # noqa: E402
 
 
@@ -56,16 +56,37 @@ def evaluate(model, loader, device):
     stop_ok = 0
     tl_ok = 0
     conf = torch.zeros(N_SEM, N_SEM, dtype=torch.long)
+    fut_n = 0
+    fut_conf = {}       # future head: (who, frames) -> confusion matrix; who: head / persist, frames: all / moving / <dt>s
     for b in loader:
         b = {k: v.to(device, non_blocking=True) for k, v in b.items()}
         img = channels_last(b["img"])
+        fut = model.aux_future and "fut_seg" in b
         with torch.autocast("cuda", dtype=torch.bfloat16):
             out = model(img, b["cmd"], b["tp"], speed=b["v"], img_prev=b["img_prev"], has_prev=b["has_prev"],
-                        stand_m=b["stand_m"], stand_known=b["stand_known"])
+                        stand_m=b["stand_m"], stand_known=b["stand_known"], with_future=fut,
+                        fut_dt=b.get("fut_dt"), fut_v=b.get("fut_v"))
             if model.speed_input:
                 blind = model(img, b["cmd"], b["tp"], with_seg=False, img_prev=b["img_prev"], has_prev=b["has_prev"])
-        _, logs = compute_loss(model, out, b, w_aux=1.0)
+        _, logs = compute_loss(model, out, b, w_aux=1.0, w_future=1.0)
         bs = b["img"].shape[0]
+        if fut and b["fut_ok"].any():
+            # the frames with a future frame: the head's prediction against that frame's segmentation, and the
+            # persistence baseline (the segmentation of the frame itself taken as the prediction)
+            fut_n += int(b["fut_ok"].sum())
+            fs, cur = b["fut_seg"], b["seg"]
+            K = fs.shape[1] if fs.dim() == 4 else 1
+            fs, cur = (fs.flatten(0, 1), cur.flatten(0, 1)) if fs.dim() == 4 else (fs, cur)
+            pred = torch.nn.functional.interpolate(out["future"].float(), size=fs.shape[-2:], mode="bilinear",
+                                                   align_corners=False).argmax(1)
+            sel = {"all": b["fut_ok"], "moving": b["fut_ok"] & (b["fut_v"] >= 0.2)}
+            for dt in torch.unique(b["fut_dt"][b["fut_ok"]]).tolist():
+                sel[f"{dt:.1f}s"] = b["fut_ok"] & (b["fut_dt"] == dt)
+            for name, m in sel.items():
+                m = m.repeat_interleave(K, 0)
+                for who, p in (("head", pred), ("persist", cur)):
+                    c = torch.bincount((fs[m] * N_SEM + p[m]).flatten().cpu(), minlength=N_SEM * N_SEM)
+                    fut_conf[who, name] = fut_conf.get((who, name), 0) + c.view(N_SEM, N_SEM)
         if "yield_tta" in out:
             m = torch.isfinite(b["yield_tta"])
             if m.any():
@@ -97,6 +118,20 @@ def evaluate(model, loader, device):
                 "seg_mIoU": iou[present].mean().item(), "iou": iou.tolist()})
     if model.speed_input:
         res["speed_MAE_no_speed"] = spd_err_blind / n
+    if fut_conf:
+        # res["future"] is the head's validation loss; fut_*: IoU of the head, fut_persist_*: of the baseline
+        res["fut_frames"] = fut_n
+        detail = {}
+        for (who, name), c in fut_conf.items():
+            inter = c.diag().float()
+            iou = inter / (c.sum(0).float() + c.sum(1).float() - inter).clamp(min=1)
+            detail.setdefault(name, {})[who] = {
+                "mIoU": iou[c.sum(1) > 0].mean().item(), "IoU_vehicle": iou[SEM["vehicle"]].item(),
+                "IoU_pedestrian": iou[SEM["pedestrian"]].item(), "pixels": int(c.sum().item())}
+        for who, pre in (("head", "fut_"), ("persist", "fut_persist_")):
+            for k in ("mIoU", "IoU_vehicle", "IoU_pedestrian"):
+                res[pre + k] = detail["all"][who][k]
+        res["fut_detail"] = detail
     model.train()
     return res
 
@@ -113,6 +148,9 @@ def main():
     ap.add_argument("--workers", type=int, default=10)
     ap.add_argument("--val_frac", type=float, default=0.04)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--split_seed", type=int, default=None,
+                    help="seed of the training / validation split of the episodes (default: --seed); with it, "
+                         "another --seed changes the random stream only, not the frames trained on")
     ap.add_argument("--max_iters", type=int, default=0, help="debug: stop after N iterations per epoch")
     ap.add_argument("--dagger_weight", type=float, default=2.0, help="sampling weight of on-policy frames")
     ap.add_argument("--kv_weight", type=float, default=1.0, help="sampling weight of KeiView-rendered frames")
@@ -133,6 +171,13 @@ def main():
                     help="weight of the auxiliary yield head (earliest oncoming arrival at right turns); 0: off")
     ap.add_argument("--dir_weight", nargs="*", default=[], metavar="DIR=W",
                     help="extra sampling weight for every frame from a data directory, e.g. data/dir_expert=3")
+    ap.add_argument("--future_weight", type=float, default=0.0,
+                    help="weight of the auxiliary future head (the segmentation 0.4-2 s ahead, used in training "
+                         "only: docs/future_aux.md); 0: off")
+    ap.add_argument("--future_horizons", type=int, nargs="+", default=list(FUTURE_HORIZONS),
+                    help="the future head's look-aheads in control steps (10 Hz); even ones, as collect.py records "
+                         "every second step")
+    ap.add_argument("--device", default="cuda", help="cpu: for a few iterations on tiny data (tests)")
     ap.add_argument("--mmap", action="store_true",
                     help="leave the shards' image bytes on disk (np.memmap) instead of reading them all into memory; "
                          "same frames and batches, the page cache holds what fits")
@@ -140,7 +185,7 @@ def main():
     os.makedirs(args.out, exist_ok=True)
     torch.manual_seed(args.seed)
     torch.backends.cudnn.benchmark = True
-    device = "cuda"
+    device = args.device
 
     data, files = load_shards(args.data, with_prev=bool(args.history), mmap=args.mmap)   # earlier frames: history models
     # the camera rig of the data (collect.py --rig, meta.json); a rig model takes all of its cameras
@@ -153,7 +198,7 @@ def main():
     rig = rigs.pop()
     print(f"camera rig {rig}: {data['n_cams']} camera(s)", flush=True)
     N = len(data["cmd"])
-    rng = np.random.default_rng(args.seed)
+    rng = np.random.default_rng(args.seed if args.split_seed is None else args.split_seed)
     eps = np.unique(data["episode"])
     rng.shuffle(eps)
     val_eps = eps[: max(1, int(len(eps) * args.val_frac))]
@@ -161,13 +206,25 @@ def main():
     tr_idx, va_idx = np.nonzero(~is_val)[0], np.nonzero(is_val & ~data["stale_creep"])[0]
     print(f"{N} frames from {len(files)} shards, {len(eps)} episodes; train {len(tr_idx)} / val {len(va_idx)}", flush=True)
 
+    future = args.future_weight > 0
+    if future:      # the future head's labels: the same episode's frames a few steps later (keipilot.data.future_index)
+        data["fut_idx"], _ = future_index(data, files, args.future_horizons)
+        data["fut_dt"] = np.asarray(args.future_horizons, np.float32) * np.float32(STEP_S)
+        fut_ok = (data["fut_idx"] >= 0).any(1)
+        print(f"future labels ({args.future_horizons} steps ahead): {int(fut_ok[tr_idx].sum())} / {len(tr_idx)} "
+              f"training frames ({fut_ok[tr_idx].mean():.1%}), {int(fut_ok[va_idx].sum())} / {len(va_idx)} validation "
+              f"frames; per look-ahead " + " ".join(f"{h}: {(data['fut_idx'][tr_idx, j] >= 0).mean():.1%}"
+                                                    for j, h in enumerate(args.future_horizons)), flush=True)
+        if not fut_ok[tr_idx].any():
+            sys.exit("--future_weight: no training frame has a future frame (odd --future_horizons?)")
     ds_tr = DrivingDataset(data, tr_idx, train=True, cf_prob=args.cf_prob if args.speed_input else 0.0,
-                           speed_drop=args.speed_drop if args.speed_input else 0.0, history_drop=args.history_drop)
+                           speed_drop=args.speed_drop if args.speed_input else 0.0, history_drop=args.history_drop,
+                           future=future)
     if args.speed_input:
         print(f"frames with light-decision inputs (counterfactual speeds): {int(data['cf_ok'][tr_idx].sum())}", flush=True)
     if args.mem_input:
         print(f"frames with stand_m: {int(np.isfinite(data['stand_m'][tr_idx]).sum())} / {len(tr_idx)}", flush=True)
-    ds_va = DrivingDataset(data, va_idx, train=False)
+    ds_va = DrivingDataset(data, va_idx, train=False, future=future)
     w = sample_weights(data, args.dagger_weight, args.kv_weight)
     w[data["cf_ok"]] *= args.cf_weight
     for spec in args.dir_weight:
@@ -186,6 +243,8 @@ def main():
     w[data["stale_creep"]] = 0.0
     print(f"dropped {int(data['stale_creep'].sum())} frames after a stop, recorded before the 徐行 rule", flush=True)
     w = w[tr_idx]
+    if future:
+        print(f"expected share of the samples with a future label: {w[fut_ok[tr_idx]].sum() / w.sum():.1%}", flush=True)
     n_epoch = args.samples_per_epoch or len(tr_idx)
     sampler = WeightedRandomSampler(torch.from_numpy(w), num_samples=n_epoch, replacement=True)
     kv = data["keiview"][tr_idx]
@@ -204,6 +263,8 @@ def main():
         model_cfg.update(history=True, history_dt=args.history, history_mode=args.history_mode)
     if args.aux_weight > 0:
         model_cfg["aux_yield"] = True
+    if future:
+        model_cfg["aux_future"] = True
     if data["n_cams"] > 1:
         model_cfg["n_cams"] = data["n_cams"]
     model = KeiPilot(pretrained=args.init is None, **model_cfg)
@@ -244,8 +305,9 @@ def main():
                 out = model(channels_last(b["img"]), b["cmd"], b["tp"],
                             speed=b["v"], speed_known=b["v_known"] if model.speed_input else None,
                             img_prev=b["img_prev"], has_prev=b["has_prev"], stand_m=b["stand_m"],
-                            stand_known=b["stand_known"])
-            loss, logs = compute_loss(model, out, b, w_aux=args.aux_weight)
+                            stand_known=b["stand_known"], with_future=future, fut_dt=b.get("fut_dt"),
+                            fut_v=b.get("fut_v"))
+            loss, logs = compute_loss(model, out, b, w_aux=args.aux_weight, w_future=args.future_weight)
             opt.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
@@ -265,6 +327,10 @@ def main():
         print(f"== ep {ep} val loss={val['loss']:.3f} ADE={val['ADE_m']:.3f}m speedMAE={val['speed_MAE']:.3f} "
               f"stop_acc={val['stop_acc']:.3f} tl_acc={val['tl_acc']:.3f} mIoU={val['seg_mIoU']:.3f}"
               + (f" speedMAE(no speed)={val['speed_MAE_no_speed']:.3f}" if model.speed_input else "")
+              + (f" future: mIoU={val['fut_mIoU']:.3f} vehicle={val['fut_IoU_vehicle']:.3f} pedestrian="
+                 f"{val['fut_IoU_pedestrian']:.3f} (persistence {val['fut_persist_mIoU']:.3f} "
+                 f"{val['fut_persist_IoU_vehicle']:.3f} {val['fut_persist_IoU_pedestrian']:.3f})"
+                 if "fut_mIoU" in val else "")
               + f" ({val['time']:.0f}s)", flush=True)
         ck = {"model": model.state_dict(), "epoch": ep, "val": val, "model_cfg": model_cfg, "args": vars(args),
               "rig": rig}
