@@ -64,6 +64,14 @@ MARGIN_BIKE = 0.25
 MARGIN_WALK = 0.25          # someone walking along the road
 MARGIN_CROSS = 0.55         # someone crossing it
 MARGIN_TURN = 0.15          # where a turning car will be
+SIDE_STEP = 1.2             # TrafficConfig.bike_hook: points along each car's long sides, at most this far apart
+#                             (car_side_points: the three circles leave a car's corners, and a long car's sides between
+#                             them, uncovered; a rider stood 0.04 m from the rear corner of a 7.5 m truck, angled to the
+#                             road, and the corner swung into it as the truck turned right: stress twophase 1012/9900)
+SIDE_R = 0.05
+MARGIN_HOOK = 0.6           # TrafficConfig.bike_hook: beside a car turning left on its connector, for a rider it is not
+#                             behind (a rider following one round the corner on the inside, 0.55 m from its side, kept
+#                             only MARGIN_CAR and touched it as the two turned: bigjunction 3008/9801, 600 m)
 FILTER_SIDE = 0.9           # m beside a car: closer than this the rider passes it at most FILTER_DV faster
 FILTER_DV = 2.5             # m/s
 S0_BIKE, S0_CAR = 0.8, 1.4  # m: standing distance behind people and bikes / behind cars
@@ -157,6 +165,26 @@ def bike_lanes(town):
     return out
 
 
+def car_side_points(xy, yaw, length, width):
+    """Points along both long sides of each car (corners included), at most SIDE_STEP apart: (M, 2), owner (M,)."""
+    length, width = np.asarray(length, float), np.asarray(width, float)
+    seg = np.maximum(np.ceil(length / SIDE_STEP), 1).astype(int)           # gaps along a side
+    out, own = [], []
+    for k in np.unique(seg):
+        idx = np.nonzero(seg == k)[0]
+        lx = length[idx, None] * np.linspace(-0.5, 0.5, k + 1)[None]          # (m, k+1)
+        hw = width[idx, None] / 2
+        c, s_ = np.cos(yaw[idx])[:, None], np.sin(yaw[idx])[:, None]
+        for side in (1.0, -1.0):
+            px = xy[idx, 0:1] + c * lx - s_ * side * hw
+            py = xy[idx, 1:2] + s_ * lx + c * side * hw
+            out.append(np.stack([px, py], -1).reshape(-1, 2))
+            own.append(np.repeat(idx, k + 1))
+    if not out:
+        return np.zeros((0, 2)), np.zeros(0, int)
+    return np.concatenate(out), np.concatenate(own)
+
+
 def bike_circles(xy, yaw):
     """NCB circles of radius BIKE_R along each bike -> centres (n * NCB, 2), owner (n * NCB,)."""
     n = len(xy)
@@ -221,7 +249,10 @@ class Bicycles:
     def _free(self, p, avoid_xy, avoid_r, car_xy, car_r, skip=None):
         if avoid_xy is not None and len(avoid_xy) and np.min(np.hypot(*(avoid_xy - p).T)) < avoid_r:
             return False
-        if car_xy is not None and len(car_xy) and np.any(np.hypot(*(car_xy - p).T) < car_r + BIKE_R + 0.45):
+        # bike_hook: the whole bike clear of the car circles, not just a BIKE_R circle at its centre (a rider put
+        # 0.6 m behind a car's rear circle reaches 0.3 m into the car: suburban 2009/9851, stress roadtypes 1016/9901)
+        rb = BIKE_LEN / 2 if self.cfg.bike_hook else BIKE_R
+        if car_xy is not None and len(car_xy) and np.any(np.hypot(*(car_xy - p).T) < car_r + rb + 0.45):
             return False
         if self.n:
             d = np.hypot(*(self.xy - p).T)
@@ -533,6 +564,11 @@ class Bicycles:
         from .traffic import corridor_gaps
         tr = traffic
         cxy, cr, cow = tr.circles()
+        circ0 = cxy, cr
+        if cfg.bike_hook and tr.n:
+            sxy, sow = car_side_points(tr.xy, tr.yaw, tr.dims[:, 0], tr.dims[:, 1])
+            cxy, cr, cow = np.concatenate([cxy, sxy]), np.concatenate([cr, np.full(len(sxy), SIDE_R)]), \
+                np.concatenate([cow, sow])
         csp, cyw = tr.v[cow], tr.yaw[cow]
         ncar = len(cxy)
         parts = [(cxy, cr, cow, csp, cyw, np.full(ncar, MARGIN_CAR))]
@@ -570,6 +606,14 @@ class Bicycles:
                           np.full(len(pxy), MARGIN_CAR)))
         oxy, orr, oow, osp, oyw, omg = (np.concatenate([p[k] for p in parts]) for k in range(6))
         margin = np.broadcast_to(omg[None], (n, len(oxy))).copy()
+        if cfg.bike_hook and ncar:      # MARGIN_HOOK beside a car turning left, for the riders it is ahead of or beside
+            hook = np.array([lanes[tr.route[j][tr.ri[j]]].kind == "conn" and lanes[tr.route[j][tr.ri[j]]].turn == "left"
+                             for j in range(tr.n)], bool)[cow]
+            if hook.any():
+                u = np.stack([np.cos(self.yaw), np.sin(self.yaw)], -1)
+                lon = ((tr.xy[cow][None] - self.xy[:, None]) * u[:, None]).sum(-1)    # [rider, circle]
+                m = hook[None, :] & (lon > -1.5)
+                margin[:, :ncar] = np.where(m, np.maximum(margin[:, :ncar], MARGIN_HOOK), margin[:, :ncar])
         if n_turn:
             # a turning car's future does not count for a rider it comes up behind (the rider would brake for a car
             # that is still behind them): only for the riders the car is beside or ahead of
@@ -704,6 +748,9 @@ class Bicycles:
                 room = max(gap - s0, 0.0)
                 vl = max(float(lead_v), 0.0)
                 v_obs = min(math.sqrt(vl * vl + 2.0 * b * room), vl + room / T_HEAD)
+                if cfg.bike_hook and gap < s0:      # too close: drop back (it rode on at the car's speed 0.5 m into
+                    v_obs = max(0.0, vl + (gap - s0) / T_HEAD)    # its standing distance and touched the rear corner
+                    #                                 of a car turning right ahead of it: stress roadtypes 1013/9900)
                 if lead_v < 0.0:                                # coming towards the rider
                     v_obs = min(v_obs, math.sqrt(2.0 * b * max(room + 1.5 * float(lead_v), 0.0)))
                 v_t = min(v_t, v_obs)
@@ -860,7 +907,7 @@ class Bicycles:
             look_t = -1.0 if self.look_t[i] > 0.0 else 0.0
             self.look[i] += float(np.clip(look_t - self.look[i], -dt / 0.2, dt / 0.25))
             self.stuck[i] = self.stuck[i] + dt if v_new < 0.1 else 0.0
-        self._release(ego_xy, ego_yaw, cxy, cr)
+        self._release(ego_xy, ego_yaw, *circ0)
 
     def _side_clear(self, i, vxy):
         """No car level with rider i on its right, where it would walk its bicycle out to."""
