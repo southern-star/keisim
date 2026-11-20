@@ -207,14 +207,12 @@ class TrafficConfig:
     # npc_axles and box_fix). Off by default: the old evaluations stay reproducible.
     bike_defer: bool = False
     # bike_hook: riders keep clear of the cars they ride beside and behind (Bicycles.step, Bicycles._free).
-    # - Beside a car turning left on its connector, a rider it is not behind keeps bicycles.MARGIN_HOOK instead of
-    #   MARGIN_CAR. The left-signal rule (SIGNAL_D) holds while the two head the same way; once the car was well into
-    #   its turn a rider came up round the corner on the inside, 0.55 m from its side, and touched it (bigjunction
-    #   3008/9801, 600 m, with npc_sweep, npc_axles, box_fix and bike_defer).
     # - The riders see points along every car's long sides, its corners included (bicycles.car_side_points), not
-    #   only the three circles on its axis. Those leave the corners out, and a long car's sides between them. A rider
-    #   stood 0.04 m from the rear corner of a 7.5 m truck standing at an angle, and the corner swung into it as the
-    #   truck turned right (stress twophase 1012/9900).
+    #   only the three circles on its axis, which leave the corners and the sides between them uncovered.
+    #   - A rider following a car round a left turn on the inside missed its circles by 0.03 m and rode into its
+    #     side (巻き込み: bigjunction 3008/9801, 600 m, with npc_sweep, npc_axles, box_fix and bike_defer).
+    #   - A rider stood 0.04 m from the rear corner of a 7.5 m truck standing at an angle, and the corner swung into
+    #     it as the truck turned right (stress twophase 1012/9900).
     # - A rider closer than its standing distance to whoever is in its way drops back, as in the browser, instead of
     #   riding on at their speed (a rider following a car round a right turn rode into its rear corner: stress
     #   roadtypes 1013/9900).

@@ -65,13 +65,12 @@ MARGIN_WALK = 0.25          # someone walking along the road
 MARGIN_CROSS = 0.55         # someone crossing it
 MARGIN_TURN = 0.15          # where a turning car will be
 SIDE_STEP = 1.2             # TrafficConfig.bike_hook: points along each car's long sides, at most this far apart
-#                             (car_side_points: the three circles leave a car's corners, and a long car's sides between
-#                             them, uncovered; a rider stood 0.04 m from the rear corner of a 7.5 m truck, angled to the
-#                             road, and the corner swung into it as the truck turned right: stress twophase 1012/9900)
+#                             (car_side_points: the three circles leave a car's corners, and its sides between them,
+#                             uncovered. A rider following a car round a left turn on the inside missed its circles by
+#                             0.03 m and rode into its side: bigjunction 3008/9801, 600 m. A rider stood 0.04 m from the
+#                             rear corner of a 7.5 m truck standing at an angle, and the corner swung into it as the
+#                             truck turned right: stress twophase 1012/9900)
 SIDE_R = 0.05
-MARGIN_HOOK = 0.6           # TrafficConfig.bike_hook: beside a car turning left on its connector, for a rider it is not
-#                             behind (a rider following one round the corner on the inside, 0.55 m from its side, kept
-#                             only MARGIN_CAR and touched it as the two turned: bigjunction 3008/9801, 600 m)
 FILTER_SIDE = 0.9           # m beside a car: closer than this the rider passes it at most FILTER_DV faster
 FILTER_DV = 2.5             # m/s
 S0_BIKE, S0_CAR = 0.8, 1.4  # m: standing distance behind people and bikes / behind cars
@@ -606,14 +605,6 @@ class Bicycles:
                           np.full(len(pxy), MARGIN_CAR)))
         oxy, orr, oow, osp, oyw, omg = (np.concatenate([p[k] for p in parts]) for k in range(6))
         margin = np.broadcast_to(omg[None], (n, len(oxy))).copy()
-        if cfg.bike_hook and ncar:      # MARGIN_HOOK beside a car turning left, for the riders it is ahead of or beside
-            hook = np.array([lanes[tr.route[j][tr.ri[j]]].kind == "conn" and lanes[tr.route[j][tr.ri[j]]].turn == "left"
-                             for j in range(tr.n)], bool)[cow]
-            if hook.any():
-                u = np.stack([np.cos(self.yaw), np.sin(self.yaw)], -1)
-                lon = ((tr.xy[cow][None] - self.xy[:, None]) * u[:, None]).sum(-1)    # [rider, circle]
-                m = hook[None, :] & (lon > -1.5)
-                margin[:, :ncar] = np.where(m, np.maximum(margin[:, :ncar], MARGIN_HOOK), margin[:, :ncar])
         if n_turn:
             # a turning car's future does not count for a rider it comes up behind (the rider would brake for a car
             # that is still behind them): only for the riders the car is beside or ahead of

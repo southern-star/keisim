@@ -643,7 +643,8 @@ def parse_args(argv=None):
                     help="1: NPCs in a junction do not stop for where a bicycle braking for them will be "
                          "(TrafficConfig.bike_defer)")
     ap.add_argument("--bike_hook", type=int, default=0, choices=[0, 1],
-                    help="1: bicycles keep clear of the turning cars they follow (TrafficConfig.bike_hook)")
+                    help="1: bicycles see the sides and corners of the cars, drop back when too close and start clear "
+                         "of the cars (TrafficConfig.bike_hook)")
     ap.add_argument("--crosswalks", type=float, default=0.0,
                     help="crosswalks at signals (TrafficConfig.crosswalks): the chance that a person at a two-phase "
                          "signal's road end crosses on the zebra with the pedestrian light; turning cars give way")

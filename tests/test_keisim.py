@@ -2474,36 +2474,12 @@ def _hook_scene():
     return env, tr, bk, j, place, ride
 
 
-def test_bike_hook_riders_keep_clear_beside_a_car_turning_left():
-    """TrafficConfig.bike_hook (Bicycles.step, bicycles.MARGIN_HOOK): beside a car on a left turn's connector that
-    is not behind it, a rider keeps MARGIN_HOOK, not MARGIN_CAR (a rider going round the corner on the inside of
-    one, 0.55 m from its side, touched it: bigjunction 3008/9801); beside a car on its road, as before."""
-    from keisim.bicycles import BIKE_W, MARGIN_CAR, MARGIN_HOOK, SIDE_R
-    env, tr, bk, j, place, ride = _hook_scene()
-    lanes = env.world.town.lanes
-    left = next(l for l in lanes if l.kind == "conn" and l.turn == "left")
-    i = 0
-    tr.dims[i, :2] = (3.4, 1.48)
-    off = 0.74 + BIKE_W / 2 + SIDE_R + (MARGIN_CAR + MARGIN_HOOK) / 2       # its side between the two margins
-    for hook, on_left, sees in ((False, True, False), (True, False, False), (True, True, True)):
-        tr.cfg.bike_hook = hook
-        tr.route[i] = [left.id] + list(left.succ[:1]) if on_left else [lanes[left.pred[0]].id]
-        place(i, 4.0, off)
-        bk.v[j] = 2.0
-        ride()
-        assert (int(bk.lead[j]) == i) == sees, (hook, on_left)
-        if hook and on_left:
-            place(i, -2.5, off)                     # (the car behind it: as before)
-            ride()
-            assert int(bk.lead[j]) != i
-    tr.cfg.bike_hook = False
-
-
-def test_bike_hook_riders_see_the_corners_of_a_long_car():
+def test_bike_hook_riders_see_the_sides_and_corners_of_the_cars():
     """TrafficConfig.bike_hook (bicycles.car_side_points): the riders see points along every car's long sides, the
-    corners included, not just the three circles on its axis, which leave a long car's corners out: a rider stood
-    0.04 m from the rear corner of a 7.5 m truck standing at an angle to the road, and the corner swung into it as the
-    truck turned right (stress twophase 1012/9900)."""
+    corners included, not just the three circles on its axis, which leave the corners and the sides between them
+    out. A rider following a car round a left turn on the inside missed its circles by 0.03 m and rode into its side
+    (巻き込み: bigjunction 3008/9801); a rider stood 0.04 m from the rear corner of a 7.5 m truck standing at an
+    angle, and the corner swung into it as the truck turned right (stress twophase 1012/9900)."""
     from keisim.bicycles import SIDE_STEP, car_side_points
     pts, own = car_side_points(np.array([[0.0, 0.0]]), np.array([0.0]), np.array([7.47]), np.array([2.12]))
     assert (own == 0).all()
@@ -2513,21 +2489,23 @@ def test_bike_hook_riders_see_the_corners_of_a_long_car():
     for y in (-1.06, 1.06):
         side = np.sort(pts[np.isclose(pts[:, 1], y), 0])
         assert np.diff(side).max() <= SIDE_STEP + 1e-9
-    _, tr, bk, j, place, ride = _hook_scene()
+    env, tr, bk, j, place, ride = _hook_scene()
+    lanes = env.world.town.lanes
+    left = next(l for l in lanes if l.kind == "conn" and l.turn == "left")
     i = 0
-    tr.dims[i, :2] = (7.47, 2.12)
-    # turned 0.3 rad away to the right, its rear left corner 0.4 m right of the rider's track, 3 m ahead
-    th = 0.3
+    tr.route[i] = [left.id] + list(left.succ[:1])
+    th = 0.3            # turned 0.3 rad away to the right, its rear left corner 0.4 m right of the rider's track
     a = np.array([np.cos(-th), np.sin(-th)])
-    rl = np.array([-3.735, 1.06])                            # the rear left corner in the truck's frame
-    corner = rl[0] * a + rl[1] * np.array([-a[1], a[0]])
-    for hook in (False, True):
-        tr.cfg.bike_hook = hook
-        # the truck's centre, in the rider's frame (ahead, right): its corner at (3, 0.4)
-        place(i, 3.0 - corner[0], 0.4 + corner[1], -th)
-        bk.v[j] = 2.0
-        ride()
-        assert (int(bk.lead[j]) == i) == hook
+    for length, width in ((4.4, 1.8), (7.47, 2.12)):       # (the car of 3008/9801, the truck of 1012/9900)
+        tr.dims[i, :2] = (length, width)
+        rl = np.array([-length / 2, width / 2])               # the rear left corner in the car's frame
+        corner = rl[0] * a + rl[1] * np.array([-a[1], a[0]])
+        for hook in (False, True):
+            tr.cfg.bike_hook = hook
+            place(i, 3.0 - corner[0], 0.4 + corner[1], -th)  # the car's centre: its corner 3 m ahead, 0.4 m right
+            bk.v[j] = 2.0
+            ride()
+            assert (int(bk.lead[j]) == i) == hook, (length, hook)
     tr.cfg.bike_hook = False
 
 

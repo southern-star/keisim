@@ -502,8 +502,8 @@ def main():
                     help="1: an NPC in a junction does not stop for where a bicycle braking for it will be "
                          "(TrafficConfig.bike_defer); suffix _bdf")
     ap.add_argument("--bike_hook", type=int, default=None, choices=[0, 1],
-                    help="1: a bicycle keeps 0.6 m beside a car turning left that is not behind it, and drops back "
-                         "when closer than its standing distance (TrafficConfig.bike_hook); suffix _hook")
+                    help="1: bicycles see the sides and corners of the cars, drop back when closer than their standing "
+                         "distance and start clear of the cars (TrafficConfig.bike_hook); suffix _hook")
     ap.add_argument("--crosswalks", type=float, default=None,
                     help="crosswalks at signals: the chance that a person at a two-phase signal's road end crosses on "
                          "the zebra with the pedestrian light; turning cars give way (TrafficConfig.crosswalks; "
