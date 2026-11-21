@@ -13,6 +13,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+from keisim.config import EnvConfig
 from keisim.expert import CROSSING_V, STOP_SIGN_MARGIN, STOP_SIGN_V, STOP_SIGN_ZONE, target_for_speed
 
 LABEL_KEYS = ("cmd", "tp", "path", "speed", "tl", "v", "reason", "town", "episode", "step", "weather", "virtual")
@@ -377,18 +378,91 @@ def load_shards(dirs, with_prev=True, mmap=False):
     return data, files
 
 
+# the future head's look-ahead (control steps at 10 Hz: 0.4 / 1.0 / 1.6 / 2.0 s). Even: collect.py records a frame
+# only at steps that are multiples of --every (2 in every data set so far), so an odd look-ahead never finds one
+FUTURE_HORIZONS = (4, 10, 16, 20)
+STEP_S = EnvConfig().dt * EnvConfig().action_repeat      # s per control step (the labels' `step`)
+FUTURE_VAL_S = 1.0      # validation takes the look-ahead closest to this (the shorter of two equally close ones)
+
+
+def episode_groups(data, files):
+    """Episode id (0, 1, ...) of every frame of load_shards(dirs) -> (data, files): one per data directory's
+    (town, episode) pair."""
+    dirs = np.array([os.path.dirname(os.path.abspath(f)) for f in files])
+    _, dir_id = np.unique(dirs, return_inverse=True)
+    keys = np.stack([dir_id.reshape(-1)[data["src"]].astype(np.int64), np.asarray(data["town"]).astype(np.int64),
+                     np.asarray(data["episode"]).astype(np.int64)], 1)
+    _, grp = np.unique(keys, axis=0, return_inverse=True)
+    return grp.reshape(-1).astype(np.int64)
+
+
+def future_index(data, files, horizons=FUTURE_HORIZONS):
+    """The future frames of load_shards' frames, for an auxiliary head that predicts the segmentation `h` control
+    steps ahead: fut[i, j] is the frame of the same episode recorded horizons[j] steps after frame i, or -1. An
+    episode is a data directory's (town, episode) pair (the directory keeps apart twins from the same seeds in other
+    sets; a _half directory's episodes are only cut where its shards are). Both frames must come from the real
+    camera (virtual False): a virtual frame's displaced camera is drawn anew for every frame, so it would not match
+    the other end. An episode with a step recorded twice is left without futures (two recordings mixed up).
+    Returns (fut (N, len(horizons)) int64, info: counts of episodes and of those with repeated steps)."""
+    step = np.asarray(data["step"]).astype(np.int64)
+    n = len(step)
+    if n and (step.min() < 0 or step.max() + max(horizons) >= 1 << 32):
+        raise ValueError("steps out of range")
+    grp = episode_groups(data, files)
+    key = (grp << 32) | step
+    sk = np.sort(key)
+    dup_grp = np.unique(sk[1:][np.diff(sk) == 0] >> 32)
+    real = ~np.asarray(data["virtual"]).astype(bool) & ~np.isin(grp, dup_grp)
+    ridx = np.nonzero(real)[0]
+    o = np.argsort(key[ridx], kind="stable")
+    ridx = ridx[o]
+    rkey = key[ridx]
+    fut = np.full((n, len(horizons)), -1, np.int64)
+    if len(ridx):
+        for j, h in enumerate(horizons):
+            q = rkey + int(h)
+            pos = np.minimum(np.searchsorted(rkey, q), len(rkey) - 1)
+            hit = rkey[pos] == q
+            fut[ridx[hit], j] = ridx[pos[hit]]
+    info = {"episodes": int(grp.max()) + 1 if n else 0, "episodes_repeated_steps": int(len(dup_grp)),
+            "frames_repeated_steps": int(np.isin(grp, dup_grp).sum())}
+    return fut, info
+
+
 class DrivingDataset(Dataset):
     """cf_prob: chance that a training frame with recorded light-decision inputs gets a random ego speed and the
     expert's label for that speed (counterfactual). speed_drop: chance that the ego speed is hidden ("v_known"
     False) from any other training frame, against the inertia problem. A counterfactual speed is always shown,
-    since its label depends on it."""
+    since its label depends on it.
+    future: also return the future head's label, from data["fut_idx"] (future_index) and data["fut_dt"] (its
+    look-aheads in s): fut_seg, the segmentation (every camera's) of the same episode's frame fut_dt s later, with
+    fut_ok False and zeros where there is none; fut_v, the recorded ego speed (never a counterfactual one: the
+    future frame was driven at it). Training frames take one of the look-aheads they have at random, the others
+    the one closest to FUTURE_VAL_S. Without it the samples are as they were."""
 
-    def __init__(self, data, indices, train=True, cf_prob=0.0, speed_drop=0.0, cf_vmax=11.5, history_drop=0.0):
+    def __init__(self, data, indices, train=True, cf_prob=0.0, speed_drop=0.0, cf_vmax=11.5, history_drop=0.0,
+                 future=False):
         self.d = data
         self.idx = np.asarray(indices)
         self.train = train
         self.cf_prob, self.speed_drop, self.cf_vmax = cf_prob, speed_drop, cf_vmax
         self.history_drop = history_drop
+        self.future = future
+        if future:
+            self.fut_pref = np.argsort(np.abs(np.asarray(data["fut_dt"], np.float64) - FUTURE_VAL_S), kind="stable")
+
+    def _future(self, i, seg, rng):
+        """(fut_seg like seg, fut_ok, fut_dt [s]) of frame i; rng: pick the look-ahead at random (training)."""
+        d = self.d
+        fut = d["fut_idx"][i]
+        have = np.nonzero(fut >= 0)[0]
+        if not len(have):
+            return np.zeros_like(seg), False, FUTURE_VAL_S
+        j = int(rng.choice(have)) if rng is not None else int(next(j for j in self.fut_pref if fut[j] >= 0))
+        f = int(fut[j])
+        keys = ["seg"] + [f"seg_c{c}" for c in range(1, d.get("n_cams", 1))]
+        segs = [cv2.imdecode(d[k][d[k + "_off"][f]:d[k + "_off"][f + 1]], cv2.IMREAD_UNCHANGED) for k in keys]
+        return (np.stack(segs) if len(segs) > 1 else segs[0]), True, float(d["fut_dt"][j])
 
     def __len__(self):
         return len(self.idx)
@@ -423,6 +497,7 @@ class DrivingDataset(Dataset):
                   cv2.imdecode(d[f"seg_c{c}"][d[f"seg_c{c}_off"][i]:d[f"seg_c{c}_off"][i + 1]], cv2.IMREAD_UNCHANGED))
                  for c in range(1, n_cams)]
         v, speed, known = float(d["v"][i]), float(d["speed"][i]), True
+        rng = None
         stand = float(d["stand_m"][i])
         cf = bool(d["cf_ok"][i])
         a, b = d["jpg_prev_off"][i], d["jpg_prev_off"][i + 1]
@@ -454,6 +529,12 @@ class DrivingDataset(Dataset):
             img = np.stack([img] + [e[:, :, ::-1].transpose(2, 0, 1) for e, _ in extra])
             seg = np.stack([seg] + [s for _, s in extra])
             prev = np.zeros(1, np.uint8)
+        fut = {}
+        if self.future:
+            fut_seg, fut_ok, fut_dt = self._future(i, seg, rng)
+            fut = {"fut_seg": torch.from_numpy(fut_seg.astype(np.int64)), "fut_ok": torch.tensor(fut_ok),
+                   "fut_dt": torch.tensor(fut_dt, dtype=torch.float32),
+                   "fut_v": torch.tensor(float(d["v"][i]), dtype=torch.float32)}
         return {
             "img": torch.from_numpy(img),
             "seg": torch.from_numpy(seg.astype(np.int64)),
@@ -469,4 +550,5 @@ class DrivingDataset(Dataset):
             "img_prev": torch.from_numpy(prev),                            # frame `history` s earlier (or zeros)
             "has_prev": torch.tensor(has_prev),
             "yield_tta": torch.tensor(float(d["yield_tta"][i]), dtype=torch.float32),   # NaN: no label
+            **fut,
         }

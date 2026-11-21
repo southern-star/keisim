@@ -60,7 +60,8 @@ def _resnet18_from_local_r34():
 
 class KeiPilot(nn.Module):
     def __init__(self, n_sem=13, d=256, n_layers=3, n_heads=8, pretrained=True, img_hw=(160, 320), speed_input=False,
-                 history=False, history_dt=0.4, history_mode="frame", aux_yield=False, mem_input=False, n_cams=1):
+                 history=False, history_dt=0.4, history_mode="frame", aux_yield=False, mem_input=False, n_cams=1,
+                 aux_future=False):
         super().__init__()
         # camera rigs (keisim CAMERA_RIGS): every camera's image goes through the same trunk; its tokens get the
         # camera's own position embeddings (pos3[k], pos4[k]), and the decoder reads the tokens of all of them
@@ -125,6 +126,22 @@ class KeiPilot(nn.Module):
         self.aux_yield = aux_yield
         if aux_yield:
             self.aux_tta_head = nn.Sequential(nn.LayerNorm(d), nn.Linear(d, 64), nn.GELU(), nn.Linear(64, 1))
+        # optional auxiliary head, used in training only (docs/future_aux.md): each camera's segmentation `fut_dt` s
+        # ahead (0.4-2 s), from the FPN features of the c2 stage (1/8 resolution). FiLM tells it the look-ahead and
+        # where the car is going: the command, the target point and the recorded ego speed. Not the planner's `cond`,
+        # whose speed is a counterfactual or hidden one in most training samples (--cf_prob, --speed_drop) while the
+        # future frame was driven at the recorded speed; nor the decoder's tokens: the plan does not depend on the
+        # predicted future. The FiLM output starts at zero (no modulation). Created last, and only when asked for,
+        # so a model without it draws the same random numbers as before
+        self.aux_future = aux_future
+        if aux_future:
+            self.aux_future_film = nn.Sequential(nn.Linear(N_CMD + 4 + 3 + 2, 128), nn.GELU(), nn.Linear(128, 2 * 96))
+            nn.init.zeros_(self.aux_future_film[2].weight)
+            nn.init.zeros_(self.aux_future_film[2].bias)
+            self.aux_future_head = nn.Sequential(
+                nn.Conv2d(96, 96, 3, padding=1, bias=False), nn.BatchNorm2d(96), nn.ReLU(inplace=True),
+                nn.Conv2d(96, 96, 3, padding=1, bias=False), nn.BatchNorm2d(96), nn.ReLU(inplace=True),
+                nn.Conv2d(96, n_sem, 1))
         prior = torch.stack([torch.arange(1, N_PATH + 1) * PATH_STEP, torch.zeros(N_PATH)], -1)
         self.register_buffer("path_prior", prior)
         self.register_buffer("speed_bins", SPEED_BINS.clone())
@@ -152,13 +169,22 @@ class KeiPilot(nn.Module):
         m = m.float().clamp(0.0, 10.0)[:, None]
         return torch.cat([m / 10.0, torch.exp(-m / 1.5), torch.exp(-m / 5.0)], -1)
 
+    @staticmethod
+    def encode_dt(dt):
+        """dt (B,) look-ahead of the future head in s (up to 2)."""
+        dt = dt.float()[:, None] / 2.0
+        return torch.cat([dt, dt ** 2], -1)
+
     def forward(self, img, cmd, tp, with_seg=True, speed=None, speed_known=None, img_prev=None, has_prev=None,
-                stand_m=None, stand_known=None):
+                stand_m=None, stand_known=None, with_future=False, fut_dt=None, fut_v=None):
         """img: (B,3,H,W) uint8/float RGB in [0,255]; (B,n_cams,3,H,W) for camera rigs (out["seg"] is then
         (B*n_cams, ...)). speed (B,) m/s is used by speed-input models only;
         speed_known (B,) bool hides it per sample (False -> the learned 'unknown' embedding).
         img_prev / has_prev (history models): the frame `history_dt` s earlier; missing frames enter as zeros.
-        stand_m / stand_known (memory-input models): metres since the ego last stood, hidden like the speed."""
+        stand_m / stand_known (memory-input models): metres since the ego last stood, hidden like the speed.
+        with_future (models with the future head, training): out["future"] (B*n_cams, n_sem, H/8, W/8) are the
+        logits of every camera's segmentation fut_dt (B,) s ahead (1 s if None), given the recorded ego speed
+        fut_v (B,) m/s (0 if None)."""
         B = img.shape[0]
         if self.n_cams > 1:
             img = img.flatten(0, 1).contiguous(memory_format=torch.channels_last)
@@ -179,12 +205,20 @@ class KeiPilot(nn.Module):
         c3 = self.layer3(c2)
         c4 = self.layer4(c3)
         out = {}
-        if with_seg:
+        with_future = with_future and self.aux_future
+        if with_seg or with_future:
             p = self.lat[3](c4)
             p = self.lat[2](c3) + F.interpolate(p, size=c3.shape[-2:], mode="bilinear", align_corners=False)
             p = self.lat[1](c2) + F.interpolate(p, size=c2.shape[-2:], mode="bilinear", align_corners=False)
-            p = self.lat[0](c1) + F.interpolate(p, size=c1.shape[-2:], mode="bilinear", align_corners=False)
-            out["seg"] = self.seg_head(p)
+            if with_future:
+                dt = torch.ones(B, device=p.device) if fut_dt is None else fut_dt
+                v = torch.zeros(B, device=p.device) if fut_v is None else fut_v
+                f = torch.cat([self.encode_cond(cmd, tp), self.encode_speed(v), self.encode_dt(dt)], -1)
+                g, b = self.aux_future_film(f).to(p.dtype).repeat_interleave(self.n_cams, 0).chunk(2, -1)
+                out["future"] = self.aux_future_head(p * (1 + g[:, :, None, None]) + b[:, :, None, None])
+            if with_seg:
+                p = self.lat[0](c1) + F.interpolate(p, size=c1.shape[-2:], mode="bilinear", align_corners=False)
+                out["seg"] = self.seg_head(p)
         if self.n_cams > 1:     # (B*K, d, h, w) -> (B, K*h*w, d), each camera with its own positions
             t3 = (self.proj3(c3).unflatten(0, (B, self.n_cams)) + self.pos3).flatten(3).transpose(2, 3).flatten(1, 2)
             t4 = (self.proj4(c4).unflatten(0, (B, self.n_cams)) + self.pos4).flatten(3).transpose(2, 3).flatten(1, 2)
@@ -259,9 +293,28 @@ TL_WEIGHTS = torch.tensor([2.0, 3.0, 1.5, 0.5])
 
 
 YIELD_TTA_MAX = 8.0
+# the future head's class weights: vehicles and pedestrians (keisim.config.SEM 11, 12) x4. Most of a future picture
+# follows from the ego's own motion; the ones that move by themselves are what the head is there for
+FUTURE_MOVING = (11, 12)
+FUTURE_MOVING_WEIGHT = 4.0
 
 
-def compute_loss(model, out, batch, w_seg=0.5, w_tl=0.5, w_aux=0.0):
+def future_loss(logits, lab, ok):
+    """Cross-entropy of the future head: logits (N, C, h, w) raised to the labels' resolution (as the segmentation
+    loss does), lab (N, H, W) the segmentation of the future frame, ok (N,) bool the frames that have one. Weighted
+    mean over the pixels of the ok frames; 0 if there is none."""
+    w = torch.ones(logits.shape[1], device=logits.device)
+    w[list(FUTURE_MOVING)] = FUTURE_MOVING_WEIGHT
+    lab = lab.long()
+    pred = F.interpolate(logits.float(), size=lab.shape[-2:], mode="bilinear", align_corners=False)
+    ce = F.cross_entropy(pred, lab, weight=w, reduction="none")
+    m = ok[:, None, None].to(ce.dtype)
+    return (ce * m).sum() / (w[lab] * m).sum().clamp(min=1.0)
+
+
+def compute_loss(model, out, batch, w_seg=0.5, w_tl=0.5, w_aux=0.0, w_future=0.0):
+    """Returns (loss, logs). w_future > 0 adds the future head's term to the loss; logs["loss"] stays without it
+    (the validation loss that picks best.pt is then the same quantity with and without the head)."""
     path_l = F.l1_loss(out["path"], batch["path"])
     tgt = two_hot(batch["speed"], model.speed_bins)
     speed_l = -(tgt * out["speed_logits"].log_softmax(-1)).sum(-1).mean()
@@ -282,4 +335,11 @@ def compute_loss(model, out, batch, w_seg=0.5, w_tl=0.5, w_aux=0.0):
         loss = loss + w_seg * seg_l
         logs["seg"] = seg_l.item()
     logs["loss"] = loss.item()
+    if w_future > 0 and "future" in out and "fut_seg" in batch:
+        rig = batch["fut_seg"].dim() == 4                                                   # rigs: (B, K, h, w)
+        lab = batch["fut_seg"].flatten(0, 1) if rig else batch["fut_seg"]
+        ok = batch["fut_ok"].repeat_interleave(batch["fut_seg"].shape[1], 0) if rig else batch["fut_ok"]
+        fut_l = future_loss(out["future"], lab, ok)
+        loss = loss + w_future * fut_l
+        logs["future"] = fut_l.item()
     return loss, logs
