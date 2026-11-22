@@ -1,6 +1,7 @@
 """The tables of docs/recon_view.md from ReconView's measurements (web/tools/recon_check.mjs --out DIR).
 
     python tools/recon_table.py runs/eval/recon/g1 [--repeat runs/eval/recon/g1_repeat]
+    python tools/recon_table.py runs/eval/recon/g3          (?recon=model: the model's depth next to the oracle's)
 
 Prints Markdown: the fidelity per town (the view's triangle rule), by distance, by rule, the triangles, and with
 --repeat how far a second run of the same arguments is from the first."""
@@ -47,12 +48,54 @@ HEAD = ("| {} | フレーム | 被覆率（全体） | 被覆率（いま見え�
         "正しく描けた（全体） | 正しく描けた（見える範囲） |\n|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
 
 
+def model_tables(runs):
+    """?recon=model: every frame measured with the model's depth and with the town's (rows[i]["oracle"])."""
+    orc = lambda r: r["oracle"]
+    every = [r for run in runs.values() for r in run["rows"] if "oracle" in r]
+    rule = every[0]["rule"]
+    print(f"規則: 地面 = {rule['ground']}、比 {rule['ratio']}{'（カメラの画素の細かさで縮める）' if rule['scaled'] else ''}。同じフレームを、町の深度（オラクル）とモデルの深度で測った値\n")
+    print(HEAD.format("町、深度"))
+    for town, run in runs.items():
+        rows = [r for r in run["rows"] if "oracle" in r]
+        print(line(f"{TOWNS.get(town, town)}、オラクル", rows, orc))
+        print(line(f"{TOWNS.get(town, town)}、モデル", rows))
+    print(line("**合計、オラクル**", every, orc))
+    print(line("**合計、モデル**", every))
+    moving = [r for r in every if r["car"]["v"] >= 0.5]
+    print(line("動いているフレーム、オラクル", moving, orc))
+    print(line("動いているフレーム、モデル", moving))
+
+    print("\n| 追跡カメラからの距離 | 画素 | 被覆率（全体）オラクル / モデル | 被覆率（いま見える範囲）オラクル / モデル | 見える範囲の割合 |\n|---|---:|---:|---:|---:|")
+    lo = 0
+    for i in range(3):
+        b, o = [r["bands"][i] for r in every], [r["oracle"]["bands"][i] for r in every]
+        s, so = (lambda k: sum(x[k] for x in b)), (lambda k: sum(x[k] for x in o))
+        print(f"| {lo}〜{b[0]['far']} m | {s('omega'):,} | {pc(so('covered'), so('omega'))} / {pc(s('covered'), s('omega'))} | "
+              f"{pc(so('seenCovered'), so('seen'))} / {pc(s('seenCovered'), s('seen'))} | {pc(s('seen'), s('omega'))} |")
+        lo = b[0]["far"]
+
+    print("\n" + HEAD.format("モデルの深度での三角形の規則（地面の判定、縁の比）"))
+    for name, ja in RULES.items():
+        if name in every[0]["variants"]:
+            print(line(ja, every, lambda r, n=name: r["variants"][n]))
+
+    print("\n| 深度 | カメラ | 頂点 | 有効な頂点 | 描いた三角形 | 捨てた: 面なし・80 m 超 | 捨てた: 縁 | 捨てた: 望遠と重なる |\n|---|---|---:|---:|---:|---:|---:|---:|")
+    for name, get in (("オラクル", orc), ("モデル", lambda r: r)):
+        for k in range(len(every[0]["stats"])):
+            st = [get(r)["stats"][k] for r in every]
+            m = lambda key: np.mean([x[key] for x in st])
+            print(f"| {name} | {st[0]['camera']} | {st[0]['vertices']:,} | {m('valid'):,.0f} | {m('triangles'):,.0f} | {m('noSurface'):,.0f} | {m('edge'):,.0f} | {m('overlap'):,.0f} |")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("dir")
     ap.add_argument("--repeat", default=None)
     args = ap.parse_args()
     runs = load(args.dir)
+    if any("oracle" in r for run in runs.values() for r in run["rows"]):
+        model_tables(runs)
+        return
     every = [r for run in runs.values() for r in run["rows"]]
     rule = next(r["rule"] for r in every if "rule" in r)
     print(f"規則: 地面 = {rule['ground']}、比 {rule['ratio']}{'（カメラの画素の細かさで縮める）' if rule['scaled'] else ''}\n")
