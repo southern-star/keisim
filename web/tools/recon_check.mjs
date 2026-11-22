@@ -14,6 +14,9 @@
 //                              [--accum 0|1]   (&accum=: the keyframes of passed places, on by default with --recon model;
 //                              every measurement then has the current frame alone at the top and, under "accum", the
 //                              same frame with the keyframes; the pictures: _recon.png with them, _current.png without)
+//                              [--keep noveg|nobuild|flat|ground] [--far 10]   (&accumkeep=, &accumfar=: what of the
+//                              keyframes the view draws; every measurement has all of src/recon.js ACCUM_VARIANTS on
+//                              the same frame under accum.variants, the pictures as _acc_<name>.png)
 //                              [--measure 0]   (no measurements: the page draws what a visitor's draws; the digests only)
 //                              [--size 1920x1080]   (the window; 1280x720) [--name NAME]   (--out DIR/NAME.json)
 //                              [--recon off]   (the page without ?recon: checks that it loads nothing of ReconView and
@@ -84,6 +87,7 @@ try {
     ...(args.bikes ? { bikes: args.bikes } : {}), ...(args.parked ? { parked: args.parked } : {}),
     ...(args.model ? { model: args.model } : {}), ...(args.ort ? { ort: args.ort } : {}),
     ...(args.layout && !off ? { layout: args.layout } : {}), ...(args.accum && !off ? { accum: args.accum } : {}),
+    ...(args.keep && !off ? { accumkeep: args.keep } : {}), ...(args.far && !off ? { accumfar: args.far } : {}),
     ...(args.ground ? { reconground: args.ground } : {}), ...(args.ratio ? { reconratio: args.ratio } : {}),
     ...(args.scaled ? { reconscaled: args.scaled } : {}) });
   const t0 = Date.now();
@@ -171,6 +175,7 @@ try {
       await page.screenshot({ path: `${tag}_page.png` });     // the page as the last step drew it, before snapshot() draws its own
       const png = await page.evaluate(() => window.__pilot.recon.snapshot(window.__pilot.state().car));
       for (const k of ['recon', 'town', 'map', 'oracle', 'oracleMap', 'current', 'currentMap']) if (png[k]) fs.writeFileSync(`${tag}_${k}.png`, Buffer.from(png[k].split(',')[1], 'base64'));
+      for (const [k, v] of Object.entries(png.accum || {})) fs.writeFileSync(`${tag}_acc_${k}.png`, Buffer.from(v.split(',')[1], 'base64'));
     }
   }
   const total = (name, get) => {
@@ -187,6 +192,7 @@ try {
     const a = (k) => rows.reduce((x, r) => x + (r.accum ? r.accum[k] : 0), 0), fin = [...rows].reverse().find((r) => r.accum).accum;
     console.log(`  the keyframes add ${a('added')} pixels where the current frame draws nothing: right ${pc(a('addedGood'), a('added'))}, through ${pc(a('addedThrough'), a('added'))}, phantom ${pc(a('addedPhantom'), a('added'))}; ` +
       `clearly in front of the current frame's surface at ${a('before')} pixels (${pc(a('before'), rows.reduce((x, r) => x + (r.drawn || 0), 0))} of its pixels; right there ${pc(a('beforeGood'), a('before'))})`);
+    for (const name of Object.keys(fin.variants || {})) total(`  keyframes drawn as ${name.padEnd(8)}`, (r) => (r.accum ? r.accum.variants[name] : null));
     console.log(`  keyframes made ${fin.made}, kept vertices ${fin.vertices}, of them inside a car's or rider's box ${fin.ghostVertices} (${pc(fin.ghostVertices, fin.vertices)}), keyframes with ${10} or more of those: ${fin.ghostKeyframes}`);
   }
   const vs = rows.find((r) => r.variants);

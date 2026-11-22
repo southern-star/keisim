@@ -2,7 +2,8 @@
 # ReconView G4 (docs/recon_view.md 8): the keyframes of passed places. The same frames with the current frame alone
 # and with the keyframes; the oracle's depth with keyframes; the drive with and without; the page's speed.
 # Headless Chrome with a GPU; needs web/models/keipilot_mc_depth.onnx (docs/recon/s2.sh).
-#   bash docs/recon/g4.sh [fidelity] [oracle] [drive] [speed]       (from the repository root; all without arguments)
+#   bash docs/recon/g4.sh [fidelity] [oracle] [drive] [speed]       (from the repository root; all four without arguments)
+#   bash docs/recon/g4.sh keep       (8.6: what of the keyframes is drawn, every variant on the same frames and keyframes)
 set -o pipefail
 cd "$(dirname "$0")/../../web" || exit 1
 D=../runs/eval/recon
@@ -62,6 +63,14 @@ if [[ " $STEPS " == *" speed "* ]]; then
         echo "speed $town $cfg $i: $(grep '^real time' $D/g4_speed/${town}_${cfg}_$i.log)"
       done
     done
+  done
+fi
+# 5. what of the keyframes is drawn (docs/recon_view.md 8.6): every measurement has all variants (accum.variants)
+if [[ " $STEPS " == *" keep "* ]]; then
+  mkdir -p $D/g4_keep
+  for town in 1000 1015-98782ab7 osm_sapporo; do
+    run --town $town --sec 60 --every 2 --recon model --accum 1 --out $D/g4_keep --shotdir ../runs/recon/g4_keep/shots --shots all > $D/g4_keep/$town.log
+    echo "keep $town: $(grep '^digest' $D/g4_keep/$town.log)"
   done
 fi
 echo G4_DONE

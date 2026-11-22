@@ -20,6 +20,10 @@ RULES = {"design": "設計の出発点: クラス、比 1.15（2 台とも）", 
          "height125": "高さ、比 1.25（望遠は 1.07）"}
 
 
+KEEP = {"all": "全部（設計の値）: 地面、建物、植物、柱、14 m まで", "noveg": "植物を外す", "nobuild": "建物を外す",
+        "flat": "植物と建物を外す（地面と柱）", "ground": "地面だけ", "all10": "全部、10 m まで", "flat10": "植物と建物を外す、10 m まで"}
+
+
 def load(d):
     out = {}
     for path in sorted(glob.glob(os.path.join(d, "*.json"))):
@@ -122,6 +126,13 @@ def accum_tables(runs):
         tot += v
         drawn = sum(r["drawn"] for r in rows)
         print(f"| {TOWNS.get(town, town)} | {v[0]:,.0f} | {pc(v[1], v[0])} | {pc(v[2], v[0])} | {pc(v[3], v[0])} | {v[4]:,.0f}（{pc(v[9], v[4])}） | {v[5]:.0f} | {v[6]:,.0f} | {v[7]:,.0f}（{pc(v[7], v[6])}） | {v[8]:.0f} |")
+    if "variants" in every[0]["accum"]:
+        print("\n" + HEAD.format("キーフレームから描くもの（同じフレーム、同じキーフレーム）"))
+        print(line("（キーフレームなし: A）", every))
+        for name, ja in KEEP.items():
+            if name in every[0]["accum"]["variants"]:
+                print(line(ja, every, lambda r, n=name: r["accum"]["variants"][n]))
+        print()
     drawn = sum(r["drawn"] for r in every)
     print(f"| **合計** | {tot[0]:,.0f} | {pc(tot[1], tot[0])} | {pc(tot[2], tot[0])} | {pc(tot[3], tot[0])} | {tot[4]:,.0f}（{pc(tot[9], tot[4])}） | {tot[5]:.0f} | {tot[6]:,.0f} | {tot[7]:,.0f}（{pc(tot[7], tot[6])}） | {tot[8]:.0f} |")
 

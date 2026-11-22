@@ -8,6 +8,8 @@
 // recon=model: the depth is the model's own output (the depth head: models/keipilot_mc_depth.onnx, K x 80 x 160 metres,
 // 0: no surface). No depth pass is drawn, except for a measurement: then the town's depth is drawn too, and the same
 // frame is measured with the model's depth and with the town's (the oracle).
+// (&accumkeep=noveg|nobuild|flat|ground and &accumfar=METRES draw less of the keyframes: without vegetation, without
+// buildings, the ground and poles only, the ground only; nearer than 14 m.)
 // Accumulation (on with recon=model, &accum=0 turns it off; &accum=1 turns it on with recon=oracle): the static
 // surfaces near the car stay when the car has passed them, so its sides and what is behind it fill in. Every ACCUM.step
 // metres (or ACCUM.turn of heading) the frame's meshes are kept as a keyframe: the triangles of the static classes
@@ -45,6 +47,11 @@ const GROUND = new Set([1, 2, 3, 4]);   // road, marking, sidewalk, terrain (kei
 // kept vertices inside a car's or a rider's box of that moment has kept a piece of it (counted, see state().accum)
 export const ACCUM = { step: 2, turn: 10 * DEG, near: 3, far: 14, n: 40, ghost: 10 };
 const STATIC = new Set([1, 2, 3, 4, 5, 6, 7]);
+// What of a keyframe is drawn: the classes and how far from its camera [m]. 'all' is the design's; ?accumkeep= one of
+// these names and ?accumfar=METRES choose the view's; measure() tries every one on the same frame and keyframes.
+export const ACCUM_KEEP = { all: [1, 2, 3, 4, 5, 6, 7], noveg: [1, 2, 3, 4, 5, 7], nobuild: [1, 2, 3, 4, 6, 7], flat: [1, 2, 3, 4, 7], ground: [1, 2, 3, 4] };
+export const ACCUM_VARIANTS = { all: { keep: 'all', far: 14 }, noveg: { keep: 'noveg', far: 14 }, nobuild: { keep: 'nobuild', far: 14 },
+  flat: { keep: 'flat', far: 14 }, ground: { keep: 'ground', far: 14 }, all10: { keep: 'all', far: 10 }, flat10: { keep: 'flat', far: 10 } };
 const NARROW_MARGIN = 4;            // wide triangles inside the narrow camera's image, this many pixels from its edge, go
 const STEP = 2;                     // the depth image's resolution: every other pixel, as the shards keep it
 const EGO = { L: 4.5, W: 1.85, H: 1.5 };
@@ -63,6 +70,8 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, split =
   const rule = { ground: ['class', 'height', 'both'].includes(params.get('reconground')) ? params.get('reconground') : RULE.ground,
     ratio: Number(params.get('reconratio')) || RULE.ratio, scaled: params.has('reconscaled') ? params.get('reconscaled') !== '0' : RULE.scaled };
   const accumOn = params.has('accum') ? params.get('accum') !== '0' : mode === 'model';
+  const kfView = { keep: ACCUM_KEEP[params.get('accumkeep')] ? params.get('accumkeep') : 'all',
+    far: Math.min(ACCUM.far, Math.max(ACCUM.near, Number(params.get('accumfar')) || ACCUM.far)) };
   const wideAngle = Math.max(...rig.map(({ cam }) => pixelAngle(cam)));
   const table = depthTable();
   const depthPass = createDepthPass({ renderer, scene, glassMats: glassMaterials(ctx) });
@@ -250,13 +259,35 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, split =
           polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 50 }));
         mesh.frustumCulled = false; mesh.renderOrder = -1;
         kfGroup.add(mesh);
-        return { geo, tex, mesh };
+        // every static triangle of the frame within ACCUM.far, its vertices' classes and distances: what is drawn of
+        // them is chosen afterwards (show)
+        return { geo, tex, mesh, full: new Uint16Array(m.index.array.length), count: 0, cls: new Uint8Array(m.n), r: new Float32Array(m.n) };
       }) };
       ring.push(sl);
       return sl;
     }
     return ring.reduce((a, b) => (a.seq < b.seq ? a : b));    // the oldest
   }
+  /** Draw of the keyframes (all of them, or these slots; camera k or every camera) the triangles of a variant: the
+   *  classes of ACCUM_KEEP[v.keep], no farther than v.far from the keyframe's camera. */
+  function show(v, slots = ring, k = -1) {
+    const set = new Set(ACCUM_KEEP[v.keep]);
+    for (const sl of slots) {
+      sl.meshes.forEach((km, j) => {
+        if (k >= 0 && j !== k) return;
+        const idx = km.geo.index.array, src = km.full, n = sl.seq > 0 ? km.count : 0;
+        const ok = (x) => set.has(km.cls[x]) && km.r[x] <= v.far;
+        let c = 0;
+        for (let i = 0; i < n; i += 3) {
+          const a = src[i], b = src[i + 1], d = src[i + 2];
+          if (ok(a) && ok(b) && ok(d)) { idx[c++] = a; idx[c++] = b; idx[c++] = d; }
+        }
+        km.geo.index.needsUpdate = true;
+        km.geo.setDrawRange(0, c);
+      });
+    }
+  }
+
   /** Keep the current frame's static triangles near the car as a keyframe when the car has moved on enough. */
   function keyframe(pose, boxes) {
     if (lastKf) {
@@ -269,7 +300,7 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, split =
     sl.seq = ++kfSeq;
     let kept = 0, ghost = 0;
     meshes.forEach((m, k) => {
-      const dst = sl.meshes[k], src = m.index.array, idx = dst.geo.index.array, count = m.geo.drawRange.count;
+      const dst = sl.meshes[k], src = m.index.array, idx = dst.full, count = m.geo.drawRange.count;
       const keep = (v) => STATIC.has(m.cls[v]) && m.r[v] >= ACCUM.near && m.r[v] <= ACCUM.far;
       const used = new Uint8Array(m.n);
       let c = 0;
@@ -279,10 +310,11 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, split =
         idx[c++] = a; idx[c++] = b; idx[c++] = d;
         used[a] = used[b] = used[d] = 1;
       }
+      dst.count = c;
+      dst.cls.set(m.cls); dst.r.set(m.r);
       dst.geo.attributes.position.array.set(m.position.array);
       dst.geo.attributes.position.needsUpdate = true;
-      dst.geo.index.needsUpdate = true;
-      dst.geo.setDrawRange(0, c);
+      show(kfView, [sl], k);
       dst.tex.image.data.set(m.pixels);
       dst.tex.needsUpdate = true;
       for (let v = 0; v < m.n; v++) {
@@ -302,7 +334,7 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, split =
     if (ghost >= ACCUM.ghost) acc.ghostKeyframes++;
   }
   function dropKeyframes() {
-    for (const sl of ring) { sl.seq = 0; for (const km of sl.meshes) km.geo.setDrawRange(0, 0); }
+    for (const sl of ring) { sl.seq = 0; for (const km of sl.meshes) { km.count = 0; km.geo.setDrawRange(0, 0); } }
     lastKf = null; kfSeq = 0;
     acc.made = 0; acc.vertices = 0; acc.ghostVertices = 0; acc.ghostKeyframes = 0;
   }
@@ -521,6 +553,10 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, split =
           if (lastMap[i] === MAP.good) accum.beforeGood++;
         }
       }
+      accum.view = { ...kfView };
+      accum.variants = {};                                    // the same frame and keyframes, other choices of what is kept
+      for (const [name, v] of Object.entries(ACCUM_VARIANTS)) { show(v); accum.variants[name] = score(reconDepth(pose)); }
+      show(kfView);
     }
     return { ...m, pose: { ...pose }, stats, rule: { ...rule }, variants, ...(oracle ? { oracle } : {}), ...(accum ? { accum } : {}) };
   }
@@ -574,6 +610,11 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, split =
       place(last.pose, own(last)); triangles(rule);
     }
     kfGroup.visible = accumOn;
+    if (accumOn) {                                            // the keyframes by every variant of what is kept
+      out.accum = {};
+      for (const [name, v] of Object.entries(ACCUM_VARIANTS)) { show(v); rr.render(rscene, measCam); out.accum[name] = canvas.toDataURL('image/png'); }
+      show(kfView);
+    }
     rr.render(rscene, measCam);
     out.recon = canvas.toDataURL('image/png');
     const mapPng = (map) => {                                 // a measurement's pixels, by what they are
@@ -604,5 +645,5 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, split =
     measured: () => measured,
     viewCamera: () => viewCam.position.toArray(),              // in the car's frame (tests)
     state: () => ({ mode, split, frames, buildMs, stats, pose: last ? last.pose : null,
-      accum: accumOn ? { keyframes: keyframes(), ...acc } : null }) };
+      accum: accumOn ? { keyframes: keyframes(), ...kfView, ...acc } : null }) };
 }
