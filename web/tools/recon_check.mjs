@@ -14,8 +14,9 @@
 //                              [--accum 0|1]   (&accum=: the keyframes of passed places, on by default with --recon model;
 //                              every measurement then has the current frame alone at the top and, under "accum", the
 //                              same frame with the keyframes; the pictures: _recon.png with them, _current.png without)
-//                              [--keep noveg|nobuild|flat|ground] [--far 10]   (&accumkeep=, &accumfar=: what of the
-//                              keyframes the view draws; every measurement has all of src/recon.js ACCUM_VARIANTS on
+//                              [--keep noveg|nobuild|flat|ground] [--far 14]   (&accumkeep=, &accumfar=: what of the
+//                              keyframes the view draws, by default every static class within 10 m; --far 14: all a
+//                              keyframe holds, as G4 was measured; every measurement has all of src/recon.js ACCUM_VARIANTS on
 //                              the same frame under accum.variants, the pictures as _acc_<name>.png)
 //                              [--measure 0]   (no measurements: the page draws what a visitor's draws; the digests only)
 //                              [--size 1920x1080]   (the window; 1280x720) [--name NAME]   (--out DIR/NAME.json)

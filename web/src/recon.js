@@ -8,14 +8,15 @@
 // recon=model: the depth is the model's own output (the depth head: models/keipilot_mc_depth.onnx, K x 80 x 160 metres,
 // 0: no surface). No depth pass is drawn, except for a measurement: then the town's depth is drawn too, and the same
 // frame is measured with the model's depth and with the town's (the oracle).
-// (&accumkeep=noveg|nobuild|flat|ground and &accumfar=METRES draw less of the keyframes: without vegetation, without
-// buildings, the ground and poles only, the ground only; nearer than 14 m.)
 // Accumulation (on with recon=model, &accum=0 turns it off; &accum=1 turns it on with recon=oracle): the static
 // surfaces near the car stay when the car has passed them, so its sides and what is behind it fill in. Every ACCUM.step
 // metres (or ACCUM.turn of heading) the frame's meshes are kept as a keyframe: the triangles of the static classes
 // (the model's segmentation) between ACCUM.near and ACCUM.far metres, as they are (no fusion), the last ACCUM.n of
 // them. Their place is the car's own pose of that frame: the simulator's, without error; a real car would add its
-// odometry's drift here. Farther away only the current frame draws.
+// odometry's drift here. Farther away only the current frame draws. Of a keyframe the view draws what is within
+// ACCUM.draw metres of its camera (10 m: fewer surfaces that are not there than with all 14 m, docs/recon_view.md
+// 8.6); &accumfar=METRES (up to ACCUM.far) and &accumkeep=noveg|nobuild|flat|ground (without vegetation, without
+// buildings, the ground and poles only, the ground only) choose something else.
 // &layout=split: the main view moves to the same chase camera and the two stand side by side, the town on the left
 // and what the model makes of it on the right (src/pilot.js places the camera and shows the car's body).
 // It has its own canvas and its own WebGLRenderer: the main renderer's GL state, which the model frames are read back
@@ -44,11 +45,13 @@ export const VARIANTS = { design: { ground: 'class', ratio: 1.15, scaled: false 
 const GROUND = new Set([1, 2, 3, 4]);   // road, marking, sidewalk, terrain (keisim SEM_NAMES): triangles of these stay
 // keyframes: when one is taken, what it keeps (road, marking, sidewalk, terrain, building, vegetation, pole: not the
 // sky, vehicles, pedestrians or the signals' lamps, which change), how many are held; ghost: a keyframe with this many
-// kept vertices inside a car's or a rider's box of that moment has kept a piece of it (counted, see state().accum)
-export const ACCUM = { step: 2, turn: 10 * DEG, near: 3, far: 14, n: 40, ghost: 10 };
+// kept vertices inside a car's or a rider's box of that moment has kept a piece of it (counted, see state().accum);
+// far: how far from its camera a keyframe keeps surfaces, draw: how far the view draws them unless ?accumfar= says more
+export const ACCUM = { step: 2, turn: 10 * DEG, near: 3, far: 14, draw: 10, n: 40, ghost: 10 };
 const STATIC = new Set([1, 2, 3, 4, 5, 6, 7]);
-// What of a keyframe is drawn: the classes and how far from its camera [m]. 'all' is the design's; ?accumkeep= one of
-// these names and ?accumfar=METRES choose the view's; measure() tries every one on the same frame and keyframes.
+// What of a keyframe is drawn: the classes and how far from its camera [m]. 'all' is the design's (the view's default
+// is 'all10'); ?accumkeep= one of these names and ?accumfar=METRES choose the view's; measure() tries every one on the
+// same frame and keyframes.
 export const ACCUM_KEEP = { all: [1, 2, 3, 4, 5, 6, 7], noveg: [1, 2, 3, 4, 5, 7], nobuild: [1, 2, 3, 4, 6, 7], flat: [1, 2, 3, 4, 7], ground: [1, 2, 3, 4] };
 export const ACCUM_VARIANTS = { all: { keep: 'all', far: 14 }, noveg: { keep: 'noveg', far: 14 }, nobuild: { keep: 'nobuild', far: 14 },
   flat: { keep: 'flat', far: 14 }, ground: { keep: 'ground', far: 14 }, all10: { keep: 'all', far: 10 }, flat10: { keep: 'flat', far: 10 } };
@@ -71,7 +74,7 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, split =
     ratio: Number(params.get('reconratio')) || RULE.ratio, scaled: params.has('reconscaled') ? params.get('reconscaled') !== '0' : RULE.scaled };
   const accumOn = params.has('accum') ? params.get('accum') !== '0' : mode === 'model';
   const kfView = { keep: ACCUM_KEEP[params.get('accumkeep')] ? params.get('accumkeep') : 'all',
-    far: Math.min(ACCUM.far, Math.max(ACCUM.near, Number(params.get('accumfar')) || ACCUM.far)) };
+    far: Math.min(ACCUM.far, Math.max(ACCUM.near, Number(params.get('accumfar')) || ACCUM.draw)) };
   const wideAngle = Math.max(...rig.map(({ cam }) => pixelAngle(cam)));
   const table = depthTable();
   const depthPass = createDepthPass({ renderer, scene, glassMats: glassMaterials(ctx) });
