@@ -107,7 +107,7 @@ try {
     }
     const b = await now(), wall = (b.w - a.w) / 1000, mean = (x) => x.reduce((p, q) => p + q, 0) / x.length;
     console.log(`real time ${wall.toFixed(0)} s${off ? ' without ReconView' : ''}: ${mean(fps).toFixed(1)} fps (min ${Math.min(...fps).toFixed(1)}), ${((b.n - a.n) / wall).toFixed(1)} model calls/s, ` +
-      `inference ${mean(inf).toFixed(1)} ms, model frame ${mean(cap).toFixed(1)} ms${off ? '' : ` (with its depth), mesh ${mean(build).toFixed(1)} ms`}, town time x${((b.t - a.t) / wall).toFixed(2)}`);
+      `inference ${mean(inf).toFixed(1)} ms, model frame ${mean(cap).toFixed(1)} ms${off ? '' : `${args.recon === 'model' ? '' : ' (with its depth)'}, mesh ${mean(build).toFixed(1)} ms`}, town time x${((b.t - a.t) / wall).toFixed(2)}`);
   }
   if (args.drag && !off) {
     const cam = () => page.evaluate(() => window.__pilot.recon.viewCamera());
