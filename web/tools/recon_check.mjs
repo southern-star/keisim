@@ -18,11 +18,20 @@
 //                              but not drawn, grey: not seen), and _page.png, the page)
 //                              [--ground class|height|both] [--ratio 1.15] [--scaled 0]   (the view's triangle rule,
 //                              src/recon.js; every measurement also has the numbers of the rules in its VARIANTS)
+//                              [--realtime SEC]   (first let the page drive in real time for SEC s, as a visitor sees it, and
+//                              print frames per second, model calls per second, the model frame's and the mesh's times;
+//                              with --recon off: the same page without ReconView, to compare)
+//                              [--drag 1]   (drag in the view and double-click it: the camera turns and comes back)
+//                              [--fonts block]   (a diagnosis: the page's web fonts are not loaded, so every text texture of
+//                              the town is drawn with the system's font; see docs/recon_view.md on runs that differ)
 //                              [--traffic 0] [--cars N] [--bikes N] [--parked N] [--model models/x.onnx] [--tdir .towns]
 //                              [--ort node_modules/onnxruntime-web/dist/] [--ep webgpu|wasm] [--gl hw|soft]
 // The run starts from the town's time 0 with the car at its start, whatever time the page took to load (the page's own
-// frame loop drives on in real time until a test takes over), so the same arguments give the same run: the last line
-// is a digest of the car's poses and the model's input images at every measurement.
+// frame loop drives on in real time until a test takes over; after --realtime or --drag the page is loaded again
+// first, a longer real-time drive leaves more behind than the restart puts back). The last line is a digest of the
+// car's poses and the model's input images at every measurement: the same arguments give one of two digests (KeiView
+// draws a few frames in one of two ways from run to run; a page loaded a second time, as after --realtime, gives a
+// third: docs/recon_view.md 4.4), and runs of the same digest are the same to the bit.
 // Needs models/keipilot_mc.onnx and network access to cdn.jsdelivr.net (onnxruntime-web, three.js).
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -53,7 +62,11 @@ let failed = false;
 try {
   const page = await browser.newPage();
   const off = args.recon === 'off', loaded = [];
-  page.on('request', (r) => { if (/\/(recon|depth|unproject)\.js|OrbitControls/.test(r.url())) loaded.push(r.url().split('/').pop()); });
+  if (args.fonts === 'block') await page.setRequestInterception(true);
+  page.on('request', (r) => {
+    if (/\/(recon|depth|unproject)\.js|OrbitControls/.test(r.url())) loaded.push(r.url().split('/').pop());
+    if (args.fonts === 'block') { if (/fonts\.(googleapis|gstatic)\.com/.test(r.url())) r.abort(); else r.continue(); }
+  });
   page.on('console', (m) => { if (m.type() === 'error') console.log(`[error] ${m.text().slice(0, 300)}`); });
   page.on('pageerror', (e) => { console.log(`[pageerror] ${e.message}`); failed = true; });
   const q = new URLSearchParams({ pilot: 'mc', town, ...(off ? {} : { recon: args.recon || 'oracle' }), ...(args.ep ? { ep: args.ep } : {}), ...(args.tdir ? { tdir: args.tdir } : {}),
@@ -63,15 +76,48 @@ try {
     ...(args.ground ? { reconground: args.ground } : {}), ...(args.ratio ? { reconratio: args.ratio } : {}),
     ...(args.scaled ? { reconscaled: args.scaled } : {}) });
   const t0 = Date.now();
-  await page.goto(`http://127.0.0.1:${server.address().port}/index.html?${q}`, { waitUntil: 'load', timeout: 180000 });
-  await page.waitForFunction('window.__pilotRun || /読み込めません/.test(document.getElementById("loadlabel").textContent)', { timeout: 600000, polling: 200 });
-  if (!(await page.evaluate(() => !!window.__pilotRun))) throw new Error(await page.evaluate(() => document.getElementById('loadlabel').textContent));
+  const open = async () => {
+    await page.goto(`http://127.0.0.1:${server.address().port}/index.html?${q}`, { waitUntil: 'load', timeout: 180000 });
+    await page.waitForFunction('window.__pilotRun || /読み込めません/.test(document.getElementById("loadlabel").textContent)', { timeout: 600000, polling: 200 });
+    if (!(await page.evaluate(() => !!window.__pilotRun))) throw new Error(await page.evaluate(() => document.getElementById('loadlabel').textContent));
+  };
+  await open();
   if (!off && !(await page.evaluate(() => !!window.__pilot.recon))) throw new Error('the page has no ReconView (?recon)');
   if (off) {
     const has = await page.evaluate(() => !!window.__pilot.recon || !!document.getElementById('recon-view'));
     console.log(`without ?recon: ${has || loaded.length ? `FAIL: ReconView is there (${loaded.join(', ')})` : 'no ReconView, none of its modules requested'}`);
     if (has || loaded.length) failed = true;
   }
+  if (args.realtime) {
+    const fps = [], cap = [], inf = [], build = [];
+    const now = () => page.evaluate(() => { const st = window.__pilot.state(); return { n: st.nInfer, t: st.t, w: Date.now() }; });
+    const a = await now();
+    for (let k = 0; k < Number(args.realtime) * 2; k++) {
+      await new Promise((r) => setTimeout(r, 500));
+      const r = await page.evaluate(() => { const st = window.__pilot.state(), rc = window.__pilot.recon; return { fps: window.__stats.fps, cap: st.captureMs, inf: st.inferMs, build: rc ? rc.state().buildMs : 0 }; });
+      if (k >= 4) { fps.push(r.fps); cap.push(r.cap); inf.push(r.inf); build.push(r.build); }
+    }
+    const b = await now(), wall = (b.w - a.w) / 1000, mean = (x) => x.reduce((p, q) => p + q, 0) / x.length;
+    console.log(`real time ${wall.toFixed(0)} s${off ? ' without ReconView' : ''}: ${mean(fps).toFixed(1)} fps (min ${Math.min(...fps).toFixed(1)}), ${((b.n - a.n) / wall).toFixed(1)} model calls/s, ` +
+      `inference ${mean(inf).toFixed(1)} ms, model frame ${mean(cap).toFixed(1)} ms${off ? '' : ` (with its depth), mesh ${mean(build).toFixed(1)} ms`}, town time x${((b.t - a.t) / wall).toFixed(2)}`);
+  }
+  if (args.drag && !off) {
+    const cam = () => page.evaluate(() => window.__pilot.recon.viewCamera());
+    const box = await (await page.$('#recon-view')).boundingBox(), c0 = await cam();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 120, box.y + box.height / 2 - 30, { steps: 8 });
+    await page.mouse.up();
+    await new Promise((r) => setTimeout(r, 300));
+    const c1 = await cam();
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2, { clickCount: 2 });
+    await new Promise((r) => setTimeout(r, 300));
+    const c2 = await cam(), d = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
+    const ok = d(c0, c1) > 1 && d(c0, c2) < 1e-6;
+    console.log(`drag: the camera moved ${d(c0, c1).toFixed(1)} m; double-click: ${d(c0, c2) < 1e-6 ? 'back at the chase camera' : `${d(c0, c2).toFixed(2)} m from it`} ${ok ? 'ok' : 'FAIL'}`);
+    if (!ok) failed = true;
+  }
+  if (args.realtime || args.drag) await open();             // a fresh page for the measured run
   // from the town's time 0 and the car's start: stop the page's own loop, let the model call in flight end, take one
   // model frame (the following ones come every 0.1 s from this one on), then put time and car back
   const backend = await page.evaluate(async () => {

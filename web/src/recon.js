@@ -413,5 +413,6 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, renderM
   return { mode, capture, frame, band, render, reset, snapshot, rule,
     arm: () => { armed = true; measured = null; },            // measure at the next model frame
     measured: () => measured,
+    viewCamera: () => viewCam.position.toArray(),              // in the car's frame (tests)
     state: () => ({ mode, frames, buildMs, stats, pose: last ? last.pose : null }) };
 }
