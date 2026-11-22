@@ -63,7 +63,20 @@ MARGIN_CAR = 0.2            # m beside a car (filtering past a queue needs this 
 MARGIN_BIKE = 0.25
 MARGIN_WALK = 0.25          # someone walking along the road
 MARGIN_CROSS = 0.55         # someone crossing it
+MARGIN_KERB = 0.1           # TrafficConfig.bike_hook: someone standing at a zebra's kerb for their light (as the cars:
+#                             passed closely. With MARGIN_WALK a rider just out of a left turn stood 0.5 m behind
+#                             someone waiting 0.8 m to its side, too soon after the junction to move out round them; the
+#                             truck turning behind it stood on the zebra for the rider, so the person, who set off at
+#                             their green, met the truck and walked back to their spot beside the rider: none of the
+#                             three moved again. bigjunction 3003/9801, 2.5 km)
 MARGIN_TURN = 0.15          # where a turning car will be
+SIDE_STEP = 1.2             # TrafficConfig.bike_hook: points along each car's long sides, at most this far apart
+#                             (car_side_points: the three circles leave a car's corners, and its sides between them,
+#                             uncovered. A rider following a car round a left turn on the inside missed its circles by
+#                             0.03 m and rode into its side: bigjunction 3008/9801, 600 m. A rider stood 0.04 m from the
+#                             rear corner of a 7.5 m truck standing at an angle, and the corner swung into it as the
+#                             truck turned right: stress twophase 1012/9900)
+SIDE_R = 0.05
 FILTER_SIDE = 0.9           # m beside a car: closer than this the rider passes it at most FILTER_DV faster
 FILTER_DV = 2.5             # m/s
 S0_BIKE, S0_CAR = 0.8, 1.4  # m: standing distance behind people and bikes / behind cars
@@ -157,6 +170,26 @@ def bike_lanes(town):
     return out
 
 
+def car_side_points(xy, yaw, length, width):
+    """Points along both long sides of each car (corners included), at most SIDE_STEP apart: (M, 2), owner (M,)."""
+    length, width = np.asarray(length, float), np.asarray(width, float)
+    seg = np.maximum(np.ceil(length / SIDE_STEP), 1).astype(int)           # gaps along a side
+    out, own = [], []
+    for k in np.unique(seg):
+        idx = np.nonzero(seg == k)[0]
+        lx = length[idx, None] * np.linspace(-0.5, 0.5, k + 1)[None]          # (m, k+1)
+        hw = width[idx, None] / 2
+        c, s_ = np.cos(yaw[idx])[:, None], np.sin(yaw[idx])[:, None]
+        for side in (1.0, -1.0):
+            px = xy[idx, 0:1] + c * lx - s_ * side * hw
+            py = xy[idx, 1:2] + s_ * lx + c * side * hw
+            out.append(np.stack([px, py], -1).reshape(-1, 2))
+            own.append(np.repeat(idx, k + 1))
+    if not out:
+        return np.zeros((0, 2)), np.zeros(0, int)
+    return np.concatenate(out), np.concatenate(own)
+
+
 def bike_circles(xy, yaw):
     """NCB circles of radius BIKE_R along each bike -> centres (n * NCB, 2), owner (n * NCB,)."""
     n = len(xy)
@@ -218,10 +251,15 @@ class Bicycles:
             self._try_add(lid, float(rng.uniform(3.0, L - 3.0)), avoid_xy, avoid_r, car_xy, car_r)
 
     # --------------------------------------------------------------- spawning
-    def _free(self, p, avoid_xy, avoid_r, car_xy, car_r, skip=None):
+    def _free(self, p, avoid_xy, avoid_r, car_xy, car_r, skip=None, h=None):
         if avoid_xy is not None and len(avoid_xy) and np.min(np.hypot(*(avoid_xy - p).T)) < avoid_r:
             return False
-        if car_xy is not None and len(car_xy) and np.any(np.hypot(*(car_xy - p).T) < car_r + BIKE_R + 0.45):
+        q = p[None]
+        if self.cfg.bike_hook and h is not None:   # bike_hook: all of the bike's circles (heading h), not only the
+            q = bike_circles(p[None], np.array([h]))[0]  # middle one (a rider put just behind a car reached 0.3 m
+            #                                          into it: suburban 2009/9851, stress roadtypes 1016/9901)
+        if car_xy is not None and len(car_xy) and \
+                np.any(np.hypot(*(car_xy[None] - q[:, None]).transpose(2, 0, 1)) < car_r[None] + BIKE_R + 0.45):
             return False
         if self.n:
             d = np.hypot(*(self.xy - p).T)
@@ -237,7 +275,7 @@ class Bicycles:
         u = tr.at(s)
         j = int(np.clip(np.searchsorted(tr.cum, u), 1, len(tr.cum) - 1))
         p = tr.pts[j]
-        if not self._free(p, avoid_xy, avoid_r, car_xy, car_r):
+        if not self._free(p, avoid_xy, avoid_r, car_xy, car_r, h=float(tr.heading[j])):
             return False
         ty = int(rng.choice(len(TYPES), p=[t["p"] for t in TYPES]))
         T = TYPES[ty]
@@ -252,7 +290,18 @@ class Bicycles:
         self._cat.append(None)
         self.ri = ap(self.ri, 0)
         self.u = ap(self.u, u)
-        self.v = ap(self.v, cruise * rng.uniform(0.6, 1.0))
+        v0 = cruise * rng.uniform(0.6, 1.0)
+        if self.cfg.bike_hook and car_xy is not None and len(car_xy):   # no faster than it can stop for a car
+            h = float(tr.heading[j])                                    # ahead (a rider put 2.3 m behind one at
+            ub = np.array([math.cos(h), math.sin(h)])                   # 6 m/s rode into it as it stopped:
+            rel = np.asarray(car_xy) - p                                # stress roadtypes 1013/9901)
+            lon = rel @ ub
+            lat = np.abs(rel[:, 0] * ub[1] - rel[:, 1] * ub[0])
+            ahead = (lon > 0.0) & (lat < car_r + BIKE_W / 2 + MARGIN_CAR)
+            if ahead.any():
+                room = float(np.min(lon[ahead] - car_r[ahead])) - BIKE_LEN / 2 - S0_CAR
+                v0 = min(v0, math.sqrt(2.0 * 1.5 * max(room, 0.0)))
+        self.v = ap(self.v, v0)
         self.acc = ap(self.acc, 0.0)
         self.lat = ap(self.lat, 0.0)
         self.lat_t = ap(self.lat_t, 0.0)
@@ -328,7 +377,7 @@ class Bicycles:
             u = float(rng.uniform(3.0, tr.length - 3.0))
             j = int(np.clip(np.searchsorted(tr.cum, u), 1, len(tr.cum) - 1))
             p = tr.pts[j]
-            if not self._free(p, avoid_xy, 60.0, car_xy, car_r, skip=i):
+            if not self._free(p, avoid_xy, 60.0, car_xy, car_r, skip=i, h=float(tr.heading[j])):
                 continue
             self.route[i] = [lid]
             self._cat[i] = None
@@ -470,23 +519,29 @@ class Bicycles:
         lanes = town.lanes
         P = self.P
         # ---- the cars signalling a left turn (SIGNAL_D before it, or on it): x, y, yaw, v, half length, half width,
-        # 1 for the ego
+        # 1 for the ego, -1. bike_hook: and the cars on a right turn's connector, with the lane they leave the junction
+        # by (for the riders going that way only: a rider turning right on the outside of a 7 m truck's right turn
+        # followed its side, came up beside its rear, and the rear swung out into it: suburban 2004/9851)
         sig = []
         tr = traffic
         for c in range(tr.n):
             r_c, k_c = tr.route[c], tr.ri[c]
             cur_c = lanes[r_c[k_c]]
+            exit_c = -1
             if cur_c.kind == "conn":
                 on = cur_c.turn == "left"
+                if cfg.bike_hook and cur_c.turn == "right" and k_c + 1 < len(r_c):
+                    on, exit_c = True, r_c[k_c + 1]
             else:
                 nx = lanes[r_c[k_c + 1]] if k_c + 1 < len(r_c) else None
                 on = nx is not None and nx.kind == "conn" and nx.turn == "left" and \
                     cur_c.length - float(tr.s[c]) - float(tr.dims[c, 0]) / 2 <= SIGNAL_D
             if on:
-                sig.append((tr.xy[c, 0], tr.xy[c, 1], tr.yaw[c], tr.v[c], tr.dims[c, 0] / 2, tr.dims[c, 1] / 2, 0.0))
+                sig.append((tr.xy[c, 0], tr.xy[c, 1], tr.yaw[c], tr.v[c], tr.dims[c, 0] / 2, tr.dims[c, 1] / 2, 0.0,
+                            exit_c))
         if ego_left and ego_dims is not None:
-            sig.append((ego_xy[0], ego_xy[1], ego_yaw, ego_v, ego_dims[0] / 2, ego_dims[1] / 2, 1.0))
-        sig = np.array(sig, float).reshape(-1, 7)
+            sig.append((ego_xy[0], ego_xy[1], ego_yaw, ego_v, ego_dims[0] / 2, ego_dims[1] / 2, 1.0, -1))
+        sig = np.array(sig, float).reshape(-1, 8)
         # ---- lookahead paths: along the home line and moved out
         cats = [self._cat_of(i) for i in range(n)]
         idx = np.concatenate([np.arange(24), 24 + 2 * np.arange(P - 24)])
@@ -533,6 +588,10 @@ class Bicycles:
         from .traffic import corridor_gaps
         tr = traffic
         cxy, cr, cow = tr.circles()
+        if cfg.bike_hook and tr.n:
+            sxy, sow = car_side_points(tr.xy, tr.yaw, tr.dims[:, 0], tr.dims[:, 1])
+            cxy, cr, cow = np.concatenate([cxy, sxy]), np.concatenate([cr, np.full(len(sxy), SIDE_R)]), \
+                np.concatenate([cow, sow])
         csp, cyw = tr.v[cow], tr.yaw[cow]
         ncar = len(cxy)
         parts = [(cxy, cr, cow, csp, cyw, np.full(ncar, MARGIN_CAR))]
@@ -557,6 +616,8 @@ class Bicycles:
         if peds is not None and peds.n:
             cross = peds.mode == peds.CROSS
             pm = np.where(cross, MARGIN_CROSS, MARGIN_WALK)
+            if cfg.bike_hook:                   # bike_hook: the people waiting at a zebra's kerb, passed closely
+                pm = np.where(peds.waiting_at_kerb(), MARGIN_KERB, pm)
             parts.append((peds.xy, np.full(peds.n, 0.35), -2 - np.arange(peds.n), peds.vel, peds.yaw, pm))
             if cross.any():
                 ci = np.nonzero(cross)[0]
@@ -704,6 +765,9 @@ class Bicycles:
                 room = max(gap - s0, 0.0)
                 vl = max(float(lead_v), 0.0)
                 v_obs = min(math.sqrt(vl * vl + 2.0 * b * room), vl + room / T_HEAD)
+                if cfg.bike_hook and gap < s0:      # too close: drop back (it rode on at the car's speed 0.5 m into
+                    v_obs = max(0.0, vl + (gap - s0) / T_HEAD)    # its standing distance and touched the rear corner
+                    #                                 of a car turning right ahead of it: stress roadtypes 1013/9900)
                 if lead_v < 0.0:                                # coming towards the rider
                     v_obs = min(v_obs, math.sqrt(2.0 * b * max(room + 1.5 * float(lead_v), 0.0)))
                 v_t = min(v_t, v_obs)
@@ -722,6 +786,13 @@ class Bicycles:
                 lon_s = dd @ ub_i
                 rgt_s = dd[:, 0] * ub_i[1] - dd[:, 1] * ub_i[0]
                 same = np.cos(sig[:, 2] - self.yaw[i]) > 0.7
+                if cfg.bike_hook and (sig[:, 7] >= 0).any():     # a right turn's car: for the riders turning right
+                    r_i, k_i = self.route[i], self.ri[i]           # with it, out by the same road
+                    j_c = k_i if lanes[r_i[k_i]].kind == "conn" else k_i + 1
+                    ex = lanes[r_i[j_c + 1]] if j_c + 1 < len(r_i) and lanes[r_i[j_c]].kind == "conn" and \
+                        lanes[r_i[j_c]].turn == "right" else None
+                    mine = [] if ex is None else [ex.id] + list(ex.siblings)
+                    same &= (sig[:, 7] < 0) | np.isin(sig[:, 7], mine)
                 for c in np.nonzero(same & (lon_s > 0.0) & (lon_s < 30.0) & (rgt_s > 0.3) & (rgt_s < sig[:, 5] + 2.6))[0]:
                     vl = max(float(sig[c, 3]), 0.0)
                     gap_s = float(lon_s[c] - sig[c, 4]) - BIKE_LEN / 2
@@ -860,7 +931,7 @@ class Bicycles:
             look_t = -1.0 if self.look_t[i] > 0.0 else 0.0
             self.look[i] += float(np.clip(look_t - self.look[i], -dt / 0.2, dt / 0.25))
             self.stuck[i] = self.stuck[i] + dt if v_new < 0.1 else 0.0
-        self._release(ego_xy, ego_yaw, cxy, cr)
+        self._release(ego_xy, ego_yaw, cxy, cr)        # (bike_hook: with the cars' side points)
 
     def _side_clear(self, i, vxy):
         """No car level with rider i on its right, where it would walk its bicycle out to."""

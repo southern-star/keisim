@@ -53,6 +53,11 @@ class World:
             from .bicycles import Bicycles
             n_bk = int(min(tc.max_bikes, round(tc.bicycles * sum(r.length for r in town.roads) / 1000.0)))
             cxy, cr, _ = self.traffic.circles()
+            if tc.bike_hook and self.traffic.n:                     # (and the points along the cars' sides)
+                from .bicycles import SIDE_R, car_side_points
+                tr = self.traffic
+                sxy, _ = car_side_points(tr.xy, tr.yaw, tr.dims[:, 0], tr.dims[:, 1])
+                cxy, cr = np.concatenate([cxy, sxy]), np.concatenate([cr, np.full(len(sxy), SIDE_R)])
             if self.parked is not None and self.parked.n:          # nor in or just behind a parked car (room to
                 pk = self.parked                                    # move out round it: 8 m past its ends)
                 pr = pk.dims[:, 0] / 2 + 8.0 - (BIKE_R + 0.45)        # (Bicycles._free adds BIKE_R + 0.45)

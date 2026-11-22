@@ -364,6 +364,7 @@ def worker(wid, args, quota, out_dir, counter):
     cfg.traffic.npc_axles = bool(args.npc_axles)
     cfg.traffic.box_fix = bool(args.box_fix)
     cfg.traffic.bike_defer = bool(args.bike_defer)
+    cfg.traffic.bike_hook = bool(args.bike_hook)
     cfg.traffic.crosswalks = args.crosswalks
     if args.crosswalk_spawn is not None:
         cfg.traffic.crosswalk_spawn = args.crosswalk_spawn
@@ -641,6 +642,9 @@ def parse_args(argv=None):
     ap.add_argument("--bike_defer", type=int, default=0, choices=[0, 1],
                     help="1: NPCs in a junction do not stop for where a bicycle braking for them will be "
                          "(TrafficConfig.bike_defer)")
+    ap.add_argument("--bike_hook", type=int, default=0, choices=[0, 1],
+                    help="1: bicycles see the sides and corners of the cars, drop back when too close and start clear "
+                         "of the cars, and pass people waiting at a zebra's kerb closely (TrafficConfig.bike_hook)")
     ap.add_argument("--crosswalks", type=float, default=0.0,
                     help="crosswalks at signals (TrafficConfig.crosswalks): the chance that a person at a two-phase "
                          "signal's road end crosses on the zebra with the pedestrian light; turning cars give way")
@@ -734,6 +738,7 @@ def main():
                **({"npc_axles": 1} if args.npc_axles else {}),
                **({"box_fix": 1} if args.box_fix else {}),
                **({"bike_defer": 1} if args.bike_defer else {}),
+               **({"bike_hook": 1} if args.bike_hook else {}),
                **({"crosswalks": args.crosswalks} if args.crosswalks > 0 else {}),
                **({"crosswalk_spawn": args.crosswalk_spawn} if args.crosswalk_spawn is not None else {}),
                **({"focus_crosswalk": args.focus_crosswalk} if args.focus_crosswalk > 0 else {}),
