@@ -188,6 +188,14 @@ class KeiEnv:
         return [cam.render(self.world.ego.pose, state, self.weather, want_rgb=want_rgb, want_seg=want_seg,
                            offset=offset) for cam in self.assets.cameras]
 
+    def render_cameras_depth(self, offset=None, want_rgb=True, want_seg=True):
+        """(render_cameras' images, [depth codes uint16 HxW] of every camera): keisim/render/rays.py. KeiView only."""
+        if self.cfg.renderer != "keiview":
+            raise ValueError(f"depth images need renderer='keiview' (this environment's is {self.cfg.renderer!r}): "
+                             "KeiSim's own renderer draws none")
+        return self.keiview().render_rig_depth(self.world.ego.pose, self.world.scene_state(), self.world.t,
+                                               want_rgb=want_rgb, want_seg=want_seg, offset=offset)
+
     def virtual_pose(self, offset):
         """Pose of a vehicle whose camera rig is displaced by `offset` (lateral, yaw)."""
         x, y, yaw = self.world.ego.pose
