@@ -322,7 +322,8 @@ async function main() {
       const modelPipeline = () => createRenderPipeline(renderer, QUALITY.medium);
       setProgress.model = true;
       const progress = (f) => setProgress(0.45 + 0.55 * Math.min(1, f));
-      pilot = await installPilot({ ctx, scene, renderer, camera, sunDir, modelPipeline, mainSize: () => pipeline.size, params, status, progress });
+      pilot = await installPilot({ ctx, scene, renderer, camera, sunDir, modelPipeline, mainSize: () => pipeline.size, params, status, progress,
+        renderMain: (cam) => pipeline.render(scene, cam, sunDir, simT) });   // the town from another camera (src/recon.js snapshot)
     } catch (e) {
       console.error(e); errors.push({ module: 'pilot', message: String(e && e.stack || e) });
       status(`運転モデルを読み込めませんでした: ${e.message || e}`);

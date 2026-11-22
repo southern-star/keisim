@@ -1,0 +1,750 @@
+{
+ "tags": [
+  "mc14f",
+  "mc14c",
+  "mc14"
+ ],
+ "groups": {
+  "parked": {
+   "models": {
+    "mc14f": {
+     "routes": 20,
+     "not_done": 16,
+     "coll_or_red": 7,
+     "DS": 0.45854674355201724,
+     "collisions": {
+      "vehicle": 1,
+      "parked": 6
+     },
+     "red_only": 0,
+     "blocked": {
+      "model": 7,
+      "standoff": 2
+     }
+    },
+    "mc14c": {
+     "routes": 20,
+     "not_done": 18,
+     "coll_or_red": 6,
+     "DS": 0.37425671920904174,
+     "collisions": {
+      "parked": 5,
+      "vehicle": 1
+     },
+     "red_only": 0,
+     "blocked": {
+      "model": 10,
+      "standoff": 2
+     }
+    },
+    "mc14": {
+     "routes": 20,
+     "not_done": 16,
+     "coll_or_red": 4,
+     "DS": 0.43777023991407094,
+     "collisions": {
+      "parked": 3,
+      "vehicle": 1
+     },
+     "red_only": 0,
+     "blocked": {
+      "model": 10,
+      "standoff": 2
+     }
+    }
+   },
+   "pairs": {
+    "mc14f vs mc14c": {
+     "not_done_only": [
+      1,
+      3
+     ],
+     "not_done_p": 0.625,
+     "coll_or_red_only": [
+      3,
+      2
+     ],
+     "coll_or_red_p": 1.0
+    },
+    "mc14f vs mc14": {
+     "not_done_only": [
+      2,
+      2
+     ],
+     "not_done_p": 1.0,
+     "coll_or_red_only": [
+      3,
+      0
+     ],
+     "coll_or_red_p": 0.25
+    },
+    "mc14c vs mc14": {
+     "not_done_only": [
+      2,
+      0
+     ],
+     "not_done_p": 0.5,
+     "coll_or_red_only": [
+      3,
+      1
+     ],
+     "coll_or_red_p": 0.625
+    }
+   }
+  },
+  "crosswalks": {
+   "models": {
+    "mc14f": {
+     "routes": 20,
+     "not_done": 1,
+     "coll_or_red": 1,
+     "DS": 0.9414176415080725,
+     "collisions": {
+      "vehicle": 1
+     },
+     "red_only": 0,
+     "blocked": {}
+    },
+    "mc14c": {
+     "routes": 20,
+     "not_done": 1,
+     "coll_or_red": 0,
+     "DS": 0.9285322784389951,
+     "collisions": {},
+     "red_only": 0,
+     "blocked": {
+      "model": 1
+     }
+    },
+    "mc14": {
+     "routes": 20,
+     "not_done": 0,
+     "coll_or_red": 0,
+     "DS": 0.9549999999999998,
+     "collisions": {},
+     "red_only": 0,
+     "blocked": {}
+    }
+   },
+   "pairs": {
+    "mc14f vs mc14c": {
+     "not_done_only": [
+      1,
+      1
+     ],
+     "not_done_p": 1.0,
+     "coll_or_red_only": [
+      1,
+      0
+     ],
+     "coll_or_red_p": 1.0
+    },
+    "mc14f vs mc14": {
+     "not_done_only": [
+      1,
+      0
+     ],
+     "not_done_p": 1.0,
+     "coll_or_red_only": [
+      1,
+      0
+     ],
+     "coll_or_red_p": 1.0
+    },
+    "mc14c vs mc14": {
+     "not_done_only": [
+      1,
+      0
+     ],
+     "not_done_p": 1.0,
+     "coll_or_red_only": [
+      0,
+      0
+     ],
+     "coll_or_red_p": 1.0
+    }
+   }
+  },
+  "crosswalks_sub": {
+   "models": {
+    "mc14f": {
+     "routes": 20,
+     "not_done": 7,
+     "coll_or_red": 3,
+     "DS": 0.7544114078467519,
+     "collisions": {
+      "vehicle": 2
+     },
+     "red_only": 1,
+     "blocked": {
+      "standoff": 2,
+      "traffic": 1,
+      "model": 2
+     }
+    },
+    "mc14c": {
+     "routes": 20,
+     "not_done": 7,
+     "coll_or_red": 4,
+     "DS": 0.7727958310586517,
+     "collisions": {
+      "vehicle": 4
+     },
+     "red_only": 0,
+     "blocked": {
+      "traffic": 1,
+      "standoff": 2
+     }
+    },
+    "mc14": {
+     "routes": 20,
+     "not_done": 5,
+     "coll_or_red": 3,
+     "DS": 0.8082873757137685,
+     "collisions": {
+      "vehicle": 2,
+      "pedestrian": 1
+     },
+     "red_only": 0,
+     "blocked": {
+      "model": 1,
+      "traffic": 1
+     }
+    }
+   },
+   "pairs": {
+    "mc14f vs mc14c": {
+     "not_done_only": [
+      2,
+      2
+     ],
+     "not_done_p": 1.0,
+     "coll_or_red_only": [
+      1,
+      2
+     ],
+     "coll_or_red_p": 1.0
+    },
+    "mc14f vs mc14": {
+     "not_done_only": [
+      5,
+      3
+     ],
+     "not_done_p": 0.7265625,
+     "coll_or_red_only": [
+      2,
+      2
+     ],
+     "coll_or_red_p": 1.0
+    },
+    "mc14c vs mc14": {
+     "not_done_only": [
+      3,
+      1
+     ],
+     "not_done_p": 0.625,
+     "coll_or_red_only": [
+      2,
+      1
+     ],
+     "coll_or_red_p": 1.0
+    }
+   }
+  },
+  "bigjunction": {
+   "models": {
+    "mc14f": {
+     "routes": 20,
+     "not_done": 7,
+     "coll_or_red": 3,
+     "DS": 0.7450566876950703,
+     "collisions": {
+      "vehicle": 1,
+      "pedestrian": 1
+     },
+     "red_only": 1,
+     "blocked": {
+      "standoff": 4,
+      "traffic": 1
+     }
+    },
+    "mc14c": {
+     "routes": 20,
+     "not_done": 3,
+     "coll_or_red": 1,
+     "DS": 0.9112889011932243,
+     "collisions": {},
+     "red_only": 1,
+     "blocked": {
+      "standoff": 2,
+      "traffic": 1
+     }
+    },
+    "mc14": {
+     "routes": 20,
+     "not_done": 7,
+     "coll_or_red": 2,
+     "DS": 0.7992531837304709,
+     "collisions": {
+      "pedestrian": 1
+     },
+     "red_only": 1,
+     "blocked": {
+      "standoff": 6
+     }
+    }
+   },
+   "pairs": {
+    "mc14f vs mc14c": {
+     "not_done_only": [
+      5,
+      1
+     ],
+     "not_done_p": 0.21875,
+     "coll_or_red_only": [
+      2,
+      0
+     ],
+     "coll_or_red_p": 0.5
+    },
+    "mc14f vs mc14": {
+     "not_done_only": [
+      4,
+      4
+     ],
+     "not_done_p": 1.0,
+     "coll_or_red_only": [
+      3,
+      2
+     ],
+     "coll_or_red_p": 1.0
+    },
+    "mc14c vs mc14": {
+     "not_done_only": [
+      1,
+      5
+     ],
+     "not_done_p": 0.21875,
+     "coll_or_red_only": [
+      1,
+      2
+     ],
+     "coll_or_red_p": 1.0
+    }
+   }
+  },
+  "crosswalks_bk8": {
+   "models": {
+    "mc14f": {
+     "routes": 20,
+     "not_done": 3,
+     "coll_or_red": 3,
+     "DS": 0.8721550552768307,
+     "collisions": {
+      "vehicle": 2,
+      "bicycle": 1
+     },
+     "red_only": 0,
+     "blocked": {}
+    },
+    "mc14c": {
+     "routes": 20,
+     "not_done": 1,
+     "coll_or_red": 0,
+     "DS": 0.9468839859409623,
+     "collisions": {},
+     "red_only": 0,
+     "blocked": {
+      "model": 1
+     }
+    },
+    "mc14": {
+     "routes": 20,
+     "not_done": 1,
+     "coll_or_red": 0,
+     "DS": 0.9528042473160594,
+     "collisions": {},
+     "red_only": 0,
+     "blocked": {
+      "traffic": 1
+     }
+    }
+   },
+   "pairs": {
+    "mc14f vs mc14c": {
+     "not_done_only": [
+      3,
+      1
+     ],
+     "not_done_p": 0.625,
+     "coll_or_red_only": [
+      3,
+      0
+     ],
+     "coll_or_red_p": 0.25
+    },
+    "mc14f vs mc14": {
+     "not_done_only": [
+      3,
+      1
+     ],
+     "not_done_p": 0.625,
+     "coll_or_red_only": [
+      3,
+      0
+     ],
+     "coll_or_red_p": 0.25
+    },
+    "mc14c vs mc14": {
+     "not_done_only": [
+      1,
+      1
+     ],
+     "not_done_p": 1.0,
+     "coll_or_red_only": [
+      0,
+      0
+     ],
+     "coll_or_red_p": 1.0
+    }
+   }
+  },
+  "crosswalks_sub_bk8": {
+   "models": {
+    "mc14f": {
+     "routes": 20,
+     "not_done": 5,
+     "coll_or_red": 1,
+     "DS": 0.8223927213562595,
+     "collisions": {
+      "vehicle": 1
+     },
+     "red_only": 0,
+     "blocked": {
+      "traffic": 1,
+      "model": 2,
+      "standoff": 1
+     }
+    },
+    "mc14c": {
+     "routes": 20,
+     "not_done": 1,
+     "coll_or_red": 2,
+     "DS": 0.8913051360661195,
+     "collisions": {
+      "vehicle": 1
+     },
+     "red_only": 1,
+     "blocked": {}
+    },
+    "mc14": {
+     "routes": 20,
+     "not_done": 6,
+     "coll_or_red": 2,
+     "DS": 0.8239221049616061,
+     "collisions": {
+      "pedestrian": 1,
+      "vehicle": 1
+     },
+     "red_only": 0,
+     "blocked": {
+      "standoff": 1,
+      "model": 2,
+      "traffic": 1
+     }
+    }
+   },
+   "pairs": {
+    "mc14f vs mc14c": {
+     "not_done_only": [
+      4,
+      0
+     ],
+     "not_done_p": 0.125,
+     "coll_or_red_only": [
+      0,
+      1
+     ],
+     "coll_or_red_p": 1.0
+    },
+    "mc14f vs mc14": {
+     "not_done_only": [
+      2,
+      3
+     ],
+     "not_done_p": 1.0,
+     "coll_or_red_only": [
+      0,
+      1
+     ],
+     "coll_or_red_p": 1.0
+    },
+    "mc14c vs mc14": {
+     "not_done_only": [
+      0,
+      5
+     ],
+     "not_done_p": 0.0625,
+     "coll_or_red_only": [
+      1,
+      1
+     ],
+     "coll_or_red_p": 1.0
+    }
+   }
+  },
+  "bigjunction_bk8": {
+   "models": {
+    "mc14f": {
+     "routes": 20,
+     "not_done": 4,
+     "coll_or_red": 0,
+     "DS": 0.862325608895935,
+     "collisions": {},
+     "red_only": 0,
+     "blocked": {
+      "standoff": 3,
+      "model": 1
+     }
+    },
+    "mc14c": {
+     "routes": 20,
+     "not_done": 4,
+     "coll_or_red": 0,
+     "DS": 0.890623129911965,
+     "collisions": {},
+     "red_only": 0,
+     "blocked": {
+      "model": 3,
+      "standoff": 1
+     }
+    },
+    "mc14": {
+     "routes": 20,
+     "not_done": 8,
+     "coll_or_red": 1,
+     "DS": 0.7466565317253142,
+     "collisions": {
+      "vehicle": 1
+     },
+     "red_only": 0,
+     "blocked": {
+      "standoff": 6,
+      "model": 1
+     }
+    }
+   },
+   "pairs": {
+    "mc14f vs mc14c": {
+     "not_done_only": [
+      2,
+      2
+     ],
+     "not_done_p": 1.0,
+     "coll_or_red_only": [
+      0,
+      0
+     ],
+     "coll_or_red_p": 1.0
+    },
+    "mc14f vs mc14": {
+     "not_done_only": [
+      1,
+      5
+     ],
+     "not_done_p": 0.21875,
+     "coll_or_red_only": [
+      0,
+      1
+     ],
+     "coll_or_red_p": 1.0
+    },
+    "mc14c vs mc14": {
+     "not_done_only": [
+      1,
+      5
+     ],
+     "not_done_p": 0.21875,
+     "coll_or_red_only": [
+      0,
+      1
+     ],
+     "coll_or_red_p": 1.0
+    }
+   }
+  },
+  "sapporo": {
+   "models": {
+    "mc14f": {
+     "routes": 300,
+     "not_done": 5,
+     "coll_or_red": 4,
+     "DS": 0.9902971493086803,
+     "collisions": {
+      "pedestrian": 1,
+      "vehicle": 3
+     },
+     "red_only": 0,
+     "blocked": {
+      "standoff": 1
+     }
+    },
+    "mc14c": {
+     "routes": 300,
+     "not_done": 5,
+     "coll_or_red": 3,
+     "DS": 0.9886080570305376,
+     "collisions": {
+      "vehicle": 3
+     },
+     "red_only": 0,
+     "blocked": {
+      "model": 2
+     }
+    },
+    "mc14": {
+     "routes": 300,
+     "not_done": 2,
+     "coll_or_red": 0,
+     "DS": 0.9971375540383286,
+     "collisions": {},
+     "red_only": 0,
+     "blocked": {
+      "standoff": 2
+     }
+    }
+   },
+   "pairs": {
+    "mc14f vs mc14c": {
+     "not_done_only": [
+      4,
+      4
+     ],
+     "not_done_p": 1.0,
+     "coll_or_red_only": [
+      3,
+      2
+     ],
+     "coll_or_red_p": 1.0
+    },
+    "mc14f vs mc14": {
+     "not_done_only": [
+      5,
+      2
+     ],
+     "not_done_p": 0.453125,
+     "coll_or_red_only": [
+      4,
+      0
+     ],
+     "coll_or_red_p": 0.125
+    },
+    "mc14c vs mc14": {
+     "not_done_only": [
+      5,
+      2
+     ],
+     "not_done_p": 0.453125,
+     "coll_or_red_only": [
+      3,
+      0
+     ],
+     "coll_or_red_p": 0.25
+    }
+   }
+  },
+  "pooled": {
+   "models": {
+    "mc14f": {
+     "routes": 440,
+     "not_done": 48,
+     "coll_or_red": 22,
+     "DS": 0.9232165048073248,
+     "collisions": {
+      "vehicle": 11,
+      "parked": 6,
+      "pedestrian": 2,
+      "bicycle": 1
+     },
+     "red_only": 2,
+     "blocked": {
+      "model": 12,
+      "standoff": 13,
+      "traffic": 3
+     }
+    },
+    "mc14c": {
+     "routes": 440,
+     "not_done": 40,
+     "coll_or_red": 16,
+     "DS": 0.9338548562398648,
+     "collisions": {
+      "parked": 5,
+      "vehicle": 9
+     },
+     "red_only": 2,
+     "blocked": {
+      "model": 17,
+      "standoff": 7,
+      "traffic": 2
+     }
+    },
+    "mc14": {
+     "routes": 440,
+     "not_done": 45,
+     "coll_or_red": 12,
+     "DS": 0.9309434997243737,
+     "collisions": {
+      "parked": 3,
+      "vehicle": 5,
+      "pedestrian": 3
+     },
+     "red_only": 1,
+     "blocked": {
+      "model": 14,
+      "standoff": 17,
+      "traffic": 3
+     }
+    }
+   },
+   "pairs": {
+    "mc14f vs mc14c": {
+     "not_done_only": [
+      22,
+      14
+     ],
+     "not_done_p": 0.2429849540349096,
+     "coll_or_red_only": [
+      13,
+      7
+     ],
+     "coll_or_red_p": 0.26317596435546875
+    },
+    "mc14f vs mc14": {
+     "not_done_only": [
+      23,
+      20
+     ],
+     "not_done_p": 0.7607916425613439,
+     "coll_or_red_only": [
+      16,
+      6
+     ],
+     "coll_or_red_p": 0.052478790283203125
+    },
+    "mc14c vs mc14": {
+     "not_done_only": [
+      14,
+      19
+     ],
+     "not_done_p": 0.48685024166479707,
+     "coll_or_red_only": [
+      10,
+      6
+     ],
+     "coll_or_red_p": 0.454498291015625
+    }
+   }
+  }
+ }
+}

@@ -334,5 +334,7 @@ export function build(ctx) {
   // the gallery (src/gallery_cars.js) puts single detailed models side by side: { g, tails } of a level, and its lamps
   const detailModel = (level, kind, L, W, H, rgb, id = 0, opt = null) => makeDetail(kind, L, W, H, rgb, id, level, opt);
   const setBrake = (model, on) => { for (const m of model.tails) m.material = on ? mTailOn : mTail; };
-  ctx.services.actors = { update, reset, view, cars, peds, bikes, detailModel, setBrake };
+  /** A detailed car of its own (not one of the pool): its group, origin on the ground at the centre, facing +Z. */
+  const detail = (kind, L, W, H, rgb) => makeDetail(kind, L, W, H, rgb).g;
+  ctx.services.actors = { update, reset, view, detail, cars, peds, bikes, detailModel, setBrake };
 }

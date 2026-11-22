@@ -8,6 +8,9 @@ unchanged. Towns are exported on demand to web/.towns/ with scripts/export_town.
 
 Camera rigs (keisim/config.py CAMERA_RIGS): render_rig() draws every camera of the rig in one request. A cylindrical
 camera is drawn as the pinhole faces of KeiSim's CylinderRenderer and stitched with the same maps (keisim/render/rig.py).
+
+Depth (render_rig_depth, ReconView: docs/recon_view.md): KeiView draws the scene once more with every pixel's distance
+from the camera centre, as 16 bit codes (keisim/render/rays.py). Nothing changes for callers that do not ask for it.
 """
 from __future__ import annotations
 
@@ -26,6 +29,7 @@ import numpy as np
 
 from ..config import SEM, town_key
 from .camera import camera_pose
+from .rays import DepthStitcher
 from .rig import CylinderRenderer, cylinder_faces
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -62,8 +66,10 @@ def _vfov(cam_cfg):
 
 class KeiViewRenderer:
     def __init__(self, cam_cfg, quality="medium", gl="auto", node="node", max_dist=160.0, log_path=None, roads="plain",
-                 cameras=None, peds="plain"):
-        """cameras: every camera of the rig (EnvConfig.cameras, cam_cfg first), for render_rig()."""
+                 cameras=None, depth_stitch="planar", peds="plain"):
+        """cameras: every camera of the rig (EnvConfig.cameras, cam_cfg first), for render_rig().
+        depth_stitch: how render_rig_depth() puts a cylinder's depth together from its faces (rays.DepthStitcher).
+        peds: plain, or detail (the pedestrians of web/src/world/people.js near the camera)."""
         self.cfg = cam_cfg
         self.cameras = tuple(cameras) if cameras else (cam_cfg,)
         # what each camera draws: its pinhole shots, and the maps that stitch them (None: one plain image)
@@ -78,6 +84,8 @@ class KeiViewRenderer:
             else:
                 raise ValueError(f"unknown projection {c.projection!r}")
         self.rig = len(self.cameras) > 1 or self._shots[0][1] is not None
+        self.depth_stitch = depth_stitch
+        self._stitchers = {}                             # camera index -> DepthStitcher (made when first asked for)
         # the canvas: every shot fits in it (the front camera alone: its own size)
         self.W = max(s.width for shots, _ in self._shots for s in shots)
         self.H = max(s.height for shots, _ in self._shots for s in shots)
@@ -232,6 +240,14 @@ class KeiViewRenderer:
     def render_rig(self, pose, scene, t, want_rgb=True, want_seg=True, offset=None, which=None):
         """[(bgr, class ids or None)] of every camera of the rig (or of the cameras `which`), in one request: the same
         scene state, sky and shadows for all."""
+        return self._render_rig(pose, scene, t, want_seg, offset, which, False)[0]
+
+    def render_rig_depth(self, pose, scene, t, want_rgb=True, want_seg=True, offset=None, which=None):
+        """(render_rig's images, [depth codes uint16 HxW]): each camera's depth image of the same frame, pixel for
+        pixel with its labels (rays.py: decode_depth for metres, camera_rays for the lines of sight)."""
+        return self._render_rig(pose, scene, t, want_seg, offset, which, True)
+
+    def _render_rig(self, pose, scene, t, want_seg, offset, which, want_depth):
         which = range(len(self.cameras)) if which is None else which
         # the level rig places the sky dome and the sun's shadow box, and finds the actors
         C, R = camera_pose(replace(self.cameras[0], yaw_deg=0.0, pitch_deg=0.0), *pose, offset)
@@ -250,14 +266,26 @@ class KeiViewRenderer:
             req["bike"] = bike
         if self._new_episode:
             req["light"] = self._light
+        if want_depth:
+            req["depth"] = True
         self._new_episode = False
         r = self._call(req)
         self.last_ms = r.get("ms", 0.0)
         imgs = [self._decode(v) for v in r["views"]]
-        out = []
+        out, deps = [], []
         for ci, i0, n in spans:
             maps = self._shots[ci][1]
             rgbs, segs = [v[0] for v in imgs[i0:i0 + n]], [v[1] for v in imgs[i0:i0 + n]]
+            if want_depth:
+                faces = [np.frombuffer(base64.b64decode(v["dep"]), "<u2").reshape(v["h"], v["w"])[::-1]
+                         for v in r["views"][i0:i0 + n]]
+                if maps is None:
+                    deps.append(np.ascontiguousarray(faces[0]))
+                else:
+                    if ci not in self._stitchers:
+                        self._stitchers[ci] = DepthStitcher(self.cameras[ci], CylinderRenderer.FACES,
+                                                            CylinderRenderer.OVERSAMPLE, mode=self.depth_stitch)
+                    deps.append(self._stitchers[ci](faces))
             if maps is None:
                 out.append((rgbs[0], segs[0]))
                 continue
@@ -267,7 +295,7 @@ class KeiViewRenderer:
                 seg = cv2.remap(np.concatenate(segs, 1), *maps, cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT,
                                 borderValue=int(SEM["sky"]))
             out.append((rgb, seg))
-        return out
+        return out, deps
 
     def close(self):
         if getattr(self, "proc", None) is None or self.proc.poll() is not None:

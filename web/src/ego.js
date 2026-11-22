@@ -3,7 +3,8 @@
 // window.__ego(request) renders one KeiSim camera frame, or one frame of every camera of a rig, on demand (there is no
 // animation loop):
 // the anime-styled RGB image through the normal pipeline, plus an optional pixel-exact semantic
-// label image with the same classes as KeiSim's own renderer (keisim/config.py SEM_NAMES).
+// label image with the same classes as KeiSim's own renderer (keisim/config.py SEM_NAMES), and an optional depth
+// image of the same pixels (src/depth.js: 16 bit codes of the distance from the camera centre).
 import * as THREE from 'three';
 
 export const SEM = {
@@ -52,6 +53,50 @@ export function tagSemantics(ctx) {
   });
 }
 
+// ---------------------------------------------------------------------- shared by the label and the depth pass
+/** The glass materials (core/materials.js): the shader materials the label and depth passes draw. */
+export function glassMaterials(ctx) {
+  const out = new Set();
+  for (const [k, m] of ctx.mat.cache) if (k.startsWith('glass|')) out.add(m);
+  return out;
+}
+
+/** What the label and depth passes draw of the visible scene, and what they hide. */
+export function passObjects(scene, glassMats) {
+  const draw = [], hidden = [];
+  scene.traverseVisible((o) => {
+    if (!(o.isMesh || o.isPoints || o.isLine || o.isSprite)) return;
+    const src = Array.isArray(o.material) ? o.material[0] : o.material;
+    if (o.name === 'sky' || o.userData.labelSkip || !o.isMesh) { hidden.push(o); return; }
+    if (!o.userData.labelColors && src && (src.isShaderMaterial || src.isRawShaderMaterial) && !glassMats.has(src)) { hidden.push(o); return; }
+    draw.push(o);
+  });
+  return { draw, hidden };
+}
+
+const cutOf = (src) => (src && src.alphaTest > 0 && (src.map || src.alphaMap) ? (src.alphaMap || src.map) : null);
+
+/** Materials that cover the same pixels share this key. */
+export function flatKey(src) {
+  const cut = cutOf(src);
+  const po = src && src.polygonOffset ? `${src.polygonOffsetFactor},${src.polygonOffsetUnits}` : '';
+  return `${cut ? cut.uuid + '@' + src.alphaTest : ''}|${po}|${src ? src.side : THREE.FrontSide}|${src ? src.depthWrite : true}`;
+}
+
+/** An unlit material that covers the pixels src covers: its cut-out, polygon offset, side and depth write.
+ *  userData.alphaInMap: the cut-out is the alpha channel of src's colour map (ALPHA_IN_MAP in the fragment shader). */
+export function flatLike(src) {
+  const cut = cutOf(src);
+  const m = new THREE.MeshBasicMaterial({ side: src ? src.side : THREE.FrontSide, toneMapped: false, fog: false, depthWrite: src ? src.depthWrite : true });
+  if (src && src.polygonOffset) { m.polygonOffset = true; m.polygonOffsetFactor = src.polygonOffsetFactor; m.polygonOffsetUnits = src.polygonOffsetUnits; }
+  if (cut) {
+    m.alphaMap = cut; m.alphaTest = src.alphaTest;
+    if (!src.alphaMap) m.userData.alphaInMap = true;
+  }
+  return m;
+}
+export const ALPHA_IN_MAP = ['#include <alphamap_fragment>', 'diffuseColor.a *= texture2D( alphaMap, vAlphaMapUv ).a;'];
+
 function b64(u8) {
   let s = '';
   for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
@@ -69,29 +114,21 @@ export function installEgo({ ctx, renderer, scene, camera, pipeline, sky, sunDir
   const main = { w: W, h: H, face: false, pipe: pipeline, rt: labelTarget(W, H),
     rgba: new Uint8Array(W * H * 4), rgb: new Uint8Array(W * H * 3), sem: new Uint8Array(W * H) };
   const pipes = [pipeline];
-  const glassMats = new Set();
-  for (const [k, m] of ctx.mat.cache) if (k.startsWith('glass|')) glassMats.add(m);
+  const glassMats = glassMaterials(ctx);
 
   // ---------------------------------------------------------------- label materials
   const labelMats = new Map();
   const white = new THREE.MeshBasicMaterial({ toneMapped: false, fog: false });
   white.color.setRGB(1, 1, 1, THREE.LinearSRGBColorSpace);
   function labelMaterial(id, src) {
-    const cut = src && src.alphaTest > 0 && (src.map || src.alphaMap) ? (src.alphaMap || src.map) : null;
-    const po = src && src.polygonOffset ? `${src.polygonOffsetFactor},${src.polygonOffsetUnits}` : '';
-    const side = src ? src.side : THREE.FrontSide;
-    const key = `${id}|${cut ? cut.uuid + '@' + src.alphaTest : ''}|${po}|${side}|${src ? src.depthWrite : true}`;
+    const key = `${id}|${flatKey(src)}`;
     let m = labelMats.get(key);
     if (m) return m;
-    m = new THREE.MeshBasicMaterial({ side, toneMapped: false, fog: false, depthWrite: src ? src.depthWrite : true });
+    m = flatLike(src);                                       // src's cut-out, polygon offset, side and depth write
     m.color.setRGB(id / 255, 0, 0, THREE.LinearSRGBColorSpace);
-    if (po) { m.polygonOffset = true; m.polygonOffsetFactor = src.polygonOffsetFactor; m.polygonOffsetUnits = src.polygonOffsetUnits; }
-    if (cut) {
-      m.alphaMap = cut; m.alphaTest = src.alphaTest;
-      if (!src.alphaMap) {   // cut-out lives in the colour map's alpha channel
-        m.onBeforeCompile = (sh) => { sh.fragmentShader = sh.fragmentShader.replace('#include <alphamap_fragment>', 'diffuseColor.a *= texture2D( alphaMap, vAlphaMapUv ).a;'); };
-        m.customProgramCacheKey = () => 'label-alpha-a';
-      }
+    if (m.userData.alphaInMap) {   // cut-out lives in the colour map's alpha channel
+      m.onBeforeCompile = (sh) => { sh.fragmentShader = sh.fragmentShader.replace(...ALPHA_IN_MAP); };
+      m.customProgramCacheKey = () => 'label-alpha-a';
     }
     labelMats.set(key, m);
     return m;
@@ -100,16 +137,9 @@ export function installEgo({ ctx, renderer, scene, camera, pipeline, sky, sunDir
 
   /** Class ids (base64) of each shot [view, cam] (cam null: the camera as it is), with the materials swapped once. */
   function renderLabels(shots) {
-    const swaps = [], hidden = [];
-    scene.traverseVisible((o) => {
-      if (!(o.isMesh || o.isPoints || o.isLine || o.isSprite)) return;
-      const src = Array.isArray(o.material) ? o.material[0] : o.material;
-      if (o.name === 'sky' || o.userData.labelSkip || !o.isMesh) { hidden.push(o); return; }
-      if (o.userData.labelColors) { swaps.push([o, o.material, o.instanceColor]); return; }
-      if (src && (src.isShaderMaterial || src.isRawShaderMaterial) && !glassMats.has(src)) { hidden.push(o); return; }
-      const id = semOf(o) ?? SEM.building;
-      swaps.push([o, o.material, o.instanceColor, id]);
-    });
+    const { draw, hidden } = passObjects(scene, glassMats);     // the depth pass draws the same objects
+    const swaps = draw.map((o) => (o.userData.labelColors ? [o, o.material, o.instanceColor]
+      : [o, o.material, o.instanceColor, semOf(o) ?? SEM.building]));
     for (const o of hidden) o.visible = false;
     for (const [o, mat, ic, id] of swaps) {
       if (o.userData.labelColors) { o.material = white; o.instanceColor = o.userData.labelColors; continue; }
@@ -135,6 +165,22 @@ export function installEgo({ ctx, renderer, scene, camera, pipeline, sky, sunDir
     scene.background = bg; scene.fog = fog;
     for (const [o, mat, ic] of swaps) { o.material = mat; o.instanceColor = ic; }
     for (const o of hidden) o.visible = true;
+    return out;
+  }
+
+  // ---------------------------------------------------------------- depth
+  let depthPass = null;                                      // src/depth.js, loaded with the first q.depth
+  /** Depth codes (base64, uint16 little-endian) of each shot [view, cam], as renderLabels gives the class ids. */
+  function renderDepth(shots) {
+    depthPass.begin();
+    const out = shots.map(([v, cam]) => {
+      if (cam) placeCamera(cam, v.w, v.h);
+      if (!v.dep) { v.dep = new Uint16Array(v.w * v.h); v.dep8 = new Uint8Array(2 * v.w * v.h); }
+      depthPass.draw(camera, v.rt, v.w, v.h, v.rgba, v.dep);
+      for (let k = 0; k < v.dep.length; k++) { v.dep8[2 * k] = v.dep[k] & 255; v.dep8[2 * k + 1] = v.dep[k] >> 8; }
+      return b64(v.dep8);
+    });
+    depthPass.end();
     return out;
   }
 
@@ -212,8 +258,10 @@ export function installEgo({ ctx, renderer, scene, camera, pipeline, sky, sunDir
 
   /** Render one ego frame: the image of q.cam ({w, h, rgb, sem}), or with q.cams ([{pos, fwd, vfov, w, h, face}])
    *  one image of each camera of a rig ({views: [{w, h, rgb, sem}]}), all in the scene state, sky and shadows of
-   *  q.cam. Images are bottom-up rows (OpenGL order), RGB / class id. */
-  window.__ego = (q) => {
+   *  q.cam. Images are bottom-up rows (OpenGL order), RGB / class id. q.depth: every image also gets dep, its depth
+   *  codes (uint16 little-endian); without q.depth the reply is what it was before the depth pass existed, and
+   *  nothing of the depth pass is loaded. */
+  function render(q) {
     const t0 = performance.now();
     if (q.reset && ctx.services.actors) ctx.services.actors.reset();
     setState(q);
@@ -223,6 +271,7 @@ export function installEgo({ ctx, renderer, scene, camera, pipeline, sky, sunDir
       pipeline.render(scene, camera, sunDir, q.t || 0);
       out = { w: W, h: H, rgb: readRGB(main), sem: null, calls: renderer.info.render.calls };
       if (q.labels) out.sem = renderLabels([[main, null]])[0];
+      if (q.depth) out.dep = renderDepth([[main, null]])[0];
     } else {
       const shots = q.cams.map((c) => [viewOf(c.w, c.h, !!c.face), c]);
       const imgs = shots.map(([v, c], i) => {
@@ -236,9 +285,15 @@ export function installEgo({ ctx, renderer, scene, camera, pipeline, sky, sunDir
       ctx.wires.setResolution(pipeline.size.x, pipeline.size.y);
       out = { views: imgs, calls: renderer.info.render.calls };
       if (q.labels) renderLabels(shots).forEach((s, i) => { imgs[i].sem = s; });
+      if (q.depth) renderDepth(shots).forEach((s, i) => { imgs[i].dep = s; });
     }
     out.ms = +(performance.now() - t0).toFixed(2);
     return out;
+  }
+  window.__ego = (q) => {
+    if (!q.depth || depthPass) return render(q);
+    // the first depth image: load the depth pass, then answer (a promise this once; tools/ego_server.mjs awaits it)
+    return import('./depth.js').then(({ createDepthPass }) => { depthPass = createDepthPass({ renderer, scene, glassMats }); return render(q); });
   };
   window.__egoWarmup = () => {          // compile every program variant once (both passes)
     const c = T.views && T.views[0] ? T.views[0] : { x: 0, z: 0, yaw: 0 };

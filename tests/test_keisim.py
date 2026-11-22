@@ -2444,3 +2444,187 @@ def test_bike_defer_riders_keep_out_of_where_a_turning_car_will_drive():
     tr.giving_way[i] = True                                 # waiting at its wait point to give way: not there
     assert not (bk._turning(tr)[2] == i).any()
     tr.cfg.bike_defer = False
+
+
+def _hook_scene():
+    """A bike env after a few steps, every car far away, and a rider j on a track with 8 m ahead of it; place(c, ahead,
+    right, dyaw) puts car c's centre `ahead` m along the rider's track and `right` m right of it, turned dyaw."""
+    env = _bike_env(10.0)
+    env.reset(town_seed=5, episode_seed=2)
+    for _ in range(5):
+        env.step(env.expert_action())
+    tr, bk = env.world.traffic, env.world.bikes
+    road = next(l for l in env.world.town.lanes if l.kind == "road")
+    for c in range(tr.n):
+        tr.route[c], tr.ri[c], tr.s[c], tr.v[c] = [road.id], 0, 1.0, 0.0
+        tr.xy[c] = (1e4 + 20.0 * c, 1e4)
+    j = next(b for b in range(bk.n) if bk._cat[b] is not None and bk._cat_of(b).cum[-1] - bk.u[b] > 12.0)
+
+    def place(c, ahead, right, dyaw=0.0):
+        cat = bk._cat_of(j)
+        k = int(np.searchsorted(cat.cum, bk.u[j] + ahead))
+        h = cat.head[k]
+        tr.xy[c] = cat.pts[k] + np.array([np.sin(h), -np.cos(h)]) * (bk.lat[j] + right)
+        tr.yaw[c] = h + dyaw
+
+    def ride():
+        far = np.array([2e4, 2e4])
+        bk.step(0.1, env.world.t, tr, env.world.peds, far, 0.0, 0.0, (far[None], np.array([0.8])), None, None,
+                ego_left=False, ego_dims=(3.4, 1.48))
+    return env, tr, bk, j, place, ride
+
+
+def test_bike_hook_riders_see_the_sides_and_corners_of_the_cars():
+    """TrafficConfig.bike_hook (bicycles.car_side_points): the riders see points along every car's long sides, the
+    corners included, not just the three circles on its axis, which leave the corners and the sides between them
+    out. A rider following a car round a left turn on the inside missed its circles by 0.03 m and rode into its side
+    (巻き込み: bigjunction 3008/9801); a rider stood 0.04 m from the rear corner of a 7.5 m truck standing at an
+    angle, and the corner swung into it as the truck turned right (stress twophase 1012/9900)."""
+    from keisim.bicycles import SIDE_STEP, car_side_points
+    pts, own = car_side_points(np.array([[0.0, 0.0]]), np.array([0.0]), np.array([7.47]), np.array([2.12]))
+    assert (own == 0).all()
+    for x in (-3.735, 3.735):
+        for y in (-1.06, 1.06):
+            assert np.hypot(pts[:, 0] - x, pts[:, 1] - y).min() < 1e-9          # its four corners
+    for y in (-1.06, 1.06):
+        side = np.sort(pts[np.isclose(pts[:, 1], y), 0])
+        assert np.diff(side).max() <= SIDE_STEP + 1e-9
+    env, tr, bk, j, place, ride = _hook_scene()
+    lanes = env.world.town.lanes
+    left = next(l for l in lanes if l.kind == "conn" and l.turn == "left")
+    i = 0
+    tr.route[i] = [left.id] + list(left.succ[:1])
+    th = 0.3            # turned 0.3 rad away to the right, its rear left corner 0.4 m right of the rider's track
+    a = np.array([np.cos(-th), np.sin(-th)])
+    for length, width in ((4.4, 1.8), (7.47, 2.12)):       # (the car of 3008/9801, the truck of 1012/9900)
+        tr.dims[i, :2] = (length, width)
+        rl = np.array([-length / 2, width / 2])               # the rear left corner in the car's frame
+        corner = rl[0] * a + rl[1] * np.array([-a[1], a[0]])
+        for hook in (False, True):
+            tr.cfg.bike_hook = hook
+            place(i, 3.0 - corner[0], 0.4 + corner[1], -th)  # the car's centre: its corner 3 m ahead, 0.4 m right
+            bk.v[j] = 2.0
+            ride()
+            assert (int(bk.lead[j]) == i) == hook, (length, hook)
+    tr.cfg.bike_hook = False
+
+
+def test_bike_hook_riders_drop_back_when_too_close():
+    """TrafficConfig.bike_hook: a rider closer than its standing distance to the car ahead drops back, as in the
+    browser, instead of riding on at the car's speed (two riders following a car round a right turn rode into its
+    rear corner: stress roadtypes 1013/9900)."""
+    from keisim.bicycles import BIKE_LEN, S0_CAR
+    _, tr, bk, j, place, ride = _hook_scene()
+    i = 0
+    tr.dims[i, :2] = (3.4, 1.48)
+    out = {}
+    for hook in (False, True):
+        tr.cfg.bike_hook = hook
+        tr.v[i] = bk.v[j] = 2.0
+        for _ in range(10):                                 # 1 s, the car going on at 2 m/s
+            place(i, BIKE_LEN / 2 + S0_CAR / 2 + 1.7, 0.0)  # its rear bumper half the standing distance ahead
+            ride()
+            assert int(bk.lead[j]) == i
+        out[hook] = float(bk.v[j])
+    assert out[False] > 1.95 and out[True] < out[False] - 0.15
+    tr.cfg.bike_hook = False
+
+
+def test_bike_hook_new_riders_are_clear_of_the_cars():
+    """TrafficConfig.bike_hook (Bicycles._free): a new rider has all three of the bike's circles clear of the car
+    circles, not only its middle one (a rider put just behind a car reached into it: suburban 2009/9851); beside a
+    car, as before."""
+    from keisim.bicycles import BIKE_LEN, BIKE_R
+    _, tr, bk, *_ = _hook_scene()
+    cxy, cr = np.array([[0.0, 0.0]]), np.array([0.78])
+    far = np.array([[1e5, 1e5]])
+    behind = np.array([cr[0] + BIKE_R + 0.45 + 0.2, 0.0])  # its middle circle clear, its front one not
+    beside = np.array([0.0, cr[0] + BIKE_R + 0.45 + 0.05])
+    clear = np.array([cr[0] + BIKE_LEN / 2 + 0.45 + 0.05, 0.0])
+    for hook in (False, True):
+        tr.cfg.bike_hook = hook
+        for p, h, ok in ((behind, np.pi, not hook), (beside, 0.0, True), (clear, np.pi, True)):
+            assert bk._free(p, far, 1.0, cxy, cr, skip=np.arange(bk.n), h=h) == ok, (hook, p)
+    tr.cfg.bike_hook = False
+
+
+def test_bike_hook_riders_keep_behind_a_car_turning_right_their_way():
+    """TrafficConfig.bike_hook (the left-signal rule, SIGNAL_D): a car on a right turn's connector counts as one
+    signalling left for the riders leaving the junction by its exit road: they do not ride up beside it (a rider
+    turning right on the outside of a 7 m truck's turn came up beside its rear, and the rear swung out into it:
+    suburban 2004/9851). Not for a rider leaving by another road."""
+    env, tr, bk, j, place, ride = _hook_scene()
+    lanes = env.world.town.lanes
+    rights = [l for l in lanes if l.kind == "conn" and l.turn == "right" and l.succ and l.length > 8.0]
+    conn = rights[0]
+    other = next(l for l in rights if l.succ[0] != conn.succ[0] and l.succ[0] not in lanes[conn.succ[0]].siblings)
+    i = 0
+    tr.dims[i, :2] = (3.4, 1.48)
+    out = {}
+    for hook, car_conn in ((False, conn), (True, other), (True, conn)):
+        tr.cfg.bike_hook = hook
+        bk.route[j], bk.ri[j], bk._cat[j], bk.u[j] = [conn.id, conn.succ[0]], 0, None, 1.0
+        cat = bk._cat_of(j)
+        k = int(np.searchsorted(cat.cum, 1.0))
+        bk.xy[j], bk.yaw[j], bk.lat[j], bk.lane[j] = cat.pts[k], cat.head[k], 0.0, conn.id
+        tr.route[i], tr.ri[i] = [car_conn.id, car_conn.succ[0]], 0
+        bk.v[j] = 2.5
+        for _ in range(8):
+            tr.v[i] = 2.5
+            place(i, 0.5, 1.6)                 # beside it, its left side 0.86 m right of the rider's centre
+            ride()
+        out[(hook, car_conn.id)] = float(bk.v[j])
+    assert out[(True, conn.id)] < out[(False, conn.id)] - 0.4          # falls back behind it
+    assert abs(out[(True, other.id)] - out[(False, conn.id)]) < 0.1     # another exit: as before
+    tr.cfg.bike_hook = False
+
+
+def test_bike_hook_new_riders_start_no_faster_than_they_can_stop():
+    """TrafficConfig.bike_hook (Bicycles._try_add): a new rider just behind a car starts no faster than it can stop
+    for it (a rider put 2.3 m behind a car at 6 m/s rode into it as it stopped: stress roadtypes 1013/9901)."""
+    from keisim.bicycles import bike_lanes, bike_track
+    env, tr, bk, *_ = _hook_scene()
+    town = env.world.town
+    lid = max(bike_lanes(town), key=lambda l: town.lanes[l].length)
+    trk = bike_track(town, lid)
+    s = town.lanes[lid].length / 2
+    k = int(np.clip(np.searchsorted(trk.cum, trk.at(s)), 1, len(trk.cum) - 1))
+    p, h = trk.pts[k], trk.heading[k]
+    cxy = (p + 3.0 * np.array([np.cos(h), np.sin(h)]))[None]  # a car's circle 3 m ahead
+    cr = np.array([0.78])
+    bk.xy[:] += 1e5                                         # (the other riders out of the way)
+    far = np.array([[1e6, 1e6]])
+    v0 = {}
+    for hook in (False, True):
+        tr.cfg.bike_hook = hook
+        bk.rng = np.random.default_rng(1)
+        assert bk._try_add(lid, s, far, 1.0, cxy, cr)
+        v0[hook] = float(bk.v[-1])
+        bk.xy[-1] += 1e5
+    assert v0[False] > 1.0 and v0[True] < 0.5
+    tr.cfg.bike_hook = False
+
+
+def test_bike_hook_riders_pass_people_waiting_at_the_kerb_closely():
+    """TrafficConfig.bike_hook (MARGIN_KERB): someone standing at a zebra's kerb for their light is passed closely, as
+    the cars pass them. With the margin of someone walking along the road a rider just out of a left turn stood behind
+    a person waiting 0.8 m to its side; the truck turning behind it stood on the zebra, and the person, who set off at
+    their green, met the truck and walked back: none of the three moved again (bigjunction 3003/9801)."""
+    env, tr, bk, j, _, ride = _hook_scene()
+    pd = env.world.peds
+    assert pd.n
+    pd.xy[:] = (3e4, 3e4)                                   # (everyone else out of the way)
+    cat = bk._cat_of(j)
+    k = int(np.searchsorted(cat.cum, bk.u[j] + 1.8))
+    h = cat.head[k]
+    q = 0
+    pd.xy[q] = cat.pts[k] + np.array([np.sin(h), -np.cos(h)]) * (bk.lat[j] - 0.8)     # 1.8 m ahead, 0.8 m left
+    pd.vel[q] = 0.0
+    for mode in (pd.WALK, pd.WAIT):
+        pd.mode[q] = mode
+        for hook in (False, True):
+            tr.cfg.bike_hook = hook
+            bk.v[j] = 2.0
+            ride()
+            assert (int(bk.lead[j]) == -2 - q) == (mode == pd.WALK or not hook), (mode, hook)
+    tr.cfg.bike_hook = False
