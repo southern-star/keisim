@@ -268,5 +268,7 @@ export function build(ctx) {
   }
 
   ctx.add(root);
-  ctx.services.actors = { update, reset, view, cars, peds, bikes };
+  /** A detailed car of its own (not one of the pool): its group, origin on the ground at the centre, facing +Z. */
+  const detail = (kind, L, W, H, rgb) => makeDetail(kind, L, W, H, rgb).g;
+  ctx.services.actors = { update, reset, view, detail, cars, peds, bikes };
 }

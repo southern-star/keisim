@@ -278,18 +278,22 @@ FREEZE_REASONS = ("curve", "cruise")    # --freeze_reasons: the expert drives on
 
 
 def record(env, writer, rng, v_prob, weather_id, virtual_prob, offset=False, rgb=None, seg=None, prev=None,
-           stand_m=np.nan):
+           stand_m=np.nan, depth=False):
     """offset=False: draw a random virtual camera for this frame; else use the given one (None = real camera).
     rgb/seg: an already rendered frame for that camera; prev: its frame `--history` s earlier.
     stand_m: metres the ego has driven since it last stood (keipilot.data.stand_update).
-    Camera rigs: every camera of the rig is rendered on the same (displaced) rig and stored."""
+    Camera rigs: every camera of the rig is rendered on the same (displaced) rig and stored.
+    depth (--depth, KeiView): every camera's depth image is rendered with the frame and stored."""
     plan = env.plan
     e = env.world.ego
     if offset is False:
         offset = random_offset(rng, virtual_prob)
-    extra = ()
+    extra, dep = (), None
     if rgb is None:
-        views = env.render_cameras(offset=offset)
+        if depth:
+            views, dep = env.render_cameras_depth(offset=offset)
+        else:
+            views = env.render_cameras(offset=offset)
         (rgb, seg), extra = views[0], views[1:]
     if offset is None:
         path, tp = plan["path"], env.target_point()
@@ -297,7 +301,8 @@ def record(env, writer, rng, v_prob, weather_id, virtual_prob, offset=False, rgb
         vp = env.virtual_pose(offset)
         path = env.expert.path_local(env.route, env.s_ego, vp)
         tp = env.target_point(vp)
-    writer.add(rgb, seg, prev=prev, extra=extra, cmd=np.int8(env.command()), tp=np.asarray(tp, np.float32),
+    writer.add(rgb, seg, prev=prev, extra=extra, **({"dep": dep} if depth else {}),
+               cmd=np.int8(env.command()), tp=np.asarray(tp, np.float32),
                path=np.asarray(path, np.float32), speed=np.float32(plan["target_speed"]),
                tl=np.int8(plan["tl_state"]), v=np.float32(e.v), reason=np.int8(REASONS.get(plan["reason"], 0)),
                town=np.int32(env.town_seed), episode=np.int64(env.episode_seed), step=np.int32(env._step),
@@ -526,7 +531,7 @@ def worker(wid, args, quota, out_dir, counter):
                                prev=frames.get(env._step - hist), stand_m=stand)
                         n += 1
                 elif keep:
-                    record(env, writer, rng, None, weather_id, args.virtual_prob, stand_m=stand)
+                    record(env, writer, rng, None, weather_id, args.virtual_prob, stand_m=stand, depth=bool(args.depth))
                     n += 1
                 if writer.k != shards_saved:                        # a shard was written: its counts with it
                     shards_saved = writer.k
@@ -679,6 +684,9 @@ def parse_args(argv=None):
                          "group of parked cars on the route is within this many m ahead, or a child runs out "
                          "(parked_near)")
     ap.add_argument("--renderer", default="keisim", choices=["keisim", "keiview"], help="camera renderer")
+    ap.add_argument("--depth", type=int, default=0, choices=[0, 1],
+                    help="1: also store every camera's depth image (dep, dep_c1: 16 bit codes at the labels' resolution, "
+                         "keisim/render/rays.py; ReconView's depth head, docs/recon_view.md). KeiView only, no --history")
     ap.add_argument("--keiview_roads", default="plain", choices=["plain", "detail"],
                     help="KeiView road surface: plain (every KeiView dataset so far) or detail (markings, signs, ...)")
     ap.add_argument("--episodes_per_town", type=int, default=1, help="episodes before switching town")
@@ -720,6 +728,8 @@ def parse_args(argv=None):
             ap.error(f"--ckpt drives with the camera rig {checkpoint_rig(args.ckpt)}: pass it as --rig")
     if not 0.0 <= args.curve_scenes <= 1.0:
         ap.error("--curve_scenes is a probability")
+    if args.depth and (args.renderer != "keiview" or args.history > 0):
+        ap.error("--depth needs --renderer keiview (KeiSim's own renderer draws no depth) and no --history")
     return args
 
 
@@ -756,7 +766,8 @@ def main():
                **({"ramp_early_drop": 1} if args.ramp_early_drop else {}),
                **({"rig": args.rig, "cameras": [asdict(c) for c in set_camera_rig(EnvConfig(), args.rig).cameras]}
                   if args.rig != "front" else {}),
-               **({"curve_scenes": args.curve_scenes} if args.curve_scenes else {}))
+               **({"curve_scenes": args.curve_scenes} if args.curve_scenes else {}),
+               **({"depth": 1} if args.depth else {}))
     ctx = mp.get_context("spawn" if args.mode == "dagger" else "fork")
     counter = ctx.Value("i", 0)
     t0 = time.time()
