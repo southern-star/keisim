@@ -64,6 +64,7 @@ class ShardWriter:
     def _reset(self):
         self.jpg, self.seg, self.prev = [], [], []
         self.extra = []                  # per extra camera of the rig: ([jpg], [seg])
+        self.dep = []                    # per camera with a depth image: [png] (collect.py --depth)
         self.lab = {k: [] for k in LABEL_KEYS}
 
     def _jpg(self, rgb):
@@ -74,9 +75,27 @@ class ShardWriter:
         seg_small = cv2.resize(seg, (seg.shape[1] // 2, seg.shape[0] // 2), interpolation=cv2.INTER_NEAREST)
         return cv2.imencode(".png", seg_small, [cv2.IMWRITE_PNG_COMPRESSION, 3])[1].reshape(-1)
 
-    def add(self, rgb, seg, prev=None, extra=(), **labels):
+    @staticmethod
+    def _dep(dep):
+        """A depth image (uint16 codes, keisim/render/rays.py) at the labels' resolution and of the same pixels
+        (_seg: every other pixel of every other row), as a 16 bit PNG."""
+        small = cv2.resize(dep, (dep.shape[1] // 2, dep.shape[0] // 2), interpolation=cv2.INTER_NEAREST)
+        return cv2.imencode(".png", small, [cv2.IMWRITE_PNG_COMPRESSION, 3])[1].reshape(-1)
+
+    def add(self, rgb, seg, prev=None, extra=(), dep=None, **labels):
         """prev: the same camera's frame from `history` seconds earlier (multi-frame models), None if unknown.
-        extra: (rgb, seg) of the rig's other cameras (EnvConfig.extra_cameras), stored as jpg_c1, seg_c1, ..."""
+        extra: (rgb, seg) of the rig's other cameras (EnvConfig.extra_cameras), stored as jpg_c1, seg_c1, ...
+        dep: the depth images of every camera (uint16 codes, full resolution), stored as dep, dep_c1, ...; a shard
+        has them for all of its frames or for none."""
+        if dep is not None:
+            if not self.dep:
+                assert not self.jpg, "every frame of a shard has depth, or none"
+                self.dep = [[] for _ in dep]
+            assert len(dep) == len(self.dep) == 1 + len(extra), "a depth image per camera"
+            for dl, d in zip(self.dep, dep):
+                dl.append(self._dep(d))
+        else:
+            assert not self.dep, "every frame of a shard has depth, or none"
         self.jpg.append(self._jpg(rgb))
         self.seg.append(self._seg(seg))
         if not self.extra:
@@ -109,6 +128,10 @@ class ShardWriter:
             for key, xs in ((f"jpg_c{c}", jl), (f"seg_c{c}", sl)):
                 arrs[key] = np.concatenate(xs)
                 arrs[key + "_off"] = np.concatenate([[0], np.cumsum([len(x) for x in xs])]).astype(np.int64)
+        for c, xs in enumerate(self.dep):
+            key = "dep" if c == 0 else f"dep_c{c}"
+            arrs[key] = np.concatenate(xs)
+            arrs[key + "_off"] = np.concatenate([[0], np.cumsum([len(x) for x in xs])]).astype(np.int64)
         path = os.path.join(self.out_dir, f"{self.prefix}_{self.k:04d}.npz")
         np.savez(path, jpg=np.concatenate(self.jpg), jpg_off=jo, seg=np.concatenate(self.seg), seg_off=so, **arrs)
         self.total += len(self.jpg)
@@ -261,7 +284,9 @@ def load_shards(dirs, with_prev=True, mmap=False):
     with_prev=False skips the earlier frames (a quarter of the bytes) for single-frame models.
     Shards of a camera rig also hold jpg_c1 / seg_c1, ... (data["n_cams"] cameras); all shards need the same rig.
     mmap=True leaves the byte buffers on disk (ShardBytes, read through np.memmap): only the labels and offsets are
-    in memory, and the buffers are sliced with the same offsets, so the frames are the same as with mmap=False."""
+    in memory, and the buffers are sliced with the same offsets, so the frames are the same as with mmap=False.
+    Shards with depth images (collect.py --depth: dep, dep_c1, ...): data["depth"] is True and the buffers are
+    loaded when every shard has them; otherwise the data is what it is without them."""
     files = []
     dir_version, dir_renderer = {}, {}
     for d in dirs if isinstance(dirs, (list, tuple)) else [dirs]:
@@ -275,10 +300,16 @@ def load_shards(dirs, with_prev=True, mmap=False):
     if not files:
         raise FileNotFoundError(f"no shards in {dirs}")
     sizes, cams, where = [], [], []
+    depth = True
+    for f in files:
+        with zipfile.ZipFile(f) as zf:
+            depth = depth and "dep.npy" in zf.namelist()
     for f in files:
         with zipfile.ZipFile(f) as zf:
             cams.append(_n_cams(zf))
             keys = ("jpg", "seg", "jpg_prev") + tuple(f"{k}_c{c}" for c in range(1, cams[-1]) for k in ("jpg", "seg"))
+            if depth:
+                keys += ("dep",) + tuple(f"dep_c{c}" for c in range(1, cams[-1]))
             if mmap:
                 where.append([_member_data(f, zf, k) if (k != "jpg_prev" or with_prev) else (0, 0) for k in keys])
                 sizes.append(tuple(n for _, n in where[-1]))
@@ -288,6 +319,8 @@ def load_shards(dirs, with_prev=True, mmap=False):
     if any(c != n_cams for c in cams):
         raise ValueError(f"shards of different camera rigs ({sorted(set(cams))} cameras) in {dirs}")
     extra_keys = tuple(f"{k}_c{c}" for c in range(1, n_cams) for k in ("jpg", "seg"))
+    if depth:           # read like the extra cameras' buffers
+        extra_keys += ("dep",) + tuple(f"dep_c{c}" for c in range(1, n_cams))
     total = np.sum(np.array(sizes, np.int64), axis=0)
     buf_keys = ("jpg", "seg", "jpg_prev") + extra_keys
     if mmap:            # the shards' own bytes, in file order; filled below only with the offsets
@@ -342,6 +375,8 @@ def load_shards(dirs, with_prev=True, mmap=False):
         "jpg_prev": buf["jpg_prev"], "jpg_prev_off": np.concatenate(po + [np.array([pbase])]),
         "n_cams": n_cams,
     }
+    if depth:
+        data["depth"] = True
     for key in extra_keys:
         data[key], data[key + "_off"] = buf[key], np.concatenate(xo[key] + [np.array([xbase[key]])])
     for k in LABEL_KEYS + CF_KEYS + AUX_KEYS + SS_KEYS + MEM_KEYS:
@@ -438,7 +473,9 @@ class DrivingDataset(Dataset):
     look-aheads in s): fut_seg, the segmentation (every camera's) of the same episode's frame fut_dt s later, with
     fut_ok False and zeros where there is none; fut_v, the recorded ego speed (never a counterfactual one: the
     future frame was driven at it). Training frames take one of the look-aheads they have at random, the others
-    the one closest to FUTURE_VAL_S. Without it the samples are as they were."""
+    the one closest to FUTURE_VAL_S. Without it the samples are as they were.
+    Data with depth images (load_shards: data["depth"]): the samples also have "dep", the depth codes of every camera
+    at the labels' resolution ((h, w), rigs (K, h, w); int32, keisim/render/rays.py)."""
 
     def __init__(self, data, indices, train=True, cf_prob=0.0, speed_drop=0.0, cf_vmax=11.5, history_drop=0.0,
                  future=False):
@@ -535,6 +572,10 @@ class DrivingDataset(Dataset):
             fut = {"fut_seg": torch.from_numpy(fut_seg.astype(np.int64)), "fut_ok": torch.tensor(fut_ok),
                    "fut_dt": torch.tensor(fut_dt, dtype=torch.float32),
                    "fut_v": torch.tensor(float(d["v"][i]), dtype=torch.float32)}
+        if d.get("depth"):
+            keys = ["dep"] + [f"dep_c{c}" for c in range(1, n_cams)]
+            deps = [cv2.imdecode(d[k][d[k + "_off"][i]:d[k + "_off"][i + 1]], cv2.IMREAD_UNCHANGED) for k in keys]
+            fut["dep"] = torch.from_numpy((np.stack(deps) if n_cams > 1 else deps[0]).astype(np.int32))
         return {
             "img": torch.from_numpy(img),
             "seg": torch.from_numpy(seg.astype(np.int64)),

@@ -325,6 +325,31 @@ python tools/keiview_hash.py > after.txt                # 変更の前後で比�
 - **運転の出力は、3 通りとも公開の ONNX とビット単位で一致しました**（Python の onnxruntime で `path`、`speed_probs`、`tl_probs`、`seg`、`yield_tta` が `np.array_equal`）。G2 の 3 は通りそうです。ブラウザの onnxruntime-web では、まだ確かめていません。
 - GPU を使うのは、収集 2〜4 時間、評価用の札幌 2,000 フレームが約 10 分、学習 45〜90 分（幅を変えてやり直すなら、その回数ぶん）、評価と ONNX の計測が合わせて 30 分ほどで、**全部で 4〜7 時間**の見込みです。コードとテスト（収集、シャード、データセット、ヘッド、学習と評価のスクリプト、ONNX）は、GPU を使わずに先に書けます。
 
+## 5.2 S2 の関門 G2（走らせる前に確定、2026-11-22）
+
+収集と学習を走らせる前に、G2 の数字を設計の目安のまま確定しました。
+
+不変の検査（[tests/test_depth.py](../tests/test_depth.py)）:
+
+1. mc14 を深度ヘッドつきのモデルに読んだとき、`path`、`speed_logits`、`tl_logits`、`seg`、`yield_tta` が `torch.equal`。
+2. `train_depth.py` を回したあと、`aux_depth_` 以外の全テンソル（BatchNorm の統計とカウンタを含む）が元のチェックポイントと `torch.equal`。スクリプト自身も、学習の最後に毎回これを確かめます。
+3. 深度つきの ONNX の `path`、`speed_probs`、`tl_probs`、`seg`、`yield_tta` が、公開の `keipilot_mc.onnx` と `np.array_equal`。
+4. `--depth 0` の収集が main と同じ（`tools/episode_hash.py` と、シャードの全配列のバイト列）。
+
+精度（評価の町 `osm_sapporo` の KeiView 2,000 フレーム。学習には使わない。0〜30 m の AbsRel）:
+
+| クラス | 関門 |
+|---|---|
+| 道路・白線・歩道 | 3 % 未満 |
+| 建物 | 8 % 未満 |
+| 車 | 10 % 未満 |
+| 人 | 15 % 未満 |
+| 建物、車、人 | 基準（全部の画素が地面）を上回る |
+
+速さ: ブラウザの推論時間の増加が 20 % 以内。WASM と WebGPU のそれぞれで、公開の ONNX と交互に測って比べます。
+
+収集と学習の手順は [recon/s2.sh](recon/s2.sh) です。10 万フレームを 8 組（classic、twophase、roadtypes、suburban、bigjunction と横断歩道、自転車、路上駐車、札幌の学習用の 3 区画）に分け、仮想カメラなし（`--virtual_prob 0`）、深度つきで集めます。評価用は `osm_sapporo` の 2,000 フレームです。
+
 ## 6. 走らせ方
 
 ```bash

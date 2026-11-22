@@ -19,6 +19,9 @@ only holds plain tensor ops:
 outputs: path (1,10,2) ego-frame waypoints [m], speed_probs (1,12) over 0..11 m/s, tl_probs (1,4) red/yellow/green/none,
 seg (K,40,80) int64 class ids (quarter resolution, one per camera), and for models with the yield head
 (train.py --aux_weight) yield_tta (1,) [s], the input of keipilot.agent.YieldHold.
+Models with the depth head (train_depth.py; ReconView, docs/recon_view.md) add a last output, depth (K,80,160) float32:
+metres from each camera's centre along the lines of sight of its half-resolution pixels, 0 where there is no surface.
+The other outputs are computed as without it; a checkpoint without the head gives the file it gave before.
 """
 from __future__ import annotations
 
@@ -46,7 +49,12 @@ class Exported(nn.Module):
         if K > 1:                                   # (1,K,3,H,W): every camera through the same trunk
             img = img.flatten(0, 1)
         x = (img / 255.0 - m.mean) / m.std
-        x = m.stem(x)
+        depth = getattr(m, "aux_depth", False)
+        if depth:                                   # the stem's layers one by one, to keep its 1/2 features
+            half = m.stem[2](m.stem[1](m.stem[0](x)))
+            x = m.stem[3](half)
+        else:
+            x = m.stem(x)
         c1 = m.layer1(x)
         c2 = m.layer2(c1)
         c3 = m.layer3(c2)
@@ -74,6 +82,8 @@ class Exported(nn.Module):
         out = (path, m.speed_head(h[:, N_PATH]).softmax(-1), m.tl_head(h[:, N_PATH + 1]).softmax(-1), seg)
         if m.aux_yield:
             out += (m.aux_tta_head(h[:, N_PATH]).squeeze(-1),)
+        if depth:
+            out += (m.depth_metres(m._depth(p, half)),)
         return out
 
 
@@ -114,6 +124,7 @@ def main():
     if model.mem_input:
         inputs["stand"] = model.encode_mem(torch.tensor([3.0]))
     names = ["path", "speed_probs", "tl_probs", "seg"] + (["yield_tta"] if model.aux_yield else [])
+    names += ["depth"] if getattr(model, "aux_depth", False) else []
     if K > 1:
         print(f"camera rig {getattr(model, 'rig', '?')}: {K} images")
     os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
