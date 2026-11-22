@@ -38,5 +38,6 @@ echo S2_TRAIN_DONE
 # ---- 3. accuracy on the evaluation town, and the ONNX for the browser
 mkdir -p runs/eval/recon
 $PY tools/depth_eval.py $OUT/last.pt --data data/recon_depth_eval_sapporo --out runs/eval/recon/g2_depth_sapporo.json || exit 1
-[ -f web/models/keipilot_mc_depth.onnx ] || $PY scripts/export_onnx.py $OUT/last.pt web/models/keipilot_mc_depth.onnx || exit 1
+PYONNX=${PYONNX:-uv run --offline --with onnx --with onnxruntime python}
+[ -f web/models/keipilot_mc_depth.onnx ] || $PYONNX scripts/export_onnx.py $OUT/last.pt web/models/keipilot_mc_depth.onnx || exit 1
 echo S2_DONE

@@ -3,6 +3,7 @@
 
     python tools/depth_eval.py runs/keipilot_mc14d/last.pt --data data/recon_depth_eval_sapporo [--out runs/eval/recon/g2_depth.json]
     python tools/depth_eval.py --table runs/eval/recon/g2_depth.json
+    python tools/depth_eval.py --log runs/eval/recon/g2_train_log.json     (train_depth.py's log.json: the error per epoch)
 
 AbsRel = mean |pred - gt| / gt, d1 = share with max(pred / gt, gt / pred) < 1.25, RMSE of ln(pred / gt), over the
 labelled pixels within 80 m, per class group, distance band (0-10, 10-30, 30-80 m) and camera. Frames from a virtual
@@ -39,6 +40,14 @@ def table(r):
               f"{f(m['all'], 'd1')} | {'–' if m['all'] is None else format(m['all']['rmse_log'], '.3f')} |")
 
 
+def log_table(log):
+    """The validation error (AbsRel 0-30 m) after every epoch of scripts/train_depth.py."""
+    names = ("road", "building", "vehicle", "pedestrian")
+    print("| エポック | 学習の損失（ln の L1） | " + " | ".join(JA[g] for g in names) + " |\n|---:|---:|" + "---:|" * len(names))
+    for e in log:
+        print(f"| {e['epoch']} | {e['train']['depth_l1']:.4f} | " + " | ".join(f"{100 * e['val']['groups'][g]['0-30']['abs_rel']:.1f} %" for g in names) + " |")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("ckpt", nargs="?")
@@ -49,7 +58,11 @@ def main():
     ap.add_argument("--max_frames", type=int, default=0)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--table", default=None, help="print the table of this result and do not evaluate")
+    ap.add_argument("--log", default=None, help="print the per-epoch table of this training log and do not evaluate")
     args = ap.parse_args()
+    if args.log:
+        log_table(json.load(open(args.log)))
+        return
     if args.table:
         table(json.load(open(args.table)))
         return
