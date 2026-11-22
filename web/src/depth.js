@@ -3,54 +3,14 @@
 // / ln(1600)), 0: no surface; r is the straight distance from the camera centre, not z). It follows the rules of
 // the label pass of src/ego.js, so depth and label of a pixel are of the same object: the same objects hidden (sky,
 // labelSkip, everything that is not a mesh, shader materials other than glass), the same cut-outs, polygon offsets,
-// sides and depth writes. It needs no class ids, so it also runs in pilot mode (src/recon.js).
+// sides and depth writes (the helpers the two passes share are in src/ego.js, which every page loads; this module is
+// loaded only when a depth image is asked for). It needs no class ids, so it also runs in pilot mode (src/recon.js).
 import * as THREE from 'three';
+import { ALPHA_IN_MAP, flatKey, flatLike, passObjects } from './ego.js';
 import { DEPTH_FAR, DEPTH_NEAR } from './unproject.js';
 
-/** The glass materials (core/materials.js): the shader materials the label and depth passes draw. */
-export function glassMaterials(ctx) {
-  const out = new Set();
-  for (const [k, m] of ctx.mat.cache) if (k.startsWith('glass|')) out.add(m);
-  return out;
-}
-
-/** What the label and depth passes draw of the visible scene, and what they hide. */
-export function passObjects(scene, glassMats) {
-  const draw = [], hidden = [];
-  scene.traverseVisible((o) => {
-    if (!(o.isMesh || o.isPoints || o.isLine || o.isSprite)) return;
-    const src = Array.isArray(o.material) ? o.material[0] : o.material;
-    if (o.name === 'sky' || o.userData.labelSkip || !o.isMesh) { hidden.push(o); return; }
-    if (!o.userData.labelColors && src && (src.isShaderMaterial || src.isRawShaderMaterial) && !glassMats.has(src)) { hidden.push(o); return; }
-    draw.push(o);
-  });
-  return { draw, hidden };
-}
-
-const cutOf = (src) => (src && src.alphaTest > 0 && (src.map || src.alphaMap) ? (src.alphaMap || src.map) : null);
-
-/** Materials that cover the same pixels share this key. */
-export function flatKey(src) {
-  const cut = cutOf(src);
-  const po = src && src.polygonOffset ? `${src.polygonOffsetFactor},${src.polygonOffsetUnits}` : '';
-  return `${cut ? cut.uuid + '@' + src.alphaTest : ''}|${po}|${src ? src.side : THREE.FrontSide}|${src ? src.depthWrite : true}`;
-}
-
-/** An unlit material that covers the pixels src covers: its cut-out, polygon offset, side and depth write.
- *  userData.alphaInMap: the cut-out is the alpha channel of src's colour map (ALPHA_IN_MAP in the fragment shader). */
-export function flatLike(src) {
-  const cut = cutOf(src);
-  const m = new THREE.MeshBasicMaterial({ side: src ? src.side : THREE.FrontSide, toneMapped: false, fog: false, depthWrite: src ? src.depthWrite : true });
-  if (src && src.polygonOffset) { m.polygonOffset = true; m.polygonOffsetFactor = src.polygonOffsetFactor; m.polygonOffsetUnits = src.polygonOffsetUnits; }
-  if (cut) {
-    m.alphaMap = cut; m.alphaTest = src.alphaTest;
-    if (!src.alphaMap) m.userData.alphaInMap = true;
-  }
-  return m;
-}
-export const ALPHA_IN_MAP = ['#include <alphamap_fragment>', 'diffuseColor.a *= texture2D( alphaMap, vAlphaMapUv ).a;'];
-
-const ENCODE = /* glsl */`
+/** GLSL: the code of the distance to vDepthPos (view space) into gl_FragColor (high byte in R, low byte in G). */
+export const ENCODE = /* glsl */`
   { float r = length(vDepthPos);
     float q = r > ${DEPTH_FAR.toFixed(1)} ? 0.0 : clamp(floor(65535.0 * log(max(r, 1e-6) / ${DEPTH_NEAR}) / ${Math.log(DEPTH_FAR / DEPTH_NEAR)} + 0.5), 1.0, 65535.0);
     float hi = floor(q / 256.0);

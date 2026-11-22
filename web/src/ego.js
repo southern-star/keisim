@@ -6,7 +6,6 @@
 // label image with the same classes as KeiSim's own renderer (keisim/config.py SEM_NAMES), and an optional depth
 // image of the same pixels (src/depth.js: 16 bit codes of the distance from the camera centre).
 import * as THREE from 'three';
-import { ALPHA_IN_MAP, createDepthPass, flatKey, flatLike, glassMaterials, passObjects } from './depth.js';
 
 export const SEM = {
   sky: 0, road: 1, marking: 2, sidewalk: 3, terrain: 4, building: 5, vegetation: 6, pole: 7,
@@ -53,6 +52,50 @@ export function tagSemantics(ctx) {
     if (!has) o.userData.sem = MODULE_SEM[moduleOf(o)] ?? SEM.building;
   });
 }
+
+// ---------------------------------------------------------------------- shared by the label and the depth pass
+/** The glass materials (core/materials.js): the shader materials the label and depth passes draw. */
+export function glassMaterials(ctx) {
+  const out = new Set();
+  for (const [k, m] of ctx.mat.cache) if (k.startsWith('glass|')) out.add(m);
+  return out;
+}
+
+/** What the label and depth passes draw of the visible scene, and what they hide. */
+export function passObjects(scene, glassMats) {
+  const draw = [], hidden = [];
+  scene.traverseVisible((o) => {
+    if (!(o.isMesh || o.isPoints || o.isLine || o.isSprite)) return;
+    const src = Array.isArray(o.material) ? o.material[0] : o.material;
+    if (o.name === 'sky' || o.userData.labelSkip || !o.isMesh) { hidden.push(o); return; }
+    if (!o.userData.labelColors && src && (src.isShaderMaterial || src.isRawShaderMaterial) && !glassMats.has(src)) { hidden.push(o); return; }
+    draw.push(o);
+  });
+  return { draw, hidden };
+}
+
+const cutOf = (src) => (src && src.alphaTest > 0 && (src.map || src.alphaMap) ? (src.alphaMap || src.map) : null);
+
+/** Materials that cover the same pixels share this key. */
+export function flatKey(src) {
+  const cut = cutOf(src);
+  const po = src && src.polygonOffset ? `${src.polygonOffsetFactor},${src.polygonOffsetUnits}` : '';
+  return `${cut ? cut.uuid + '@' + src.alphaTest : ''}|${po}|${src ? src.side : THREE.FrontSide}|${src ? src.depthWrite : true}`;
+}
+
+/** An unlit material that covers the pixels src covers: its cut-out, polygon offset, side and depth write.
+ *  userData.alphaInMap: the cut-out is the alpha channel of src's colour map (ALPHA_IN_MAP in the fragment shader). */
+export function flatLike(src) {
+  const cut = cutOf(src);
+  const m = new THREE.MeshBasicMaterial({ side: src ? src.side : THREE.FrontSide, toneMapped: false, fog: false, depthWrite: src ? src.depthWrite : true });
+  if (src && src.polygonOffset) { m.polygonOffset = true; m.polygonOffsetFactor = src.polygonOffsetFactor; m.polygonOffsetUnits = src.polygonOffsetUnits; }
+  if (cut) {
+    m.alphaMap = cut; m.alphaTest = src.alphaTest;
+    if (!src.alphaMap) m.userData.alphaInMap = true;
+  }
+  return m;
+}
+export const ALPHA_IN_MAP = ['#include <alphamap_fragment>', 'diffuseColor.a *= texture2D( alphaMap, vAlphaMapUv ).a;'];
 
 function b64(u8) {
   let s = '';
@@ -126,7 +169,7 @@ export function installEgo({ ctx, renderer, scene, camera, pipeline, sky, sunDir
   }
 
   // ---------------------------------------------------------------- depth
-  const depthPass = createDepthPass({ renderer, scene, glassMats });
+  let depthPass = null;                                      // src/depth.js, loaded with the first q.depth
   /** Depth codes (base64, uint16 little-endian) of each shot [view, cam], as renderLabels gives the class ids. */
   function renderDepth(shots) {
     depthPass.begin();
@@ -216,8 +259,9 @@ export function installEgo({ ctx, renderer, scene, camera, pipeline, sky, sunDir
   /** Render one ego frame: the image of q.cam ({w, h, rgb, sem}), or with q.cams ([{pos, fwd, vfov, w, h, face}])
    *  one image of each camera of a rig ({views: [{w, h, rgb, sem}]}), all in the scene state, sky and shadows of
    *  q.cam. Images are bottom-up rows (OpenGL order), RGB / class id. q.depth: every image also gets dep, its depth
-   *  codes (uint16 little-endian); without q.depth the reply is what it was before the depth pass existed. */
-  window.__ego = (q) => {
+   *  codes (uint16 little-endian); without q.depth the reply is what it was before the depth pass existed, and
+   *  nothing of the depth pass is loaded. */
+  function render(q) {
     const t0 = performance.now();
     if (q.reset && ctx.services.actors) ctx.services.actors.reset();
     setState(q);
@@ -245,6 +289,11 @@ export function installEgo({ ctx, renderer, scene, camera, pipeline, sky, sunDir
     }
     out.ms = +(performance.now() - t0).toFixed(2);
     return out;
+  }
+  window.__ego = (q) => {
+    if (!q.depth || depthPass) return render(q);
+    // the first depth image: load the depth pass, then answer (a promise this once; tools/ego_server.mjs awaits it)
+    return import('./depth.js').then(({ createDepthPass }) => { depthPass = createDepthPass({ renderer, scene, glassMats }); return render(q); });
   };
   window.__egoWarmup = () => {          // compile every program variant once (both passes)
     const c = T.views && T.views[0] ? T.views[0] : { x: 0, z: 0, yaw: 0 };

@@ -19,6 +19,8 @@
 // 3 s with that plan, cyan while the car drives by the model's own target speed and red while a safety layer holds
 // the target lower (?overlay=swept: also the ground the car's body passes over in those 3 s; ?overlay=line: the
 // path as a line, as before the band). The geometry is src/overlay.js.
+// ?recon=oracle (multi-camera only; src/recon.js, loaded only then): a second view at the lower left, the town put
+// together in 3D from the model's two input images and their depth, drawn from behind and above the car (ReconView).
 // Keys: ← ↑ → turn at the next junction, Space pause, R back to the start, T other cars (or the buttons).
 import * as THREE from 'three';
 import { buildLanes, createNavigator } from './nav.js';
@@ -259,7 +261,7 @@ async function mainSession(ortDir, gpu, adapter, bytes) {
   throw new Error('推論エンジンを起動できませんでした');
 }
 
-export async function installPilot({ ctx, scene, renderer, camera, sunDir, modelPipeline, mainSize, params, status, progress = () => {} }) {
+export async function installPilot({ ctx, scene, renderer, camera, sunDir, modelPipeline, mainSize, renderMain, params, status, progress = () => {} }) {
   const T = ctx.town;
   const lanes = buildLanes(T.data);
   const nav = createNavigator(T.data, lanes);
@@ -367,6 +369,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     speedCtl.reset(); safety.reset();
     if (yieldHold) yieldHold.reset();
     if (trafficOn) traffic.reset(car);
+    if (recon) recon.reset();
     if (why) { resets++; flash(`${why} — 最初から走り直します`); console.warn(`[pilot] ${why}`); }
   }
   function flash(text) { msg = text; msgT = 4; }
@@ -534,6 +537,10 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
       rgb: new Uint8Array(cam.width * cam.height * 3), remap: cyl ? makeRemap(shots.length * w, h, cyl.mapX, cyl.mapY) : null };
   }) : null;
   const rigW = rig ? Math.max(...views.map((v) => v.w)) : CAM.W, rigH = rig ? Math.max(...views.map((v) => v.h)) : CAM.H;
+  // ReconView (?recon=oracle): with every model frame the same shots' depth, and from both a 3D view of its own
+  const reconMode = ['oracle'].includes(params.get('recon')) ? params.get('recon') : null;
+  if (reconMode && !rig) console.warn('[pilot] ?recon needs the multi-camera model (?pilot=mc)');
+  const recon = reconMode && rig ? (await import('./recon.js')).createRecon({ ctx, scene, renderer, rig, views, T, mode: reconMode, renderMain, params }) : null;
 
   /** Render one pinhole shot of a rig (src/rig.js) at the car into the canvas' lower left corner and read it back
    *  (shot j of camera v). */
@@ -605,9 +612,10 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
       modelPipe.render(scene, camera, sunDir, t);
       single.read(0, sync);
     }
+    const shot = recon ? recon.capture(car.x, car.y, car.yaw) : null;   // the same shots' depth, in the same scene state
     if (actors && actors.view) actors.view('main');
     renderer.setViewport(vp);
-    const at = { pose: { x: car.x, y: car.y, yaw: car.yaw }, v: car.v, inp: nav.inputs(), stand: standM, t, g: gen, t1: performance.now() };
+    const at = { pose: { x: car.x, y: car.y, yaw: car.yaw }, v: car.v, inp: nav.inputs(), stand: standM, t, g: gen, t1: performance.now(), shot };
     drawMs = at.t1 - t0;
     flightT = t;
     if (sync) { readMs = 0; finish(at); return; }
@@ -642,16 +650,16 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     }
     captureMs = drawMs + performance.now() - t0;            // the main thread's share of the model frame
     captured = { ...at.pose, t: at.t };
-    runModel(at.pose, at.v, at.inp, at.stand);
+    runModel(at.pose, at.v, at.inp, at.stand, at.shot);
   }
 
   let inflight = null;
-  function runModel(pose, v, inp, stand) {
-    inflight = infer(pose, v, inp, stand);
+  function runModel(pose, v, inp, stand, shot) {
+    inflight = infer(pose, v, inp, stand, shot);
     return inflight;
   }
 
-  async function infer(pose, v, inp, stand) {
+  async function infer(pose, v, inp, stand, shot) {
     busy = true;
     const g = gen;
     const c = Math.cos(pose.yaw), s = Math.sin(pose.yaw), dx = inp.tp[0] - pose.x, dy = inp.tp[1] - pose.y;
@@ -678,6 +686,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
         plan = { path: Array.from(out.path.data), raw, target: plan ? plan.target : raw, held: !!plan && plan.held, tl: Array.from(out.tl_probs.data), pose, inp,
           tta: out.yield_tta ? out.yield_tta.data[0] : undefined };
         drawSeg(out.seg.data);
+        if (recon) recon.frame(pose, shot, views.map((w) => w.rgb), out.seg.data);   // no new frame is drawn while this one is in flight
       }
     } catch (e) { console.error('[pilot] inference failed', e); }
     busy = false;
@@ -797,6 +806,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     }
     if (k < line.P.length - 1) for (const e of [L, R]) drawGround(e.slice(k), PLAN_H, fade(held ? BAND.held : BAND.edge, held ? 0.85 : 0.6), held ? 1.5 * lw : lw);
     drawn.horizon = roll.dist; drawn.held = held;
+    if (recon) recon.band(k > 0 ? [L.slice(0, k + 1), R.slice(0, k + 1)] : null, held);
   }
 
   function drawOverlay() {
@@ -853,6 +863,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
   function after() {
     drawOverlay();
     drawHud();
+    if (recon) recon.render(car);
   }
 
   reset();
@@ -864,6 +875,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     idle: () => inflight || Promise.resolve(),             // the inference in flight (tests: window.__pilotRun)
     traffic, lanes, nav,                                    // for tests (tools/pilot_check.mjs --yields)
     rig: rig ? rig.map((r) => r.cam.name) : null,
+    recon,                                                  // ReconView (?recon; tests: tools/recon_check.mjs), or null
     images: () => ins.map((i) => i.img),                   // the model's last input images (tests: tools/pilot_check.mjs)
     // the overlay's kind, or another one from now on ('line', 'band', 'swept': tests compare them in the same frame)
     overlay: (mode) => { if (OVERLAYS.includes(mode)) { overlayMode = mode; el.legend.innerHTML = LEGEND[mode]; } return overlayMode; },

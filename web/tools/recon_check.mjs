@@ -1,0 +1,137 @@
+// ReconView's fidelity (index.html?pilot=mc&recon=oracle; docs/recon_view.md): opens the page in headless Chrome,
+// drives `--sec` seconds through window.__pilotRun and, every `--every` seconds, compares the reconstruction with the
+// town itself from the chase camera (8 m behind the car, 4 m up; 320x160 depth images of the same model frame):
+//   coverage     of the town's pixels within 80 m, the share the reconstruction draws
+//   seen         the same over the pixels a camera of the rig sees in that frame (not covered there: seen, but not built)
+//   error        median |R - G| / G where both have a surface
+//   wrong        of the pixels the reconstruction draws, the share with no surface in the town or more than 25 % off:
+//                through (the town's surface is nearer: something the cameras did not see hides the place from the chase
+//                camera) + phantom (the town's is farther or none: a triangle stretched between two objects)
+//   node tools/recon_check.mjs [--town 1000] [--sec 60] [--every 2] [--recon oracle]
+//                              [--recon off]   (the page without ?recon: checks that it loads nothing of ReconView and
+//                              drives the same way; no measurements, the digest only)
+//                              [--out DIR]   (DIR/<town>.json: every measurement)
+//                              [--shotdir DIR]   (the pictures of --shots go here instead of --out)
+//                              [--shots 10,24,38 | all]   (at these seconds: DIR/<town>_t010_recon.png, the reconstruction
+//                              from the chase camera, _town.png, the town itself from there, _map.png, what every pixel of
+//                              the measurement is (green: drawn right, orange: through, red: phantom, blue: seen by a camera
+//                              but not drawn, grey: not seen), and _page.png, the page)
+//                              [--ground class|height|both] [--ratio 1.15] [--scaled 0]   (the view's triangle rule,
+//                              src/recon.js; every measurement also has the numbers of the rules in its VARIANTS)
+//                              [--traffic 0] [--cars N] [--bikes N] [--parked N] [--model models/x.onnx] [--tdir .towns]
+//                              [--ort node_modules/onnxruntime-web/dist/] [--ep webgpu|wasm] [--gl hw|soft]
+// The run starts from the town's time 0 with the car at its start, whatever time the page took to load (the page's own
+// frame loop drives on in real time until a test takes over), so the same arguments give the same run: the last line
+// is a digest of the car's poses and the model's input images at every measurement.
+// Needs models/keipilot_mc.onnx and network access to cdn.jsdelivr.net (onnxruntime-web, three.js).
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import puppeteer from 'puppeteer-core';
+import { createServer } from './serve.mjs';
+
+const args = {};
+for (let i = 2; i < process.argv.length; i++) { const a = process.argv[i]; if (a.startsWith('--')) { const k = a.slice(2); const v = process.argv[i + 1] && !process.argv[i + 1].startsWith('--') ? process.argv[++i] : '1'; args[k] = v; } }
+const town = args.town || '1000', sec = Number(args.sec || 60), every = Number(args.every || 2);
+const shots = args.shots === 'all' ? null : new Set((args.shots || '').split(',').filter(Boolean).map(Number));
+const exe = process.env.CHROME || ['/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser',
+  'C:/Program Files/Google/Chrome/Application/chrome.exe', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].find((p) => fs.existsSync(p));
+if (!exe) { console.error('No Chrome found - set CHROME=/path/to/browser'); process.exit(1); }
+const glFlags = args.gl === 'soft' ? ['--use-angle=swiftshader', '--enable-unsafe-swiftshader']
+  : ['--enable-gpu', '--enable-unsafe-webgpu',
+    ...(process.platform === 'linux' ? ['--use-angle=vulkan', '--enable-features=Vulkan', '--disable-vulkan-surface'] : [])];
+
+const server = createServer();
+await new Promise((r) => server.listen(0, '127.0.0.1', r));
+const browser = await puppeteer.launch({
+  executablePath: exe, headless: true,
+  args: [...glFlags, '--ignore-gpu-blocklist', '--no-sandbox', '--no-first-run', '--disable-extensions',
+    ...(process.env.HTTPS_PROXY ? [`--proxy-server=${process.env.HTTPS_PROXY}`] : []), '--window-size=1280,720'],
+  defaultViewport: { width: 1280, height: 720, deviceScaleFactor: 1 },
+  protocolTimeout: 900000,
+});
+let failed = false;
+try {
+  const page = await browser.newPage();
+  const off = args.recon === 'off', loaded = [];
+  page.on('request', (r) => { if (/\/(recon|depth|unproject)\.js|OrbitControls/.test(r.url())) loaded.push(r.url().split('/').pop()); });
+  page.on('console', (m) => { if (m.type() === 'error') console.log(`[error] ${m.text().slice(0, 300)}`); });
+  page.on('pageerror', (e) => { console.log(`[pageerror] ${e.message}`); failed = true; });
+  const q = new URLSearchParams({ pilot: 'mc', town, ...(off ? {} : { recon: args.recon || 'oracle' }), ...(args.ep ? { ep: args.ep } : {}), ...(args.tdir ? { tdir: args.tdir } : {}),
+    ...(args.traffic ? { traffic: args.traffic } : {}), ...(args.cars ? { cars: args.cars } : {}),
+    ...(args.bikes ? { bikes: args.bikes } : {}), ...(args.parked ? { parked: args.parked } : {}),
+    ...(args.model ? { model: args.model } : {}), ...(args.ort ? { ort: args.ort } : {}),
+    ...(args.ground ? { reconground: args.ground } : {}), ...(args.ratio ? { reconratio: args.ratio } : {}),
+    ...(args.scaled ? { reconscaled: args.scaled } : {}) });
+  const t0 = Date.now();
+  await page.goto(`http://127.0.0.1:${server.address().port}/index.html?${q}`, { waitUntil: 'load', timeout: 180000 });
+  await page.waitForFunction('window.__pilotRun || /読み込めません/.test(document.getElementById("loadlabel").textContent)', { timeout: 600000, polling: 200 });
+  if (!(await page.evaluate(() => !!window.__pilotRun))) throw new Error(await page.evaluate(() => document.getElementById('loadlabel').textContent));
+  if (!off && !(await page.evaluate(() => !!window.__pilot.recon))) throw new Error('the page has no ReconView (?recon)');
+  if (off) {
+    const has = await page.evaluate(() => !!window.__pilot.recon || !!document.getElementById('recon-view'));
+    console.log(`without ?recon: ${has || loaded.length ? `FAIL: ReconView is there (${loaded.join(', ')})` : 'no ReconView, none of its modules requested'}`);
+    if (has || loaded.length) failed = true;
+  }
+  // from the town's time 0 and the car's start: stop the page's own loop, let the model call in flight end, take one
+  // model frame (the following ones come every 0.1 s from this one on), then put time and car back
+  const backend = await page.evaluate(async () => {
+    await window.__pilotRun(0);
+    await window.__pilot.idle();
+    window.__pilot.capture(0, 1, true);
+    await window.__pilot.idle();
+    window.__sim(0);
+    window.__pilot.reset();
+    return window.__pilot.backend;
+  });
+  console.log(`town ${town}: ready in ${((Date.now() - t0) / 1000).toFixed(1)} s, backend ${backend}, recon ${args.recon || 'oracle'}`);
+  console.log('   t     s  km/h   coverage    seen  (seen share)   error   wrong = through + phantom    0-10 m  10-30 m  30-80 m (coverage)   triangles wide / narrow');
+  const pc = (a, b) => (b ? `${(100 * a / b).toFixed(1)} %`.padStart(7) : '      -');
+  const rows = [], digest = crypto.createHash('sha1');
+  if (args.out) fs.mkdirSync(args.out, { recursive: true });
+  for (let t = every; t <= sec + 1e-6; t += every) {
+    const r = await page.evaluate(async (d) => {
+      await window.__pilotRun(d - 0.1);
+      if (window.__pilot.recon) window.__pilot.recon.arm();  // measure at the next model frame
+      const s = await window.__pilotRun(0.1);
+      let h = 2166136261;                                   // FNV-1a of the model's input images
+      for (const im of window.__pilot.images()) for (let i = 0; i < im.data.length; i++) h = Math.imul(h ^ im.data[i], 16777619);
+      const rc = window.__pilot.recon;
+      return { s: s.s, car: s.car, resets: s.resets, images: h >>> 0, m: rc ? rc.measured() : null, ms: rc ? rc.state().buildMs : 0 };
+    }, every);
+    digest.update(JSON.stringify([r.car.x, r.car.y, r.car.yaw, r.car.v, r.images]));
+    const m = r.m;
+    rows.push({ t, s: r.s, car: r.car, images: r.images, resets: r.resets, ...(m || {}) });
+    if (!m) { console.log(`${t.toFixed(0).padStart(4)} ${r.s.toFixed(0).padStart(5)} ${(r.car.v * 3.6).toFixed(0).padStart(5)}   ${off ? '' : '(no measurement: the drive restarted)'}`); continue; }
+    console.log(`${t.toFixed(0).padStart(4)} ${r.s.toFixed(0).padStart(5)} ${(r.car.v * 3.6).toFixed(0).padStart(5)}   ${pc(m.covered, m.omega)} ${pc(m.seenCovered, m.seen)}  (${pc(m.seen, m.omega)})  ` +
+      `${m.error === null ? '    -' : `${(100 * m.error).toFixed(2)} %`.padStart(6)} ${pc(m.wrong, m.drawn)} ${pc(m.through, m.drawn)} ${pc(m.phantom, m.drawn)}       ${m.bands.map((b) => pc(b.covered, b.omega)).join('  ')}` +
+      `              ${m.stats.map((st) => st.triangles).join(' / ')}`);
+    if ((args.out || args.shotdir) && (shots === null ? !!args.shots : shots.has(t))) {
+      fs.mkdirSync(args.shotdir || args.out, { recursive: true });
+      const tag = `${args.shotdir || args.out}/${town}_t${String(Math.round(t)).padStart(3, '0')}`;
+      const png = await page.evaluate(() => window.__pilot.recon.snapshot(window.__pilot.state().car));
+      for (const k of ['recon', 'town', 'map']) if (png[k]) fs.writeFileSync(`${tag}_${k}.png`, Buffer.from(png[k].split(',')[1], 'base64'));
+      await page.evaluate(() => new Promise((res) => { window.__pilotRun(0).then(res); }));
+      await page.screenshot({ path: `${tag}_page.png` });
+    }
+  }
+  const sum = (k) => rows.reduce((a, r) => a + (r[k] || 0), 0);
+  const errs = rows.filter((r) => r.error != null).map((r) => r.error).sort((a, b) => a - b);
+  console.log(`all ${rows.filter((r) => r.omega).length} frames: coverage ${pc(sum('covered'), sum('omega'))}, seen ${pc(sum('seenCovered'), sum('seen'))} (seen share ${pc(sum('seen'), sum('omega'))}), ` +
+    `error (median of the frames) ${errs.length ? (100 * errs[errs.length >> 1]).toFixed(2) : '-'} %, wrong ${pc(sum('wrong'), sum('drawn'))} = through ${pc(sum('through'), sum('drawn'))} + phantom ${pc(sum('phantom'), sum('drawn'))}; ` +
+    `drawn right: ${pc(sum('good'), sum('omega'))} of all, ${pc(sum('seenGood'), sum('seen'))} of the seen`);
+  const vs = rows.find((r) => r.variants);
+  for (const name of vs ? Object.keys(vs.variants) : []) {
+    const v = (k) => rows.reduce((a, r) => a + (r.variants ? r.variants[name][k] : 0), 0);
+    console.log(`  rule ${name.padEnd(10)} coverage ${pc(v('covered'), v('omega'))}, seen ${pc(v('seenCovered'), v('seen'))}, wrong ${pc(v('wrong'), v('drawn'))} = through ${pc(v('through'), v('drawn'))} + phantom ${pc(v('phantom'), v('drawn'))}; drawn right ${pc(v('good'), v('omega'))} / ${pc(v('seenGood'), v('seen'))}`);
+  }
+  const hex = digest.digest('hex').slice(0, 16);
+  console.log(`digest ${hex}`);
+  if (args.out) fs.writeFileSync(`${args.out}/${town}.json`, JSON.stringify({ town, sec, every, recon: args.recon || 'oracle', backend, digest: hex,
+    args: Object.fromEntries(Object.entries(args).filter(([k]) => !['out', 'shots', 'shotdir'].includes(k))), rows }, null, 1));
+} catch (e) {
+  console.error(e); failed = true;
+} finally {
+  await browser.close();
+  server.close();
+}
+process.exit(failed ? 1 : 0);
