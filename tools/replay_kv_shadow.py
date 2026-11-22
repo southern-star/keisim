@@ -30,6 +30,7 @@ cfg.render_seg = False
 cfg.render_rgb = True
 cfg.renderer = "keiview"
 cfg.keiview_roads = "plain"
+cfg.keiview_peds = "plain"
 env = KeiEnv(cfg)
 agent = KeiPilotAgent(ckpt, brake_hold=True, red_hold=True)
 shadow = KeiPilotAgent(ckpt, brake_hold=True, red_hold=True)

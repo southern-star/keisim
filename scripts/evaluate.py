@@ -146,6 +146,7 @@ def run_route(job):
     cfg.render_rgb = args["agent"] == "model"
     cfg.renderer = args.get("renderer", "keisim")
     cfg.keiview_roads = args.get("keiview_roads", "plain")
+    cfg.keiview_peds = args.get("keiview_peds", "plain")
     cfg.expert_yield_visible = bool(args.get("yield_visible", False))
     cfg.expert_bike_visible = bool(args.get("bike_visible", False))
     cfg.expert_bike_sweep = bool(args.get("bike_sweep", False))
@@ -452,6 +453,8 @@ def main():
     ap.add_argument("--renderer", default="keisim", choices=["keisim", "keiview"], help="camera renderer")
     ap.add_argument("--keiview_roads", default="plain", choices=["plain", "detail"],
                     help="KeiView road surface: plain (as trained) or detail (markings, signs, ...)")
+    ap.add_argument("--keiview_peds", default="plain", choices=["plain", "detail"],
+                    help="KeiView pedestrians: plain (as trained) or detail (types, clothes, gait)")
     ap.add_argument("--out", default=None)
     ap.add_argument("--yield_visible", type=int, default=0, choices=[0, 1],
                     help="the expert gives way only to cars the camera sees (EnvConfig.expert_yield_visible): "
@@ -588,6 +591,7 @@ def main():
     suffix = ("_dense" if args.dense else "") + ("" if args.weather == "random" else f"_{args.weather}") + \
         ("_keiview" if args.renderer == "keiview" else "") + \
         ("_kvdetail" if args.renderer == "keiview" and args.keiview_roads == "detail" else "") + \
+        ("_kvpeds" if args.renderer == "keiview" and args.keiview_peds == "detail" else "") + \
         ("" if args.town_style == suite_style else f"_{args.town_style}") + \
         ("" if int(args.jam_fixes) == suite_fixes else ("_jamfix" if args.jam_fixes else "_nojamfix")) + \
         ("" if args.blocked_timeout == suite_timeout else f"_wait{args.blocked_timeout:.0f}") + \
@@ -618,7 +622,8 @@ def main():
         fail_dir = os.path.join("runs", "failures", f"{tag}_{args.suite}{suffix}{flen}")
     a = {"agent": args.agent, "ckpt": args.ckpt, "route_length": args.route_length, "weather": args.weather,
          "max_steps": args.max_steps, "videos": args.videos, "video_dir": args.video_dir, "tag": tag,
-         "dense": args.dense, "renderer": args.renderer, "keiview_roads": args.keiview_roads, "fail_dir": fail_dir,
+         "dense": args.dense, "renderer": args.renderer, "keiview_roads": args.keiview_roads, "keiview_peds": args.keiview_peds,
+         "fail_dir": fail_dir,
          "brake_hold": args.brake_hold,
          "yield_hold": None if args.yield_hold is None else (tuple(args.yield_hold) or True),
          "red_hold": args.red_hold, "town_style": args.town_style, "jam_fixes": bool(args.jam_fixes),

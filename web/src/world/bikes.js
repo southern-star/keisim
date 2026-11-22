@@ -55,14 +55,14 @@ function sweep(c, profile, a0, a1, n = 14) {
   return out;
 }
 /** A limb along +Y from the origin: a tapered tube with rounded joints at both ends. */
-function limb(len, r0, r1, seg = 8) {
+export function limb(len, r0, r1, seg = 8) {
   const g = [new THREE.CylinderGeometry(r1, r0, len, seg, 1, true).translate(0, len / 2, 0),
     new THREE.SphereGeometry(r0, seg, 6), new THREE.SphereGeometry(r1, seg, 6).translate(0, len, 0)];
   return g;
 }
 
 /** Collects coloured geometries per part; build(name) merges a part into one mesh. */
-function collector(mat) {
+export function collector(mat) {
   const parts = new Map(), col = new THREE.Color();
   function add(name, color, ...geos) {
     if (!parts.has(name)) parts.set(name, []);
@@ -89,7 +89,7 @@ function collector(mat) {
 }
 
 /** Two-bone reach from a to the target: the middle joint (bending towards pole) and the end the limb can reach. */
-function twoBone(a, tgt, l1, l2, pole, mid, end) {
+export function twoBone(a, tgt, l1, l2, pole, mid, end) {
   end.copy(tgt).sub(a);
   const dist = Math.max(end.length(), 1e-6);
   end.divideScalar(dist);                                  // e
@@ -100,7 +100,7 @@ function twoBone(a, tgt, l1, l2, pole, mid, end) {
   end.multiplyScalar(dc).add(a);
 }
 const _d = new THREE.Vector3();
-function setBone(o, a, b) { o.position.copy(a); o.quaternion.setFromUnitVectors(UP, _d.copy(b).sub(a).normalize()); }
+export function setBone(o, a, b) { o.position.copy(a); o.quaternion.setFromUnitVectors(UP, _d.copy(b).sub(a).normalize()); }
 
 /** The rider's measures (the same numbers as keisim/render/meshes.py bike_faces). */
 export function riderFit(kind, h) {

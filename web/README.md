@@ -108,6 +108,7 @@ KeiPilot の学習データ収集とクローズドループ評価で使いま�
   - 街の読み込みは約 8 秒です。
   - `--gl auto`（既定）は、GPU で WebGL2 が使えなければ SwiftShader（CPU 描画）に自動で切り替えます。`--gl hw` / `--gl soft` で固定もできます（Python 側は `EnvConfig.keiview_gl`）。
   - `--roads detail` で路面の作り込みを足して描きます（Python 側は `EnvConfig.keiview_roads`、スクリプトは `--keiview_roads detail`）。既定は `plain` です。
+  - `--peds detail` でカメラから 45 m 以内の歩行者を作り込んだモデル（`src/world/people.js`）で描きます（Python 側は `EnvConfig.keiview_peds`、スクリプトは `--keiview_peds detail`）。既定は `plain` です。
   - SwiftShader では 1 フレーム約 2 秒です（4 vCPU のクラウド VM で計測。並列にしてもほぼ伸びません）。動作確認やデモ動画 1 本向けです。
 - エゴモードでは信号の灯器を 2.2 倍で描きます（`?sigscale=` で変更可）。
   - 実寸（灯火 30 cm）だと、320×160 の画像では 30 m 先の灯火が 1〜2 ピクセルになり、見えないフレームが多いためです。

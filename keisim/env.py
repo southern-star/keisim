@@ -98,7 +98,7 @@ class KeiEnv:
         if self._keiview is None:
             from .render.keiview import KeiViewRenderer
             self._keiview = KeiViewRenderer(self.cfg.camera, quality=self.cfg.keiview_quality, gl=self.cfg.keiview_gl,
-                                            roads=self.cfg.keiview_roads, cameras=self.cfg.cameras)
+                                            roads=self.cfg.keiview_roads, peds=self.cfg.keiview_peds, cameras=self.cfg.cameras)
         return self._keiview
 
     def close(self):
