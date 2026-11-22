@@ -1,4 +1,4 @@
-"""The tables of ReconView's gate G3 (docs/recon_view.md 7; the runs of docs/recon/g3.sh):
+"""The tables of ReconView's gates G3 and G4 (docs/recon_view.md 7 and 8; the runs of docs/recon/g3.sh and g4.sh):
 
     python tools/recon_g3.py drive runs/eval/recon/g3_drive      (does ReconView change the drive?)
     python tools/recon_g3.py speed runs/eval/recon/g3_speed      (the page's speed in real time)
@@ -16,7 +16,8 @@ from collections import Counter
 import numpy as np
 
 TOWNS = {"1000": "town 1000", "1015-98782ab7": "town 1015（二段階の信号）", "osm_sapporo": "札幌（OSM）"}
-CFG = {"public": "recon なし、公開の ONNX", "off": "recon なし、深度つきの ONNX", "model": "`recon=model`", "split": "`recon=model&layout=split`"}
+CFG = {"public": "recon なし、公開の ONNX", "off": "recon なし、深度つきの ONNX", "model": "`recon=model`（蓄積なし）", "split": "`recon=model&layout=split`（蓄積なし）",
+       "accum": "`recon=model`（蓄積あり）"}
 REAL = re.compile(r"real time (\d+) s.*?: ([\d.]+) fps \(min ([\d.]+)\), ([\d.]+) model calls/s, inference ([\d.]+) ms, model frame ([\d.]+) ms"
                   r"(?:.*?mesh ([\d.]+) ms)?, town time x([\d.]+)")
 
@@ -36,7 +37,7 @@ def drive(d):
     print("| 町 | 設定 | 走行の要約値（回数） | recon なしと同じ要約値の走行 | 判定 |\n|---|---|---|---:|---|")
     for town in [t for t in TOWNS if t in runs] + [t for t in runs if t not in TOWNS]:
         base = Counter(x[1] for x in runs[town].get("off", []))
-        for cfg in ("off", "model", "split"):
+        for cfg in ("off", "model", "split", "accum"):
             rs = sorted(runs[town].get(cfg, []))
             if not rs:
                 continue
