@@ -5,6 +5,20 @@
 // image. What the cameras do not see stays dark: nothing is filled in.
 // recon=oracle: the depth is the town's own, drawn with the model frame by the depth pass (src/depth.js): the upper
 // bound of what a depth head can give, and the tool to measure with (tools/recon_check.mjs).
+// recon=model: the depth is the model's own output (the depth head: models/keipilot_mc_depth.onnx, K x 80 x 160 metres,
+// 0: no surface). No depth pass is drawn, except for a measurement: then the town's depth is drawn too, and the same
+// frame is measured with the model's depth and with the town's (the oracle).
+// Accumulation (on with recon=model, &accum=0 turns it off; &accum=1 turns it on with recon=oracle): the static
+// surfaces near the car stay when the car has passed them, so its sides and what is behind it fill in. Every ACCUM.step
+// metres (or ACCUM.turn of heading) the frame's meshes are kept as a keyframe: the triangles of the static classes
+// (the model's segmentation) between ACCUM.near and ACCUM.far metres, as they are (no fusion), the last ACCUM.n of
+// them. Their place is the car's own pose of that frame: the simulator's, without error; a real car would add its
+// odometry's drift here. Farther away only the current frame draws. Of a keyframe the view draws what is within
+// ACCUM.draw metres of its camera (10 m: fewer surfaces that are not there than with all 14 m, docs/recon_view.md
+// 8.6); &accumfar=METRES (up to ACCUM.far) and &accumkeep=noveg|nobuild|flat|ground (without vegetation, without
+// buildings, the ground and poles only, the ground only) choose something else.
+// &layout=split: the main view moves to the same chase camera and the two stand side by side, the town on the left
+// and what the model makes of it on the right (src/pilot.js places the camera and shows the car's body).
 // It has its own canvas and its own WebGLRenderer: the main renderer's GL state, which the model frames are read back
 // from, is not touched. Nothing here is loaded without ?recon.
 import * as THREE from 'three';
@@ -29,6 +43,18 @@ export const VARIANTS = { design: { ground: 'class', ratio: 1.15, scaled: false 
   heightflat: { ground: 'height', ratio: 1.15, scaled: false },
   height110: { ground: 'height', ratio: 1.10, scaled: true }, height125: { ground: 'height', ratio: 1.25, scaled: true } };
 const GROUND = new Set([1, 2, 3, 4]);   // road, marking, sidewalk, terrain (keisim SEM_NAMES): triangles of these stay
+// keyframes: when one is taken, what it keeps (road, marking, sidewalk, terrain, building, vegetation, pole: not the
+// sky, vehicles, pedestrians or the signals' lamps, which change), how many are held; ghost: a keyframe with this many
+// kept vertices inside a car's or a rider's box of that moment has kept a piece of it (counted, see state().accum);
+// far: how far from its camera a keyframe keeps surfaces, draw: how far the view draws them unless ?accumfar= says more
+export const ACCUM = { step: 2, turn: 10 * DEG, near: 3, far: 14, draw: 10, n: 40, ghost: 10 };
+const STATIC = new Set([1, 2, 3, 4, 5, 6, 7]);
+// What of a keyframe is drawn: the classes and how far from its camera [m]. 'all' is the design's (the view's default
+// is 'all10'); ?accumkeep= one of these names and ?accumfar=METRES choose the view's; measure() tries every one on the
+// same frame and keyframes.
+export const ACCUM_KEEP = { all: [1, 2, 3, 4, 5, 6, 7], noveg: [1, 2, 3, 4, 5, 7], nobuild: [1, 2, 3, 4, 6, 7], flat: [1, 2, 3, 4, 7], ground: [1, 2, 3, 4] };
+export const ACCUM_VARIANTS = { all: { keep: 'all', far: 14 }, noveg: { keep: 'noveg', far: 14 }, nobuild: { keep: 'nobuild', far: 14 },
+  flat: { keep: 'flat', far: 14 }, ground: { keep: 'ground', far: 14 }, all10: { keep: 'all', far: 10 }, flat10: { keep: 'flat', far: 10 } };
 const NARROW_MARGIN = 4;            // wide triangles inside the narrow camera's image, this many pixels from its edge, go
 const STEP = 2;                     // the depth image's resolution: every other pixel, as the shards keep it
 const EGO = { L: 4.5, W: 1.85, H: 1.5 };
@@ -39,13 +65,16 @@ const GROUND_H = [-0.3, 0.35];      // heights [m] a ground vertex may have (Kei
 /** The angle between neighbouring pixels at the image centre [rad]. */
 const pixelAngle = (cam) => (cam.projection === 'cylindrical' ? cam.fov * DEG / cam.width : 2 * Math.tan(cam.fov * DEG / 2) / cam.width);
 
-export function createRecon({ ctx, scene, renderer, rig, views, T, mode, renderMain, params }) {
+export function createRecon({ ctx, scene, renderer, rig, views, T, mode, split = false, renderMain, params }) {
   // The triangle rules. ground: what counts as ground for the triangles that are kept whatever their depths ('class':
   // the model's class, 'height': within GROUND_H of the flat ground, 'both'); ratio: the wide camera's edge ratio;
   // scaled: a camera with finer pixels gets a smaller ratio (the same steepest surface that is still drawn).
   // ?reconground=, ?reconratio=, ?reconscaled=0 change the view's rule; measure() tries VARIANTS on the same frame.
   const rule = { ground: ['class', 'height', 'both'].includes(params.get('reconground')) ? params.get('reconground') : RULE.ground,
     ratio: Number(params.get('reconratio')) || RULE.ratio, scaled: params.has('reconscaled') ? params.get('reconscaled') !== '0' : RULE.scaled };
+  const accumOn = params.has('accum') ? params.get('accum') !== '0' : mode === 'model';
+  const kfView = { keep: ACCUM_KEEP[params.get('accumkeep')] ? params.get('accumkeep') : 'all',
+    far: Math.min(ACCUM.far, Math.max(ACCUM.near, Number(params.get('accumfar')) || ACCUM.draw)) };
   const wideAngle = Math.max(...rig.map(({ cam }) => pixelAngle(cam)));
   const table = depthTable();
   const depthPass = createDepthPass({ renderer, scene, glassMats: glassMaterials(ctx) });
@@ -77,8 +106,11 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, renderM
   let armed = false;
 
   /** With the model frame, in its scene state (src/pilot.js capture): each camera's depth image (uint16 codes,
-   *  320x160, top row first) for the car at (x, y, yaw); armed (measure): also the town from the chase camera. */
-  function capture(x, y, yaw) {
+   *  320x160, top row first) for the car at (x, y, yaw); armed (measure): also the town from the chase camera.
+   *  recon=model draws nothing here unless armed. boxes: the cars and riders of this moment ([[x, y, yaw, L, W, H],
+   *  ...]; they come back with the shot, for the keyframes' ghost count). */
+  function capture(x, y, yaw, boxes = null) {
+    if (mode === 'model' && !armed) return { dep: null, town: null, ms: 0, boxes };
     const t0 = performance.now();
     depthPass.begin();
     const dep = caps.map((c) => {
@@ -98,7 +130,7 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, renderM
       armed = false;
     }
     depthPass.end();
-    return { dep, town, ms: performance.now() - t0 };
+    return { dep, town, ms: performance.now() - t0, boxes };
   }
 
   // ---------------------------------------------------------------- the view
@@ -108,8 +140,11 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, renderM
   const label = document.createElement('div');
   label.id = 'recon-label';
   label.style.cssText = 'position: fixed; z-index: 5; padding: 3px 8px; border-radius: 6px 0 6px 0; background: rgba(20, 22, 34, .72); color: #c9cbe0; font: 500 11px/1.5 sans-serif; pointer-events: none;';
-  label.textContent = 'ReconView · モデルのカメラ 2 台の画像から組み立てた街（深度は正解）';
+  label.textContent = (mode === 'model' ? 'ReconView · モデルの見た世界（カメラ 2 台の画像とモデルの深度から組み立てた街）'
+    : 'ReconView · モデルのカメラ 2 台の画像から組み立てた街（深度は正解）') + (accumOn ? ' · 通った場所は残す' : '');
   document.body.append(canvas, label);
+  const townLabel = split ? label.cloneNode() : null;       // split: the main view's caption
+  if (townLabel) { townLabel.id = 'recon-town-label'; townLabel.textContent = '実際の街（同じカメラから）'; document.body.append(townLabel); }
   const rr = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
   rr.outputColorSpace = THREE.SRGBColorSpace;
   rr.toneMapping = THREE.NoToneMapping;
@@ -153,6 +188,8 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, renderM
   const bandMat = new THREE.MeshBasicMaterial({ color: 0x28dcff, transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false });
   const bandMesh = new THREE.Mesh(bandGeo, bandMat);
   bandMesh.frustumCulled = false; bandMesh.visible = false;
+  // over the keyframes' ground, whose height is a few centimetres off with the model's depth: the band is not hidden
+  if (accumOn) { bandMat.depthTest = false; bandMesh.renderOrder = 10; }
   world.add(bandMesh);
   /** The plan's band: its left and right edges (KeiSim points [[x, y], ...]) and whether a safety layer holds the
    *  target (red); null: no band. */
@@ -201,8 +238,110 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, renderM
       }
     }
     return { cam, w, h, n, geo, position, index, tex, pixels, mesh, rays, inOther, r: new Float64Array(n), P: new Float64Array(3 * n),
-      ok: new Uint8Array(n), gClass: new Uint8Array(n), gHeight: new Uint8Array(n) };
+      ok: new Uint8Array(n), gClass: new Uint8Array(n), gHeight: new Uint8Array(n), cls: new Uint8Array(n), uvAttr: geo.getAttribute('uv') };
   });
+
+  // ---------------------------------------------------------------- keyframes (accumulation)
+  const kfGroup = new THREE.Group();
+  world.add(kfGroup);
+  const ring = [];                                            // up to ACCUM.n slots, each {seq, meshes: one per camera}
+  const acc = { made: 0, vertices: 0, ghostVertices: 0, ghostKeyframes: 0 };
+  let lastKf = null, kfSeq = 0;
+  function slot() {
+    if (ring.length < ACCUM.n) {
+      const sl = { seq: 0, meshes: meshes.map((m) => {
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(3 * m.n), 3));
+        geo.setAttribute('uv', m.uvAttr);
+        geo.setIndex(new THREE.BufferAttribute(new Uint16Array(m.index.array.length), 1));
+        geo.setDrawRange(0, 0);
+        const tex = new THREE.DataTexture(new Uint8Array(m.pixels.length), m.cam.width, m.cam.height, THREE.RGBAFormat);
+        tex.colorSpace = THREE.SRGBColorSpace; tex.magFilter = THREE.LinearFilter; tex.minFilter = THREE.LinearFilter;
+        // behind the current frame's meshes where the two are the same surface, and newer keyframes before older ones
+        const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide, toneMapped: false,
+          polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 50 }));
+        mesh.frustumCulled = false; mesh.renderOrder = -1;
+        kfGroup.add(mesh);
+        // every static triangle of the frame within ACCUM.far, its vertices' classes and distances: what is drawn of
+        // them is chosen afterwards (show)
+        return { geo, tex, mesh, full: new Uint16Array(m.index.array.length), count: 0, cls: new Uint8Array(m.n), r: new Float32Array(m.n) };
+      }) };
+      ring.push(sl);
+      return sl;
+    }
+    return ring.reduce((a, b) => (a.seq < b.seq ? a : b));    // the oldest
+  }
+  /** Draw of the keyframes (all of them, or these slots; camera k or every camera) the triangles of a variant: the
+   *  classes of ACCUM_KEEP[v.keep], no farther than v.far from the keyframe's camera. */
+  function show(v, slots = ring, k = -1) {
+    const set = new Set(ACCUM_KEEP[v.keep]);
+    for (const sl of slots) {
+      sl.meshes.forEach((km, j) => {
+        if (k >= 0 && j !== k) return;
+        const idx = km.geo.index.array, src = km.full, n = sl.seq > 0 ? km.count : 0;
+        const ok = (x) => set.has(km.cls[x]) && km.r[x] <= v.far;
+        let c = 0;
+        for (let i = 0; i < n; i += 3) {
+          const a = src[i], b = src[i + 1], d = src[i + 2];
+          if (ok(a) && ok(b) && ok(d)) { idx[c++] = a; idx[c++] = b; idx[c++] = d; }
+        }
+        km.geo.index.needsUpdate = true;
+        km.geo.setDrawRange(0, c);
+      });
+    }
+  }
+
+  /** Keep the current frame's static triangles near the car as a keyframe when the car has moved on enough. */
+  function keyframe(pose, boxes) {
+    if (lastKf) {
+      let d = Math.abs(pose.yaw - lastKf.yaw) % (2 * Math.PI);
+      d = Math.min(d, 2 * Math.PI - d);
+      if (Math.hypot(pose.x - lastKf.x, pose.y - lastKf.y) < ACCUM.step && d < ACCUM.turn) return;
+    }
+    lastKf = { ...pose };
+    const sl = slot();
+    sl.seq = ++kfSeq;
+    let kept = 0, ghost = 0;
+    meshes.forEach((m, k) => {
+      const dst = sl.meshes[k], src = m.index.array, idx = dst.full, count = m.geo.drawRange.count;
+      const keep = (v) => STATIC.has(m.cls[v]) && m.r[v] >= ACCUM.near && m.r[v] <= ACCUM.far;
+      const used = new Uint8Array(m.n);
+      let c = 0;
+      for (let i = 0; i < count; i += 3) {
+        const a = src[i], b = src[i + 1], d = src[i + 2];
+        if (!(keep(a) && keep(b) && keep(d))) continue;
+        idx[c++] = a; idx[c++] = b; idx[c++] = d;
+        used[a] = used[b] = used[d] = 1;
+      }
+      dst.count = c;
+      dst.cls.set(m.cls); dst.r.set(m.r);
+      dst.geo.attributes.position.array.set(m.position.array);
+      dst.geo.attributes.position.needsUpdate = true;
+      show(kfView, [sl], k);
+      dst.tex.image.data.set(m.pixels);
+      dst.tex.needsUpdate = true;
+      for (let v = 0; v < m.n; v++) {
+        if (!used[v]) continue;
+        kept++;
+        const px = m.P[3 * v], py = m.P[3 * v + 1], pz = m.P[3 * v + 2];
+        if (pz < 0.25 || !boxes) continue;
+        for (const [bx, by, byaw, L, W, H] of boxes) {
+          const dx = px - bx, dy = py - by, cb = Math.cos(byaw), sb = Math.sin(byaw);
+          if (pz <= H + 0.1 && Math.abs(cb * dx + sb * dy) <= L / 2 + 0.1 && Math.abs(-sb * dx + cb * dy) <= W / 2 + 0.1) { ghost++; break; }
+        }
+      }
+    });
+    const order = ring.slice().sort((a, b) => b.seq - a.seq);  // newest first
+    order.forEach((s2, rank) => { for (const km of s2.meshes) km.mesh.material.polygonOffsetUnits = 50 + 10 * rank; });
+    acc.made++; acc.vertices += kept; acc.ghostVertices += ghost;
+    if (ghost >= ACCUM.ghost) acc.ghostKeyframes++;
+  }
+  function dropKeyframes() {
+    for (const sl of ring) { sl.seq = 0; for (const km of sl.meshes) { km.count = 0; km.geo.setDrawRange(0, 0); } }
+    lastKf = null; kfSeq = 0;
+    acc.made = 0; acc.vertices = 0; acc.ghostVertices = 0; acc.ghostKeyframes = 0;
+  }
+  const keyframes = () => ring.filter((sl) => sl.seq > 0).length;
 
   let frames = 0, last = null, stats = null, buildMs = 0;
   /** The triangles of every mesh by a rule; returns the counts per camera. */
@@ -237,18 +376,16 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, renderM
     });
   }
 
-  /** A model frame: the pose it was drawn at ({x, y, yaw}), each camera's depth codes (320x160) and input image (RGB,
-   *  3 bytes per pixel, top row first), and the model's segmentation of it (K x 40 x 80 class ids). */
-  function frame(pose, shot, rgbs, seg) {
-    const t0 = performance.now();
+  /** The vertices of every mesh from a frame's depth: its distances [m] (src.depth: the model's K x h x w metres;
+   *  src.dep: each camera's depth codes at 320x160), placed from the frame's pose. */
+  function place(pose, src) {
     meshes.forEach((m, k) => {
-      const { cam, w, h, n } = m, dep = shot.dep[k], sw = seg.length / rig.length / 40, pos = m.position.array;
+      const { cam, w, h, n } = m, pos = m.position.array, dep = src.dep ? src.dep[k] : null, depth = src.depth, o0 = k * n;
       for (let i = 0, v = 0; i < h; i++) {
         for (let j = 0; j < w; j++, v++) {
-          const r = table[dep[i * STEP * cam.width + j * STEP]];
+          const r = dep ? table[dep[i * STEP * cam.width + j * STEP]] : depth[o0 + v];
           m.ok[v] = r > 0 && r <= MAX_R ? 1 : 0;
           m.r[v] = m.ok[v] ? r : 0;
-          m.gClass[v] = GROUND.has(Number(seg[k * 40 * sw + (i >> 1) * sw + (j >> 1)])) ? 1 : 0;
         }
       }
       unproject(m.r, m.rays, levelFrame(cam, pose.x, pose.y, pose.yaw), m.P);
@@ -257,19 +394,42 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, renderM
         m.gHeight[v] = m.P[o + 2] >= GROUND_H[0] && m.P[o + 2] <= GROUND_H[1] ? 1 : 0;
       }
       m.position.needsUpdate = true;
+    });
+  }
+  /** What the view draws from: the model's depth (recon=model) or the town's. */
+  const own = (f) => (mode === 'model' ? { depth: f.depth } : { dep: f.dep });
+
+  /** A model frame: the pose it was drawn at ({x, y, yaw}), the shot of capture() (the town's depth codes; recon=model:
+   *  only when a measurement was armed), each camera's input image (RGB, 3 bytes per pixel, top row first), the
+   *  model's segmentation of it (K x 40 x 80 class ids) and, recon=model, its depth (K x 80 x 160 metres, 0: no
+   *  surface). */
+  function frame(pose, shot, rgbs, seg, depth = null) {
+    const t0 = performance.now();
+    if (mode === 'model' && !depth) return;
+    meshes.forEach((m, k) => {
+      const { w, h } = m, sw = seg.length / rig.length / 40;
+      for (let i = 0, v = 0; i < h; i++) {
+        for (let j = 0; j < w; j++, v++) {
+          m.cls[v] = Number(seg[k * 40 * sw + (i >> 1) * sw + (j >> 1)]);
+          m.gClass[v] = GROUND.has(m.cls[v]) ? 1 : 0;
+        }
+      }
       const rgb = rgbs[k], px = m.pixels;
       for (let i = 0, o = 0; o < px.length; i += 3, o += 4) { px[o] = rgb[i]; px[o + 1] = rgb[i + 1]; px[o + 2] = rgb[i + 2]; }
       m.tex.needsUpdate = true;
     });
+    last = { pose: { ...pose }, dep: shot.dep, depth: depth ? Float32Array.from(depth) : null };
+    place(pose, own(last));
     stats = triangles(rule);
     frames++;
-    last = { pose: { ...pose }, dep: shot.dep };
-    buildMs = performance.now() - t0;
-    if (shot.town) measured = measure(pose, shot);
+    if (shot.town) measured = measure(pose, shot);            // against the keyframes of before this frame
+    if (accumOn) keyframe(pose, shot.boxes);
+    if (!shot.town) buildMs = performance.now() - t0;
   }
 
   function reset() {
     for (const m of meshes) m.geo.setDrawRange(0, 0);
+    dropKeyframes();
     bandMesh.visible = false;
     last = null; stats = null;
   }
@@ -329,11 +489,10 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, renderM
         if (hi > 0 && p.r >= 0.97 * lo && p.r <= 1.03 * hi) { seen[i] = 1; break; }
       }
     }
-    /** One rule's numbers; map (optional, Uint8Array of n): what every pixel is (MAP). */
-    const one = (ru, map) => {
-      const st = triangles(ru), R = reconDepth(pose);
+    /** The numbers of a depth image R of the reconstruction; map (optional, Uint8Array of n): what every pixel is (MAP). */
+    const score = (R, map) => {
       const m = { omega: 0, covered: 0, good: 0, seen: 0, seenCovered: 0, seenGood: 0, drawn: 0, wrong: 0, through: 0, phantom: 0,
-        bands: BANDS.map((far) => ({ far, omega: 0, covered: 0, seen: 0, seenCovered: 0 })), triangles: st.map((c) => c.triangles) };
+        bands: BANDS.map((far) => ({ far, omega: 0, covered: 0, seen: 0, seenCovered: 0 })) };
       const errs = [];
       for (let i = 0; i < n; i++) {
         const r = table[R[i]], inOmega = g[i] > 0 && g[i] <= MAX_R;
@@ -360,24 +519,77 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, renderM
       m.error90 = errs.length ? errs[Math.floor(0.9 * (errs.length - 1))] : null;
       return m;
     };
-    const variants = {};
-    for (const [name, ru] of Object.entries(VARIANTS)) variants[name] = one(ru);
-    lastMap = new Uint8Array(n);
-    const m = one(rule, lastMap);                              // last: the meshes are the view's again
-    return { ...m, pose: { ...pose }, stats, rule: { ...rule }, variants };
+    /** One rule's numbers for the current frame's meshes. */
+    let RA = null;
+    const one = (ru, map) => {
+      const st = triangles(ru);
+      RA = reconDepth(pose);
+      return { ...score(RA, map), triangles: st.map((c) => c.triangles) };
+    };
+    kfGroup.visible = false;                                  // first the current frame alone
+    const all = () => Object.fromEntries(Object.entries(VARIANTS).map(([name, ru]) => [name, one(ru)]));
+    let oracle = null;
+    if (mode === 'model') {                                   // the same frame with the town's own depth
+      place(pose, { dep: shot.dep });
+      oracle = { variants: all() };
+      oracleMap = new Uint8Array(n);
+      Object.assign(oracle, one(rule, oracleMap), { stats: triangles(rule) });
+      place(pose, own(last));
+    }
+    const variants = all();
+    currentMap = new Uint8Array(n);
+    const m = one(rule, currentMap);                           // last: the meshes are the view's again
+    lastMap = currentMap;
+    // then with the keyframes: what they add where the current frame draws nothing, and how much of that is right
+    let accum = null;
+    kfGroup.visible = accumOn;
+    if (accumOn) {
+      lastMap = new Uint8Array(n);
+      const RP = reconDepth(pose);
+      accum = { ...score(RP, lastMap), keyframes: keyframes(), added: 0, addedGood: 0, addedThrough: 0, addedPhantom: 0, before: 0, beforeGood: 0, ...acc };
+      for (let i = 0; i < n; i++) {
+        if (RA[i] === 0 && RP[i] > 0) {
+          accum.added++;
+          if (lastMap[i] === MAP.good) accum.addedGood++; else if (lastMap[i] === MAP.through) accum.addedThrough++; else accum.addedPhantom++;
+        } else if (RA[i] > 0 && table[RP[i]] < 0.97 * table[RA[i]]) {   // a keyframe's surface clearly in front of the current frame's
+          accum.before++;
+          if (lastMap[i] === MAP.good) accum.beforeGood++;
+        }
+      }
+      accum.view = { ...kfView };
+      accum.variants = {};                                    // the same frame and keyframes, other choices of what is kept
+      for (const [name, v] of Object.entries(ACCUM_VARIANTS)) { show(v); accum.variants[name] = score(reconDepth(pose)); }
+      show(kfView);
+    }
+    return { ...m, pose: { ...pose }, stats, rule: { ...rule }, variants, ...(oracle ? { oracle } : {}), ...(accum ? { accum } : {}) };
   }
-  let lastMap = null;
+  let lastMap = null, oracleMap = null, currentMap = null;
 
   // ---------------------------------------------------------------- every frame of the main view
   const size = new THREE.Vector2();
   function layout() {
-    const r = renderer.domElement.getBoundingClientRect();
+    const main = renderer.domElement;
+    if (split) {
+      // two 2:1 panels side by side in the middle of the window. The main canvas keeps its drawing buffer (the model
+      // frames are drawn into it) and is only shown smaller.
+      const w = Math.max(160, Math.floor(Math.min(innerWidth / 2, 2 * innerHeight))), h = Math.round(w / 2);
+      const left = Math.round(innerWidth / 2 - w), top = Math.round((innerHeight - h) / 2);
+      main.style.width = `${w}px`; main.style.height = `${h}px`; main.style.left = `${left}px`; main.style.top = `${top}px`;
+      if (size.x !== w || size.y !== h) { size.set(w, h); rr.setPixelRatio(Math.min(devicePixelRatio || 1, 2)); rr.setSize(w, h, false); }
+      canvas.style.width = `${w}px`; canvas.style.height = `${h}px`;
+      canvas.style.left = `${left + w}px`; canvas.style.top = `${top}px`;
+      label.style.left = canvas.style.left; label.style.top = canvas.style.top;
+      townLabel.style.left = `${left}px`; townLabel.style.top = `${top}px`;
+      return;
+    }
+    const r = main.getBoundingClientRect();
     const w = Math.max(160, Math.round(r.width * 0.4)), h = Math.round(w / 2);
     if (size.x !== w || size.y !== h) { size.set(w, h); rr.setPixelRatio(Math.min(devicePixelRatio || 1, 2)); rr.setSize(w, h, false); }
     canvas.style.width = `${w}px`; canvas.style.height = `${h}px`;
     canvas.style.left = `${Math.round(r.left + 12)}px`; canvas.style.top = `${Math.round(r.bottom - h - 12)}px`;
     label.style.left = canvas.style.left; label.style.top = canvas.style.top;
   }
+  if (split) { canvas.style.borderRadius = '0'; canvas.style.zIndex = '3'; layout(); }   // under the HUD and the model's images
   /** After the main view: draw the reconstruction around the car where it is now. */
   function render(car) {
     layout();
@@ -391,16 +603,34 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, renderM
   function snapshot(car, w = 960, h = 480) {
     carFrame(car.x, car.y, car.yaw);
     rr.setPixelRatio(1); rr.setSize(w, h, false);
+    const out = { recon: null, town: null, map: null, oracle: null, oracleMap: null, current: null, currentMap: null };
+    kfGroup.visible = false;
+    if (accumOn) { rr.render(rscene, measCam); out.current = canvas.toDataURL('image/png'); }   // the current frame alone
+    if (mode === 'model' && last && last.dep) {               // the same frame with the town's own depth
+      place(last.pose, { dep: last.dep }); triangles(rule);
+      rr.render(rscene, measCam);
+      out.oracle = canvas.toDataURL('image/png');
+      place(last.pose, own(last)); triangles(rule);
+    }
+    kfGroup.visible = accumOn;
+    if (accumOn) {                                            // the keyframes by every variant of what is kept
+      out.accum = {};
+      for (const [name, v] of Object.entries(ACCUM_VARIANTS)) { show(v); rr.render(rscene, measCam); out.accum[name] = canvas.toDataURL('image/png'); }
+      show(kfView);
+    }
     rr.render(rscene, measCam);
-    const out = { recon: canvas.toDataURL('image/png'), town: null, map: null };
-    if (lastMap) {                                            // the last measurement's pixels, by what they are
+    out.recon = canvas.toDataURL('image/png');
+    const mapPng = (map) => {                                 // a measurement's pixels, by what they are
       const c = document.createElement('canvas');
       c.width = CHASE.width; c.height = CHASE.height;
       const g2 = c.getContext('2d'), im = g2.createImageData(c.width, c.height);
-      for (let i = 0; i < lastMap.length; i++) { const col = MAP_RGB[lastMap[i]]; im.data.set([col[0], col[1], col[2], 255], 4 * i); }
+      for (let i = 0; i < map.length; i++) { const col = MAP_RGB[map[i]]; im.data.set([col[0], col[1], col[2], 255], 4 * i); }
       g2.putImageData(im, 0, 0);
-      out.map = c.toDataURL('image/png');
-    }
+      return c.toDataURL('image/png');
+    };
+    if (lastMap) out.map = mapPng(lastMap);
+    if (accumOn && currentMap) out.currentMap = mapPng(currentMap);
+    if (out.oracle && oracleMap) out.oracleMap = mapPng(oracleMap);
     size.set(0, 0);                                           // layout() sets the view's own size again
     if (renderMain) {
       aim(shotCam, CHASE, car.x, car.y, car.yaw, CHASE.width, CHASE.height);
@@ -410,9 +640,13 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, renderM
     return out;
   }
 
-  return { mode, capture, frame, band, render, reset, snapshot, rule,
+  /** split: the main view's camera at the chase camera of the car (src/pilot.js, after the model frame is drawn). */
+  const mainCamera = (cam, car) => aim(cam, CHASE, car.x, car.y, car.yaw, CHASE.width, CHASE.height);
+
+  return { mode, split, capture, frame, band, render, reset, snapshot, rule, mainCamera,
     arm: () => { armed = true; measured = null; },            // measure at the next model frame
     measured: () => measured,
     viewCamera: () => viewCam.position.toArray(),              // in the car's frame (tests)
-    state: () => ({ mode, frames, buildMs, stats, pose: last ? last.pose : null }) };
+    state: () => ({ mode, split, frames, buildMs, stats, pose: last ? last.pose : null,
+      accum: accumOn ? { keyframes: keyframes(), ...kfView, ...acc } : null }) };
 }
