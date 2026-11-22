@@ -640,7 +640,10 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
       modelPipe.render(scene, camera, sunDir, t);
       single.read(0, sync);
     }
-    const shot = recon ? recon.capture(car.x, car.y, car.yaw) : null;   // the same shots' depth, in the same scene state
+    // the same shots' depth, in the same scene state; and where the cars and riders are now (its keyframes' ghost count)
+    const shot = recon ? recon.capture(car.x, car.y, car.yaw, trafficOn ? [
+      ...traffic.drawList(car.x, car.y, 40).map((v) => [v[1], v[2], v[3], v[4], v[5], v[6]]),
+      ...traffic.bikeList(car.x, car.y, 40).map((b) => [b[1], b[2], b[3], 1.8, 0.6, b[5]])] : []) : null;
     if (actors && actors.view) actors.view('main');
     renderer.setViewport(vp);
     const at = { pose: { x: car.x, y: car.y, yaw: car.yaw }, v: car.v, inp: nav.inputs(), stand: standM, t, g: gen, t1: performance.now(), shot };

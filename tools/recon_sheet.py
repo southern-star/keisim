@@ -29,10 +29,13 @@ def main():
     ap.add_argument("scenes", nargs="+")
     ap.add_argument("--width", type=int, default=640)
     ap.add_argument("--model", action="store_true", help="shots of ?recon=model: the oracle's reconstruction of the same frame beside the model's")
+    ap.add_argument("--accum", action="store_true", help="shots with keyframes: the current frame alone beside the view with them")
     args = ap.parse_args()
-    kinds = [("town", cv2.INTER_AREA)] + ([("oracle", cv2.INTER_AREA)] if args.model else []) + [("recon", cv2.INTER_AREA), ("map", cv2.INTER_NEAREST)]
+    kinds = [("town", cv2.INTER_AREA)] + ([("oracle", cv2.INTER_AREA)] if args.model else []) + ([("current", cv2.INTER_AREA)] if args.accum else []) + [("recon", cv2.INTER_AREA), ("map", cv2.INTER_NEAREST)]
     heads = ["実際の街（追跡カメラ）"] + (["ReconView（深度は正解）", "ReconView（深度はモデル）", "計測の内訳（モデルの深度）"] if args.model
                                   else ["ReconView（同じ追跡カメラ、深度は正解）", "計測の内訳"])
+    if args.accum:
+        heads = ["実際の街（追跡カメラ）", "A: 今のフレームだけ", "A+: キーフレームを足す", "計測の内訳（A+）"]
     N = len(kinds)
     W, H, bar = args.width, args.width // 2, 34
     rows = []
