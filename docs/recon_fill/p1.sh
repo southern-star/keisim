@@ -3,7 +3,8 @@
 # Chrome, web/models/keipilot_mc_depth.onnx.
 #   bash docs/recon_fill/p1.sh time        random weights in the browser: which width, which worker (5.3)
 #   bash docs/recon_fill/p1.sh train       the two models (with and without the loose rule's picture), offline numbers
-#   MODEL=a bash docs/recon_fill/p1.sh export fidelity same drive speed     the chosen model in the browser (gate G-P1)
+#   MODEL=b bash docs/recon_fill/p1.sh export fidelity same drive speed     the chosen model in the browser (gate G-P1;
+#                                          a: with the loose rule's picture, b: without, the one chosen in 5.4)
 #   MAIN=/path/to/a/checkout/of/main ... same     (its web/ needs node_modules, models and .towns)
 set -o pipefail
 cd "$(dirname "$0")/../.." || exit 1
