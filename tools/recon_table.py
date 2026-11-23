@@ -138,7 +138,15 @@ def accum_tables(runs):
     print(f"| **合計** | {tot[0]:,.0f} | {pc(tot[1], tot[0])} | {pc(tot[2], tot[0])} | {pc(tot[3], tot[0])} | {tot[4]:,.0f}（{pc(tot[9], tot[4])}） | {tot[5]:.0f} | {tot[6]:,.0f} | {tot[7]:,.0f}（{pc(tot[7], tot[6])}） | {tot[8]:.0f} |")
 
 
-FILLS = {"holes": "穴・できたて", "holesPrev": "穴・1 回前", "all": "全部・できたて", "allPrev": "全部・1 回前"}
+FILLS = {"holes": "穴・できたて", "holesPrev": "穴・1 回前", "all": "全部・できたて", "allPrev": "全部・1 回前",
+         "oracle.holes": "穴・できたて（正解の補完）", "oracle.all": "全部・できたて（正解の補完）"}
+
+
+def _fill(f, k):
+    """f["holes"], or f["oracle"]["holes"] for "oracle.holes"; None when the frame has none."""
+    for part in k.split("."):
+        f = f.get(part) if f else None
+    return f
 
 
 def fill_tables(runs):
@@ -150,7 +158,7 @@ def fill_tables(runs):
     name = {"oracle": "正解（街そのもの）", "model": "補完のモデル"}.get(f0["mode"], f0["mode"])
     print(f"\n補完（{name}）。同じフレームを、補完なし（A、A+）と、補完を足したもので測った値。補完は運転モデルの呼び出し {f0['every']} 回に 1 回\n")
     print(HEAD.format("町、描くもの"))
-    pick = lambda rows, k: [r["fill"][k] for r in rows if r["fill"].get(k)]
+    pick = lambda rows, k: [_fill(r["fill"], k) for r in rows if _fill(r["fill"], k)]
     for town, run in list(runs.items()) + [("**合計**", {"rows": every})]:
         rows = [r for r in run["rows"] if "fill" in r]
         ja = TOWNS.get(town, town)
@@ -161,10 +169,10 @@ def fill_tables(runs):
             if pick(rows, k):
                 print(line(f"{ja}、{label}", pick(rows, k)))
 
-    print("\n| 追跡カメラからの距離 | 画素 | 被覆率（全体）: 補完なし / 穴・できたて / 穴・1 回前 / 全部・できたて |\n|---|---:|---|")
+    print("\n| 追跡カメラからの距離 | 画素 | 被覆率（全体）: 補完なし / 穴・できたて / 穴・1 回前 / 全部・できたて" + (" / 穴・できたて（正解の補完）" if pick(every, "oracle.holes") else "") + " |\n|---|---:|---|")
     lo = 0
     for i in range(3):
-        cols = [[base(r)["bands"][i] for r in every]] + [[x["bands"][i] for x in pick(every, k)] for k in ("holes", "holesPrev", "all")]
+        cols = [[base(r)["bands"][i] for r in every]] + [[x["bands"][i] for x in pick(every, k)] for k in ("holes", "holesPrev", "all", "oracle.holes") if pick(every, k)]
         s = lambda b, k: sum(x[k] for x in b)
         print(f"| {lo}〜{cols[0][0]['far']} m | {s(cols[0], 'omega'):,} | " + " / ".join(pc(s(b, "covered"), s(b, "omega")) for b in cols) + " |")
         lo = cols[0][0]["far"]
@@ -181,7 +189,8 @@ def fill_tables(runs):
     aged = [r["fill"]["age"] for r in every if r["fill"].get("age")]
     print(f"\n補完のメッシュ（{len(every)} フレームの平均）: 有効な頂点 {m(lambda f: f['stats']['valid']):,.0f} / {f0['stats']['vertices']:,}、三角形 {m(lambda f: f['stats']['triangles']):,.0f}、"
           f"縁で捨てた三角形 {m(lambda f: f['stats']['edge']):,.0f}、穴にかかるマス {m(lambda f: f['stats']['holeCells']):,.0f}、作る時間 {m(lambda f: f['ms']):.1f} ms。"
-          + (f"「1 回前」の補完は、平均でモデルのフレーム {np.mean([a['frames'] for a in aged]):.1f} 回前、{np.mean([a['metres'] for a in aged]):.2f} m 手前のもの。" if aged else ""))
+          + (f"「1 回前」の補完は、平均でモデルのフレーム {np.mean([a['frames'] for a in aged]):.1f} 回前、{np.mean([a['metres'] for a in aged]):.2f} m 手前のもの。" if aged else "")
+          + (f"補完のモデル: 入力を作る時間 {m(lambda f: f['prepMs']):.1f} ms、推論（往復）{m(lambda f: f['inferMs']):.1f} ms。" if "inferMs" in f0 else ""))
 
 
 def main():

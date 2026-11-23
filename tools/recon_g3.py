@@ -19,9 +19,13 @@ import numpy as np
 
 TOWNS = {"1000": "town 1000", "1015-98782ab7": "town 1015（二段階の信号）", "osm_sapporo": "札幌（OSM）"}
 CFG = {"public": "recon なし、公開の ONNX", "off": "recon なし、深度つきの ONNX", "model": "`recon=model`（蓄積なし）", "split": "`recon=model&layout=split`（蓄積なし）",
-       "accum": "`recon=model`（蓄積あり）", "fill": "`recon=model&fill=oracle`", "fillall": "`recon=model&fill=oracle&fillshow=all`"}
+       "accum": "`recon=model`（蓄積あり）", "fill": "`recon=model&fill=oracle`", "fillall": "`recon=model&fill=oracle&fillshow=all`",
+       "fillm": "`recon=model&fill=model`", "randa": "補完あり、乱数の重み、幅 16・32・64・128", "randb": "補完あり、乱数の重み、幅 24・48・96・192",
+       "randc": "補完あり、乱数の重み、幅 12・24・48・96", "randnl": "補完あり、乱数の重み、幅 16〜128、緩い規則の入力なし",
+       "randaown": "補完あり、乱数の重み、幅 16〜128、別のワーカー"}
 REAL = re.compile(r"real time (\d+) s.*?: ([\d.]+) fps \(min ([\d.]+)\), ([\d.]+) model calls/s, inference ([\d.]+) ms, model frame ([\d.]+) ms"
-                  r"(?:.*?mesh ([\d.]+) ms)?, town time x([\d.]+)")
+                  r"(?:.*?mesh ([\d.]+) ms)?, town time x([\d.]+)"
+                  r"(?:; fill ([\d.]+) fills/s(?:, its input ([\d.]+) ms, its model ([\d.]+) ms \(.*?\), turns skipped (\d+))?)?")
 
 
 def split_name(path):
@@ -39,7 +43,7 @@ def drive(d):
     print("| 町 | 設定 | 走行の要約値（回数） | recon なしと同じ要約値の走行 | 判定 |\n|---|---|---|---:|---|")
     for town in [t for t in TOWNS if t in runs] + [t for t in runs if t not in TOWNS]:
         base = Counter(x[1] for x in runs[town].get("off", []))
-        for cfg in ("off", "model", "split", "accum", "fill", "fillall"):
+        for cfg in ("off", "model", "split", "accum", "fill", "fillall", "fillm"):
             rs = sorted(runs[town].get(cfg, []))
             if not rs:
                 continue
@@ -68,7 +72,9 @@ def speed(d):
         m = REAL.search(open(path).read())
         if m:
             runs.setdefault(town, {}).setdefault(cfg, []).append([float(x) if x else np.nan for x in m.groups()])
-    print("| 町 | 設定 | 回数 | 主画面 [fps]、中央値 | 各回の fps | モデルの呼び出し [回/秒] | 推論 [ms] | モデルのフレーム（主スレッド）[ms] | メッシュ [ms] | 町の時間 |\n|---|---|---:|---:|---|---:|---:|---:|---:|---:|")
+    fills = any(not np.isnan(np.array(rs, float)[:, 8]).all() for by in runs.values() for rs in by.values())   # runs with a fill
+    print("| 町 | 設定 | 回数 | 主画面 [fps]、中央値 | 各回の fps | モデルの呼び出し [回/秒] | 推論 [ms] | モデルのフレーム（主スレッド）[ms] | メッシュ [ms] | 町の時間 |"
+          + (" 各回の呼び出し | 補完 [回/秒] | 補完の入力 [ms] | 補完の推論 [ms] | 飛ばした番 |" if fills else "") + "\n|---|---|---:|---:|---|---:|---:|---:|---:|---:|" + ("---|---:|---:|---:|---:|" if fills else ""))
     for town in [t for t in TOWNS if t in runs]:
         for cfg in CFG:
             rs = np.array(runs[town].get(cfg, []))
@@ -76,7 +82,9 @@ def speed(d):
                 continue
             med = lambda k, f="{:.1f}": f.format(np.median(rs[:, k]))
             mesh = "–" if np.isnan(rs[:, 6]).all() else med(6)
-            print(f"| {TOWNS[town]} | {CFG[cfg]} | {len(rs)} | {med(1)} | {'、'.join(f'{v:.0f}' for v in rs[:, 1])} | {med(3)} | {med(4)} | {med(5)} | {mesh} | {med(7, '×{:.2f}')} |")
+            opt = lambda k, f="{:.1f}": "–" if np.isnan(rs[:, k]).all() else f.format(np.nanmedian(rs[:, k]))
+            more = f" {'、'.join(f'{v:.1f}' for v in rs[:, 3])} | {opt(8)} | {opt(9)} | {opt(10)} | {opt(11, '{:.0f}')} |" if fills else ""
+            print(f"| {TOWNS[town]} | {CFG[cfg]} | {len(rs)} | {med(1)} | {'、'.join(f'{v:.0f}' for v in rs[:, 1])} | {med(3)} | {med(4)} | {med(5)} | {mesh} | {med(7, '×{:.2f}')} |{more}")
     print("\n推論、モデルのフレーム、メッシュ、町の時間は各回の値の中央値。")
 
 

@@ -6,6 +6,11 @@
 // fill=oracle: the image is the town's own, drawn with the model frame (src/pilot.js: the colour, by the model
 // frames' pipeline; src/recon.js capture: the depth). The upper bound of what a model can fill in, the tool to measure
 // with (tools/recon_check.mjs --fill oracle) and to write training data with (tools/fill_dump.mjs).
+// fill=model: the image is a small model's (keipilot/fillnet.py, models/reconfill.onnx), from the view's own picture
+// without a fill (colour and depth from the chase camera) and, for models with the input, the current frame alone by
+// the loose triangle rule. It runs after the driving model has answered, in the worker src/pilot.js gives it, and
+// the fill shows when it answers; a turn that comes while it is still running is skipped. A measurement also makes
+// the town's own fill of that frame, to compare (under "oracle").
 // A fill is made every FILL.every model frames and replaces the one before: fills are not accumulated.
 // &fillshow=holes (the default): of the fill's mesh only the triangles that cover a pixel where the view, from the
 // chase camera at that frame, drew nothing; behind what the cameras saw (a larger polygon offset than the keyframes').
@@ -22,8 +27,9 @@ import { cameraRays, levelFrame, unproject } from './unproject.js';
 export const FILL = { every: 2, offset: [4, 600], tint: 0xff8ad8, loose: { ground: 'height', ratio: 2.0, scaled: false } };
 
 export function createFill({ world, origin, table, rule, params, label, rr, rscene, measCam, carFrame, meshTriangles, triangles, reconDepth,
-  keyframes, observed, bare }) {
+  keyframes, observed, bare, session = null }) {
   const mode = params.get('fill');
+  const loose = !!session && session.inputNames.includes('loose_rgb');     // the model takes the loose rule's picture
   const show = params.get('fillshow') === 'all' ? 'all' : 'holes';
   const tint = params.get('filltint') === '1';
   const W = CHASE.width, H = CHASE.height, w = Math.ceil(W / STEP), h = Math.ceil(H / STEP), n = w * h;
@@ -56,7 +62,9 @@ export function createFill({ world, origin, table, rule, params, label, rr, rsce
       shown: null, seq: 0, frame: 0, pose: null, stats: null };
   }
   let cur = slot(), prev = slot();
+  const orc = mode === 'model' ? slot() : null;             // the town's own fill of a measured frame, to compare
   let since = Infinity, seq = 0, frameNo = 0, made = 0, ms = 0, maps = {}, sampleArmed = false, sample = null;
+  let gen = 0, running = null, skipped = 0, prepMs = 0, inferMs = 0;
 
   /** Of a fill's triangles (by the rule) the ones that are drawn: all, or those of the cells that cover a hole. */
   function apply(s, how) {
@@ -77,7 +85,7 @@ export function createFill({ world, origin, table, rule, params, label, rr, rsce
     if (sel === 'none') sel = { slot: null, obs: true };
     else if (sel === 'view') sel = { slot: cur, how: show, obs: show !== 'all' || !cur.seq };
     observed(sel.obs);
-    for (const s of [cur, prev]) s.mesh.visible = s === sel.slot && s.seq > 0;
+    for (const s of orc ? [cur, prev, orc] : [cur, prev]) s.mesh.visible = s === sel.slot && s.seq > 0;
     if (sel.slot && sel.slot.seq > 0 && sel.slot.shown !== sel.how) apply(sel.slot, sel.how);
   }
 
@@ -100,30 +108,23 @@ export function createFill({ world, origin, table, rule, params, label, rr, rsce
     return out;
   }
 
-  /** Is this model frame a fill's turn? (src/pilot.js then draws the chase camera's image with it.) force: a
-   *  measurement is armed. */
+  /** Is this model frame a fill's turn? Returns {make, truth}: a fill is made from it; it needs the town itself
+   *  (src/pilot.js then draws the chase camera's image with the frame). force: a measurement is armed. */
   function turn(force) {
     frameNo++;
-    if (force || sampleArmed || since >= FILL.every) { since = 1; return true; }
-    since++;
-    return false;
+    const due = force || sampleArmed || since >= FILL.every;
+    since = due ? 1 : since + 1;
+    return { make: due, truth: due && (mode === 'oracle' || force || sampleArmed) };
   }
 
-  /** A fill from a model frame at pose: shot.town (the town's depth codes from the chase camera, 320x160) and
-   *  shot.fillRgb (its colours, RGB). The one before it is kept as `prev`. */
-  function make(pose, shot) {
-    if (!shot.town || !shot.fillRgb) return;
-    const t0 = performance.now();
-    layers('none');
-    const input = reconDepth(pose);                           // what the view draws without a fill
-    [cur, prev] = [prev, cur];
-    const s = cur, pos = s.position.array;
-    for (let i = 0, v = 0; i < h; i++) {
-      for (let j = 0; j < w; j++, v++) {
-        const r = table[shot.town[i * STEP * W + j * STEP]];
-        s.ok[v] = r > 0 && r <= MAX_R ? 1 : 0;
-        s.r[v] = s.ok[v] ? r : 0;
-      }
+  /** A slot's mesh from a fill's image at pose: metres(v), the distance of depth pixel v [m] (0: no surface), and
+   *  pixel(o), the colour byte o of the RGB image (320x160); input: the view's depth codes without a fill. */
+  function build(s, pose, metres, pixel, input) {
+    const pos = s.position.array;
+    for (let v = 0; v < n; v++) {
+      const r = metres(v);
+      s.ok[v] = r > 0 && r <= MAX_R ? 1 : 0;
+      s.r[v] = s.ok[v] ? r : 0;
     }
     unproject(s.r, rays, levelFrame(CHASE, pose.x, pose.y, pose.yaw), s.P);
     for (let v = 0, o = 0; v < n; v++, o += 3) {
@@ -131,7 +132,7 @@ export function createFill({ world, origin, table, rule, params, label, rr, rsce
       s.gHeight[v] = s.P[o + 2] >= GROUND_H[0] && s.P[o + 2] <= GROUND_H[1] ? 1 : 0;
     }
     s.position.needsUpdate = true;
-    for (let i = 0, o = 0; o < s.pixels.length; i += 3, o += 4) { s.pixels[o] = shot.fillRgb[i]; s.pixels[o + 1] = shot.fillRgb[i + 1]; s.pixels[o + 2] = shot.fillRgb[i + 2]; }
+    for (let i = 0, o = 0; o < s.pixels.length; i += 3, o += 4) { s.pixels[o] = pixel(i); s.pixels[o + 1] = pixel(i + 1); s.pixels[o + 2] = pixel(i + 2); }
     s.tex.needsUpdate = true;
     s.stats = meshTriangles(s, rule);
     s.count = s.geo.drawRange.count;
@@ -147,11 +148,57 @@ export function createFill({ world, origin, table, rule, params, label, rr, rsce
       }
     }
     s.stats.holeCells = holes;
-    s.shown = null; s.seq = ++seq; s.frame = frameNo; s.pose = { ...pose };
-    made++;
-    if (sampleArmed) take(pose, shot, input);
+    s.shown = null; s.seq = ++seq; s.pose = { ...pose };
+  }
+  /** The town's own image as a slot's mesh. */
+  const fromTown = (s, pose, shot, input) => build(s, pose, (v) => table[shot.town[Math.floor(v / w) * STEP * W + (v % w) * STEP]], (o) => shot.fillRgb[o], input);
+
+  /** A fill from a model frame at pose; the one before it is kept as `prev`. fill=oracle: from shot.town (the town's
+   *  depth codes from the chase camera, 320x160) and shot.fillRgb (its colours, RGB), at once. fill=model: from the
+   *  model's answer; returns a promise that ends when the fill is there (or was dropped). */
+  function make(pose, shot) {
+    const t0 = performance.now(), frame = frameNo;
+    if (mode === 'model' && running) { skipped++; return null; }   // the model is still at the fill before
+    if (mode !== 'model' && !(shot.town && shot.fillRgb)) return null;
+    layers('none');
+    const input = reconDepth(pose);                           // what the view draws without a fill
+    if (mode !== 'model') {
+      [cur, prev] = [prev, cur];
+      fromTown(cur, pose, shot, input);
+      cur.frame = frame;
+      made++;
+      if (sampleArmed) take(pose, shot, input);
+      layers('view');
+      ms = performance.now() - t0;
+      return null;
+    }
+    if (orc && shot.town && shot.fillRgb) { fromTown(orc, pose, shot, input); orc.frame = frame; }
+    else if (orc) orc.seq = 0;
+    // the model's input: the view's colours and depth and, for models with it, the loose rule's picture
+    const chw = (rgb) => { const out = new Float32Array(3 * W * H), px = W * H; for (let i = 0, o = 0; i < px; i++, o += 3) { out[i] = rgb[o]; out[px + i] = rgb[o + 1]; out[2 * px + i] = rgb[o + 2]; } return out; };
+    const feeds = { in_rgb: { data: chw(colour(pose)), dims: [1, 3, H, W] }, in_dep: { data: Float32Array.from(input), dims: [1, 1, H, W] } };
+    if (loose) {
+      observed(true, false);                                  // the current frame alone
+      triangles(FILL.loose);
+      feeds.loose_dep = { data: Float32Array.from(reconDepth(pose)), dims: [1, 1, H, W] };
+      feeds.loose_rgb = { data: chw(colour(pose)), dims: [1, 3, H, W] };
+      triangles(rule);
+    }
     layers('view');
-    ms = performance.now() - t0;
+    prepMs = performance.now() - t0;
+    const g = gen, t1 = performance.now();
+    running = session.run(feeds).then((out) => {
+      inferMs = performance.now() - t1;
+      if (g !== gen) return;                                  // not after a reset
+      const t2 = performance.now(), depth = out.depth.data, rgb = out.rgb.data, px = W * H;
+      [cur, prev] = [prev, cur];
+      build(cur, pose, (v) => depth[v], (o) => rgb[(o % 3) * px + Math.floor(o / 3)], input);
+      cur.frame = frame;
+      made++;
+      layers('view');
+      ms = performance.now() - t2;
+    }).catch((e) => { console.error('[fill] the fill model failed', e); }).finally(() => { running = null; });
+    return running;
   }
 
   /** A training sample of this frame (tools/fill_dump.mjs): the view without a fill (colour and depth), the current
@@ -200,10 +247,16 @@ export function createFill({ world, origin, table, rule, params, label, rr, rsce
       if (keep) maps[keep] = map;
       return { ...m, ...a };
     };
+    if (!cur.seq) { layers('view'); return null; }            // no fill yet (the model's first answer is still out)
     const out = { mode, show, every: FILL.every, stats: cur.stats, ms,
       age: prev.seq ? { frames: cur.frame - prev.frame, metres: Math.hypot(cur.pose.x - prev.pose.x, cur.pose.y - prev.pose.y) } : null,
       holes: one(cur, 'holes', true, 'holes'), holesPrev: one(prev, 'holes', true, 'holesPrev'),
       all: one(cur, 'all', false, 'all'), allPrev: one(prev, 'all', false, 'allPrev') };
+    if (mode === 'model') {
+      Object.assign(out, { prepMs, inferMs, skipped, fresh: cur.frame === frameNo });
+      // the town's own fill of the same frame, from the same input
+      if (orc.seq && orc.frame === frameNo) out.oracle = { stats: orc.stats, holes: one(orc, 'holes', true, 'oracleHoles'), all: one(orc, 'all', false, 'oracleAll') };
+    }
     layers('view');
     return out;
   }
@@ -222,26 +275,29 @@ export function createFill({ world, origin, table, rule, params, label, rr, rsce
     };
     out.holes = pic(cur, 'holes', true); out.holesTint = pic(cur, 'holes', true, true); out.all = pic(cur, 'all', false);
     out.holesPrev = pic(prev, 'holes', true); out.allPrev = pic(prev, 'all', false);
+    if (orc && orc.seq) { out.oracleHoles = pic(orc, 'holes', true); out.oracleAll = pic(orc, 'all', false); }
     for (const [k, map] of Object.entries(maps)) out[`${k}Map`] = mapPng(map);
-    if (cur.seq) {                                            // the fill's image itself
+    const image = (s) => {                                    // a fill's image itself
       const c = document.createElement('canvas');
       c.width = W; c.height = H;
-      const g = c.getContext('2d');
-      g.putImageData(new ImageData(Uint8ClampedArray.from(cur.pixels), W, H), 0, 0);
-      out.image = c.toDataURL('image/png');
-    }
+      c.getContext('2d').putImageData(new ImageData(Uint8ClampedArray.from(s.pixels), W, H), 0, 0);
+      return c.toDataURL('image/png');
+    };
+    if (cur.seq) out.image = image(cur);
+    if (orc && orc.seq) out.oracleImage = image(orc);
     layers('view');
     return out;
   }
 
   function reset() {
-    for (const s of [cur, prev]) { s.seq = 0; s.count = 0; s.shown = null; s.geo.setDrawRange(0, 0); s.mesh.visible = false; }
-    since = Infinity; maps = {}; sample = null;
+    for (const s of orc ? [cur, prev, orc] : [cur, prev]) { s.seq = 0; s.count = 0; s.shown = null; s.geo.setDrawRange(0, 0); s.mesh.visible = false; }
+    since = Infinity; maps = {}; sample = null; gen++;
     observed(true);
   }
 
   return { mode, show, camera: CHASE, turn, make, measure, snapshot, layers, reset,
-    armSample: () => { sampleArmed = true; sample = null; },   // a training sample with the next model frame
+    idle: () => running || Promise.resolve(),                 // the fill model's answer in flight (tests)
+    armSample: () => { sampleArmed = mode === 'oracle'; sample = null; },   // a training sample with the next model frame (fill=oracle)
     /** The armed sample, its images as base64 (uint8, uint16 little-endian), or null. */
     takeSample: () => {
       if (!sample) return null;
@@ -250,5 +306,6 @@ export function createFill({ world, origin, table, rule, params, label, rr, rsce
       sample = null;
       return out;
     },
-    state: () => ({ mode, show, tint, every: FILL.every, made, ms, triangles: cur.geo.drawRange.count / 3, cells: cur.stats ? cur.stats.holeCells : 0 }) };
+    state: () => ({ mode, show, tint, every: FILL.every, made, ms, triangles: cur.geo.drawRange.count / 3, cells: cur.stats ? cur.stats.holeCells : 0,
+      ...(mode === 'model' ? { loose, where: session.where, prepMs, inferMs, skipped } : {}) }) };
 }

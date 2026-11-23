@@ -24,6 +24,8 @@
 // ?recon=model: the same from the model's own depth output (then the default model is models/keipilot_mc_depth.onnx).
 // &fill=oracle (with ?recon; src/fill.js, loaded only then; docs/recon_fill.md): what that view leaves dark is filled in
 // from the town itself, drawn from the view's camera with the model frame (development and measurements).
+// &fill=model: filled in by a small model of its own (models/reconfill.onnx, or &fillmodel=; WebGPU only), a second
+// session in the driving model's worker, or with &fillworker=own in a worker of its own.
 // &layout=split: the main view from the same camera behind the car, with the car's body, beside the reconstruction;
 // the model's frames are drawn as before (the body is hidden and the camera back in the car while they are drawn).
 // Keys: ← ↑ → turn at the next junction, Space pause, R back to the start, T other cars (or the buttons).
@@ -229,16 +231,22 @@ function workerSession(ort, gpu, force, bytes) {
       if (m.type === 'ready') {
         clearTimeout(timer);
         resolve({ backend: m.backend, adapter: m.adapter, inputNames: m.inputNames, outputNames: m.outputNames, where: 'worker',
-          run: (feeds) => new Promise((res, rej) => {
+          run: (feeds, key) => new Promise((res, rej) => {
             const id = next++;
             pending.set(id, { res, rej });
-            w.postMessage({ type: 'run', id, feeds }, Object.values(feeds).map((f) => f.data.buffer));
+            w.postMessage(key ? { type: 'run', id, feeds, key } : { type: 'run', id, feeds }, Object.values(feeds).map((f) => f.data.buffer));
+          }),
+          // a second model in the same worker (src/fill.js): its runs are run(feeds, key)
+          load: (key, model) => new Promise((res, rej) => {
+            const id = next++;
+            pending.set(id, { res, rej });
+            w.postMessage({ type: 'load', id, key, bytes: model });
           }) });
       } else if (m.id === undefined) fail(new Error(m.message));
       else {
         const p = pending.get(m.id);
         pending.delete(m.id);
-        if (p) { if (m.type === 'out') p.res(m.out); else p.rej(new Error(m.message)); }
+        if (p) { if (m.type === 'out') p.res(m.out); else if (m.type === 'loaded') p.res(m); else p.rej(new Error(m.message)); }
       }
     };
     w.postMessage({ type: 'init', ort, gpu, force, bytes });
@@ -254,12 +262,22 @@ async function mainSession(ortDir, gpu, adapter, bytes) {
   for (const ep of gpu ? ['webgpu', 'wasm'] : ['wasm']) {
     try {
       const s = await ort.InferenceSession.create(bytes, { executionProviders: [ep] });
+      const extra = new Map();                               // more sessions (src/fill.js): then one run at a time
+      let chain = Promise.resolve();
       return { backend: ep, adapter: ep === 'webgpu' && adapter && adapter.info ? `${adapter.info.vendor} ${adapter.info.architecture}`.trim() : '',
         inputNames: s.inputNames, outputNames: s.outputNames, where: 'main',
-        run: (feeds) => {
+        run: (feeds, key) => {
           const t = {};
           for (const [k, f] of Object.entries(feeds)) t[k] = new ort.Tensor('float32', f.data, f.dims);
-          return s.run(t);
+          if (!extra.size) return s.run(t);
+          const job = chain.then(() => (key ? extra.get(key) : s).run(t));
+          chain = job.catch(() => {});
+          return job;
+        },
+        load: async (key, model) => {
+          const s2 = await ort.InferenceSession.create(model, { executionProviders: [ep] });
+          extra.set(key, s2);
+          return { inputNames: s2.inputNames, outputNames: s2.outputNames };
         } };
     } catch (e) { console.warn(`[pilot] ${ep} unavailable`, e); }
   }
@@ -552,12 +570,29 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
   }
   const split = !!reconMode && !!rig && params.get('layout') === 'split';
   // ReconFill (&fill=oracle): the view's holes filled in from a third image, the town from the view's chase camera
-  let createFill = null;
+  let createFill = null, fillSession = null;
   if (params.has('fill')) {
-    if (reconMode && rig && params.get('fill') === 'oracle') createFill = (await import('./fill.js')).createFill;
-    else console.warn('[pilot] ?fill=oracle needs ?pilot=mc and ?recon');
+    const want = params.get('fill');
+    if (!(reconMode && rig && ['oracle', 'model'].includes(want))) console.warn('[pilot] ?fill=oracle|model needs ?pilot=mc and ?recon');
+    else if (want === 'model' && backend !== 'webgpu') console.warn('[pilot] ?fill=model needs WebGPU: no fill');
+    else {
+      if (want === 'model') {
+        try {
+          status('補完のモデルを読み込み中…');
+          const model = await fetchModel(params.get('fillmodel') || 'models/reconfill.onnx', () => {});
+          if (params.get('fillworker') === 'own' || !session.load) {
+            const own = await workerSession(ORT, gpu, false, model);
+            fillSession = { inputNames: own.inputNames, where: 'own worker', run: (feeds) => own.run(feeds) };
+          } else {
+            const info = await session.load('fill', model);
+            fillSession = { inputNames: info.inputNames, where: `the driving model's ${session.where}`, run: (feeds) => session.run(feeds, 'fill') };
+          }
+        } catch (e) { console.warn('[pilot] ?fill=model: the fill model did not load, no fill', e); }
+      }
+      if (want === 'oracle' || fillSession) createFill = (await import('./fill.js')).createFill;
+    }
   }
-  const recon = reconMode && rig ? (await import('./recon.js')).createRecon({ ctx, scene, renderer, rig, views, T, mode: reconMode, split, renderMain, params, createFill }) : null;
+  const recon = reconMode && rig ? (await import('./recon.js')).createRecon({ ctx, scene, renderer, rig, views, T, mode: reconMode, split, renderMain, params, createFill, fillSession }) : null;
   // the fill's colours: one more shot with the model frame, by the model frames' pipeline (as a cylinder's face:
   // without the vignette and the light leak, which belong to a camera's own image)
   const chase = recon && recon.fill ? (() => {
@@ -664,9 +699,9 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
       modelPipe.render(scene, camera, sunDir, t);
       single.read(0, sync);
     }
-    // a fill's turn (&fill): the town from the view's chase camera too, in the same scene state
-    const fillTurn = chase ? recon.fillTurn() : false;
-    if (fillTurn) {
+    // a fill's turn (&fill); when it needs the town itself: from the view's chase camera too, in the same scene state
+    const fillTurn = chase ? recon.fillTurn() : null;
+    if (fillTurn && fillTurn.truth) {
       shoot(chase, chase.cam, 0, false, t, pr, sync);
       if (ctx.wires && mainSize) { const m = mainSize(); ctx.wires.setResolution(m.x, m.y); }
       placeCamera();
@@ -693,7 +728,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     pending = null;
     gl.deleteSync(at.fence);
     (rig ? views.map((v) => v.reader) : [single]).forEach((r) => r.fetch());
-    if (at.shot && at.shot.fillTurn) chase.reader.fetch();
+    if (at.shot && at.shot.truth) chase.reader.fetch();
     readMs = performance.now() - at.t1;
     if (at.g === gen) finish(at);                           // not after a reset
     else flightT = null;
@@ -701,7 +736,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
 
   function finish(at) {
     const t0 = performance.now();
-    if (at.shot && at.shot.fillTurn) at.shot.fillRgb = chaseRgb();
+    if (at.shot && at.shot.truth) at.shot.fillRgb = chaseRgb();
     if (rig) stitchRig();
     else {
       const rgba = single.bufs[0];
@@ -751,7 +786,10 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
           tta: out.yield_tta ? out.yield_tta.data[0] : undefined };
         drawSeg(out.seg.data);
         // no new frame is drawn while this one is in flight
-        if (recon) recon.frame(pose, shot, views.map((w) => w.rgb), out.seg.data, out.depth ? out.depth.data : null);
+        if (recon) {
+          const measuring = recon.frame(pose, shot, views.map((w) => w.rgb), out.seg.data, out.depth ? out.depth.data : null);
+          if (measuring) await measuring;                   // a measurement that waits for the fill's own model
+        }
       }
     } catch (e) { console.error('[pilot] inference failed', e); }
     busy = false;
@@ -941,7 +979,8 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
   return {
     update, pace, capture, after, backend, reset,
     adapter: session.adapter, inferIn: session.where,      // 'worker' or 'main' (?infer=main)
-    idle: () => inflight || Promise.resolve(),             // the inference in flight (tests: window.__pilotRun)
+    // the inference in flight, and then the fill's (tests: window.__pilotRun)
+    idle: () => (recon && recon.fill ? (inflight || Promise.resolve()).then(() => recon.fill.idle()) : inflight || Promise.resolve()),
     traffic, lanes, nav,                                    // for tests (tools/pilot_check.mjs --yields)
     rig: rig ? rig.map((r) => r.cam.name) : null,
     recon,                                                  // ReconView (?recon; tests: tools/recon_check.mjs), or null

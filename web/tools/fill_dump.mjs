@@ -14,7 +14,8 @@
 //                            [--preview 4]   (the first samples' images as DIR/NAME/preview_<i>.png, to look at)
 //                            [--traffic 0] [--cars N] [--bikes N] [--parked N] [--model models/x.onnx]
 //                            [--ort node_modules/onnxruntime-web/dist/] [--ep webgpu|wasm] [--gl hw|soft]
-// The last line: samples, seconds of wall time per sample, bytes per sample.
+// Headers and meta.json are written again every 100 samples, so a run that dies keeps what it had (meta.json says
+// "done": true only at the end). The last line: samples, seconds of wall time per sample, bytes per sample.
 // Needs models/keipilot_mc_depth.onnx and network access to cdn.jsdelivr.net (onnxruntime-web, three.js).
 import fs from 'node:fs';
 import zlib from 'node:zlib';
@@ -102,6 +103,12 @@ try {
   fs.mkdirSync(dir, { recursive: true });
   const fds = Object.fromEntries(Object.entries(ARRAYS).map(([k, ch]) => { const fd = fs.openSync(`${dir}/${k}.npy`, 'w'); fs.writeSync(fd, npyHeader(0, ch)); return [k, fd]; }));
   const meta = [], t1 = Date.now();
+  /** The headers for the samples so far, and meta.json. */
+  const save = (done) => {
+    for (const [k, ch] of Object.entries(ARRAYS)) fs.writeSync(fds[k], npyHeader(meta.length, ch), 0, HEADER, 0);
+    fs.writeFileSync(`${dir}/meta.json`, JSON.stringify({ town, sec, every, backend, minDist, maxWait, width: W, height: H, done,
+      args: Object.fromEntries(Object.entries(args).filter(([k]) => k !== 'out')), samples: meta }, null, 1));
+  };
   let last = null, lastT = -Infinity, skipped = 0, noPrev = 0, gz = 0;
   for (let t = every; t <= sec + 1e-6; t += every) {
     const s = await page.evaluate(async (d) => {
@@ -130,12 +137,14 @@ try {
     const p = s.sample.pose, pp = s.sample.prevPose;
     meta.push({ t, s: s.s, pose: p, v: s.car.v, keyframes: s.sample.keyframes, prevPose: pp, prevFrames: s.sample.prevFrames, resets: s.resets });
     last = [p.x, p.y]; lastT = t;
-    if (meta.length % 100 === 0) console.log(`  ${meta.length} samples, t ${t.toFixed(0)} s, ${((Date.now() - t1) / 1000 / meta.length).toFixed(2)} s per sample`);
+    if (meta.length % 100 === 0) {
+      save(false);
+      console.log(`  ${meta.length} samples, t ${t.toFixed(0)} s, ${((Date.now() - t1) / 1000 / meta.length).toFixed(2)} s per sample`);
+    }
   }
+  save(true);
   let bytes = 0;
-  for (const [k, ch] of Object.entries(ARRAYS)) { fs.writeSync(fds[k], npyHeader(meta.length, ch), 0, HEADER, 0); fs.closeSync(fds[k]); bytes += fs.statSync(`${dir}/${k}.npy`).size; }
-  fs.writeFileSync(`${dir}/meta.json`, JSON.stringify({ town, sec, every, backend, minDist, maxWait, width: W, height: H,
-    args: Object.fromEntries(Object.entries(args).filter(([k]) => k !== 'out')), samples: meta }, null, 1));
+  for (const k of Object.keys(ARRAYS)) { fs.closeSync(fds[k]); bytes += fs.statSync(`${dir}/${k}.npy`).size; }
   const wall = (Date.now() - t1) / 1000, n = meta.length, packed = Math.min(n, 50);
   console.log(`${dir}: ${n} samples of ${sec} s (${skipped} times the car had not moved, ${noPrev} without a fill before), ${wall.toFixed(0)} s: ${n ? (wall / n).toFixed(2) : '-'} s per sample, ` +
     `${n ? (bytes / n / 1e6).toFixed(3) : '-'} MB per sample${packed ? ` (gzip, each array of the first ${packed} samples on its own: ${(gz / packed / 1e6).toFixed(3)} MB)` : ''}`);

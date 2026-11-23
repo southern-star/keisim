@@ -36,7 +36,9 @@ def ground_depth(step=1):
 
 
 def load_run(path, mmap=True):
-    """(arrays, meta) of one run; the arrays memory-mapped unless mmap is False."""
+    """(arrays, meta) of one run; the arrays memory-mapped unless mmap is False. A run that died while it was written
+    has more bytes than its header says (web/tools/fill_dump.mjs writes the headers every 100 samples): the samples
+    of the header count."""
     meta = json.load(open(os.path.join(path, "meta.json")))
     arrays = {k: np.load(os.path.join(path, f"{k}.npy"), mmap_mode="r" if mmap else None) for k in ARRAYS}
     return arrays, meta
@@ -47,3 +49,47 @@ def runs_of(root):
     if os.path.exists(os.path.join(root, "meta.json")):
         return [root]
     return sorted(os.path.join(root, d) for d in os.listdir(root) if os.path.exists(os.path.join(root, d, "meta.json")))
+
+
+class FillDataset:
+    """The samples of some runs as tensors (torch.utils.data.Dataset): colours (3, H, W) in 0..1, depths (1, H, W) as
+    codes / 65535. train: the same random change of brightness, contrast and tint for a sample's three colour
+    images (no mirror image: the town drives on the left). The arrays stay memory-mapped."""
+
+    def __init__(self, roots, train=False, prev=False):
+        import torch
+        self.torch, self.train = torch, train
+        self.keys = [k for k in ARRAYS if prev or not k.startswith("prev")]
+        self.runs, self.paths, index = [], [], []
+        for root in roots:
+            for path in runs_of(root):
+                arrays, meta = load_run(path)
+                n = min(len(meta["samples"]), arrays["in_dep"].shape[0])
+                if n:
+                    index += [(len(self.runs), i) for i in range(n)]
+                    self.runs.append(arrays)
+                    self.paths.append(path)
+        self.index = index
+
+    def __len__(self):
+        return len(self.index)
+
+    def __getitem__(self, j):
+        torch = self.torch
+        r, i = self.index[j]
+        a = self.runs[r]
+        out = {}
+        for k in self.keys:
+            x = np.array(a[k][i])
+            if ARRAYS[k]:
+                out[k] = torch.from_numpy(x).permute(2, 0, 1).float() / 255.0
+            else:
+                out[k] = torch.from_numpy(x.astype(np.float32) / 65535.0)[None]
+        if self.train:
+            gain = float(np.exp(np.random.uniform(-0.15, 0.15)))
+            contrast = float(np.exp(np.random.uniform(-0.12, 0.12)))
+            tint = torch.from_numpy(np.exp(np.random.uniform(-0.05, 0.05, 3)).astype(np.float32)).view(3, 1, 1)
+            for k in self.keys:
+                if ARRAYS[k]:
+                    out[k] = (((out[k] - 0.5) * contrast + 0.5) * gain * tint).clamp(0.0, 1.0)
+        return out

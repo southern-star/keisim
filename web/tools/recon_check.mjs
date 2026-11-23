@@ -18,11 +18,14 @@
 //                              keyframes the view draws, by default every static class within 10 m; --far 14: all a
 //                              keyframe holds, as G4 was measured; every measurement has all of src/recon.js ACCUM_VARIANTS on
 //                              the same frame under accum.variants, the pictures as _acc_<name>.png)
-//                              [--fill oracle] [--fillshow all] [--filltint 1]   (&fill=: what the view leaves dark is
+//                              [--fill oracle|model] [--fillshow all] [--filltint 1]   (&fill=: what the view leaves dark is
 //                              filled in, src/fill.js, docs/recon_fill.md; every measurement then has, under "fill", the
 //                              same frame with this frame's fill and with the one before it, the holes only and all of the
 //                              fill alone; the pictures: _fill_holes.png, _fill_all.png, _fill_holesTint.png, _fill_image.png
-//                              (the fill's own image) and the maps _fill_<name>Map.png)
+//                              (the fill's own image) and the maps _fill_<name>Map.png; --fill model: the fill of
+//                              models/reconfill.onnx, and under fill.oracle the town's own fill of the same frame)
+//                              [--fillmodel models/x.onnx] [--fillworker own]   (&fillmodel=, &fillworker=: another fill
+//                              model; the fill model in a worker of its own, not in the driving model's)
 //                              [--measure 0]   (no measurements: the page draws what a visitor's draws; the digests only)
 //                              [--size 1920x1080]   (the window; 1280x720) [--name NAME]   (--out DIR/NAME.json)
 //                              [--recon off]   (the page without ?recon: checks that it loads nothing of ReconView and
@@ -95,7 +98,8 @@ try {
     ...(args.layout && !off ? { layout: args.layout } : {}), ...(args.accum && !off ? { accum: args.accum } : {}),
     ...(args.keep && !off ? { accumkeep: args.keep } : {}), ...(args.far && !off ? { accumfar: args.far } : {}),
     ...(args.fill && !off ? { fill: args.fill } : {}), ...(args.fillshow && !off ? { fillshow: args.fillshow } : {}),
-    ...(args.filltint && !off ? { filltint: args.filltint } : {}),
+    ...(args.filltint && !off ? { filltint: args.filltint } : {}), ...(args.fillmodel && !off ? { fillmodel: args.fillmodel } : {}),
+    ...(args.fillworker && !off ? { fillworker: args.fillworker } : {}),
     ...(args.ground ? { reconground: args.ground } : {}), ...(args.ratio ? { reconratio: args.ratio } : {}),
     ...(args.scaled ? { reconscaled: args.scaled } : {}) });
   const t0 = Date.now();
@@ -115,17 +119,20 @@ try {
     if (has || loaded.length) failed = true;
   }
   if (args.realtime) {
-    const fps = [], cap = [], inf = [], build = [];
-    const now = () => page.evaluate(() => { const st = window.__pilot.state(); return { n: st.nInfer, t: st.t, w: Date.now() }; });
+    const fps = [], cap = [], inf = [], build = [], fprep = [], finf = [];
+    let fillEnd = null;
+    const now = () => page.evaluate(() => { const st = window.__pilot.state(), rc = window.__pilot.recon; return { n: st.nInfer, t: st.t, w: Date.now(), fills: rc && rc.fill ? rc.fill.state().made : 0 }; });
     const a = await now();
     for (let k = 0; k < Number(args.realtime) * 2; k++) {
       await new Promise((r) => setTimeout(r, 500));
-      const r = await page.evaluate(() => { const st = window.__pilot.state(), rc = window.__pilot.recon; return { fps: window.__stats.fps, cap: st.captureMs, inf: st.inferMs, build: rc ? rc.state().buildMs : 0 }; });
-      if (k >= 4) { fps.push(r.fps); cap.push(r.cap); inf.push(r.inf); build.push(r.build); }
+      const r = await page.evaluate(() => { const st = window.__pilot.state(), rc = window.__pilot.recon; return { fps: window.__stats.fps, cap: st.captureMs, inf: st.inferMs, build: rc ? rc.state().buildMs : 0, fill: rc && rc.fill ? rc.fill.state() : null }; });
+      if (k >= 4) { fps.push(r.fps); cap.push(r.cap); inf.push(r.inf); build.push(r.build); if (r.fill && r.fill.inferMs !== undefined) { fprep.push(r.fill.prepMs); finf.push(r.fill.inferMs); } }
+      if (k === Number(args.realtime) * 2 - 1 && r.fill) fillEnd = r.fill;
     }
     const b = await now(), wall = (b.w - a.w) / 1000, mean = (x) => x.reduce((p, q) => p + q, 0) / x.length;
     console.log(`real time ${wall.toFixed(0)} s${off ? ' without ReconView' : ''}: ${mean(fps).toFixed(1)} fps (min ${Math.min(...fps).toFixed(1)}), ${((b.n - a.n) / wall).toFixed(1)} model calls/s, ` +
-      `inference ${mean(inf).toFixed(1)} ms, model frame ${mean(cap).toFixed(1)} ms${off ? '' : `${args.recon === 'model' ? '' : ' (with its depth)'}, mesh ${mean(build).toFixed(1)} ms`}, town time x${((b.t - a.t) / wall).toFixed(2)}`);
+      `inference ${mean(inf).toFixed(1)} ms, model frame ${mean(cap).toFixed(1)} ms${off ? '' : `${args.recon === 'model' ? '' : ' (with its depth)'}, mesh ${mean(build).toFixed(1)} ms`}, town time x${((b.t - a.t) / wall).toFixed(2)}` +
+      (fillEnd ? `; fill ${((b.fills - a.fills) / wall).toFixed(1)} fills/s${finf.length ? `, its input ${mean(fprep).toFixed(1)} ms, its model ${mean(finf).toFixed(1)} ms (${fillEnd.where}), turns skipped ${fillEnd.skipped}` : ''}` : ''));
   }
   if (args.drag && !off) {
     const cam = () => page.evaluate(() => window.__pilot.recon.viewCamera());
@@ -209,11 +216,17 @@ try {
   }
   if (rows.some((r) => r.fill)) {
     const NAMES = { holes: 'the holes filled, this frame\'s fill', holesPrev: 'the holes filled, the fill before', all: 'the fill alone, this frame\'s', allPrev: 'the fill alone, the one before' };
-    for (const [k, name] of Object.entries(NAMES)) {
-      total(`  ${name}:`, (r) => (r.fill ? r.fill[k] : null));
-      const a = (key) => rows.reduce((x, r) => x + (r.fill && r.fill[k] ? r.fill[k][key] : 0), 0);
+    const part = (name, get) => {
+      if (!rows.some((r) => r.fill && get(r.fill))) return;
+      total(`  ${name}:`, (r) => (r.fill ? get(r.fill) : null));
+      const a = (key) => rows.reduce((x, r) => x + (r.fill && get(r.fill) ? get(r.fill)[key] : 0), 0);
       console.log(`    it draws ${a('added')} pixels where the view draws nothing: right ${pc(a('addedGood'), a('added'))}, through ${pc(a('addedThrough'), a('added'))}, phantom ${pc(a('addedPhantom'), a('added'))}`);
-    }
+    };
+    for (const [k, name] of Object.entries(NAMES)) part(name, (f) => f[k]);
+    part('the holes filled, the town\'s own fill of this frame', (f) => f.oracle && f.oracle.holes);
+    part('the town\'s own fill alone', (f) => f.oracle && f.oracle.all);
+    const stale = rows.filter((r) => r.fill && r.fill.fresh === false).length;
+    if (stale) { console.log(`  FAIL: ${stale} measurements without this frame's fill`); failed = true; }
     const fs2 = rows.filter((r) => r.fill), mean = (get) => fs2.reduce((x, r) => x + get(r.fill), 0) / fs2.length, aged = fs2.filter((r) => r.fill.age);
     console.log(`  the fill: ${mean((f) => f.stats.triangles).toFixed(0)} triangles of ${mean((f) => f.stats.valid).toFixed(0)} valid vertices, cut at edges ${mean((f) => f.stats.edge).toFixed(0)}, cells over a hole ${mean((f) => f.stats.holeCells).toFixed(0)}, ` +
       `${mean((f) => f.ms).toFixed(1)} ms; the fill before: ${aged.length ? `${(aged.reduce((x, r) => x + r.fill.age.frames, 0) / aged.length).toFixed(1)} model frames, ${(aged.reduce((x, r) => x + r.fill.age.metres, 0) / aged.length).toFixed(2)} m earlier` : '-'}`);
