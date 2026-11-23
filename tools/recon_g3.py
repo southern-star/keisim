@@ -2,10 +2,12 @@
 
     python tools/recon_g3.py drive runs/eval/recon/g3_drive      (does ReconView change the drive?)
     python tools/recon_g3.py speed runs/eval/recon/g3_speed      (the page's speed in real time)
+    python tools/recon_g3.py same runs/eval/recon_fill/p0_same   (two checkouts' measurements, docs/recon_fill/p0.sh)
 
 drive: per town and setting the "drive" digests of its runs (the car's state, the model's plan and its input images
 every second: web/tools/recon_check.mjs) and whether a run without ReconView has the same one. speed: frames per
-second of the main view, model calls per second, inference and model-frame times, the mesh's time."""
+second of the main view, model calls per second, inference and model-frame times, the mesh's time. same: the runs
+<checkout>_<i>.json of two checkouts with the same arguments; runs of the same digests must have the same rows."""
 import argparse
 import glob
 import json
@@ -17,7 +19,7 @@ import numpy as np
 
 TOWNS = {"1000": "town 1000", "1015-98782ab7": "town 1015（二段階の信号）", "osm_sapporo": "札幌（OSM）"}
 CFG = {"public": "recon なし、公開の ONNX", "off": "recon なし、深度つきの ONNX", "model": "`recon=model`（蓄積なし）", "split": "`recon=model&layout=split`（蓄積なし）",
-       "accum": "`recon=model`（蓄積あり）"}
+       "accum": "`recon=model`（蓄積あり）", "fill": "`recon=model&fill=oracle`", "fillall": "`recon=model&fill=oracle&fillshow=all`"}
 REAL = re.compile(r"real time (\d+) s.*?: ([\d.]+) fps \(min ([\d.]+)\), ([\d.]+) model calls/s, inference ([\d.]+) ms, model frame ([\d.]+) ms"
                   r"(?:.*?mesh ([\d.]+) ms)?, town time x([\d.]+)")
 
@@ -37,7 +39,7 @@ def drive(d):
     print("| 町 | 設定 | 走行の要約値（回数） | recon なしと同じ要約値の走行 | 判定 |\n|---|---|---|---:|---|")
     for town in [t for t in TOWNS if t in runs] + [t for t in runs if t not in TOWNS]:
         base = Counter(x[1] for x in runs[town].get("off", []))
-        for cfg in ("off", "model", "split", "accum"):
+        for cfg in ("off", "model", "split", "accum", "fill", "fillall"):
             rs = sorted(runs[town].get(cfg, []))
             if not rs:
                 continue
@@ -78,12 +80,33 @@ def speed(d):
     print("\n推論、モデルのフレーム、メッシュ、町の時間は各回の値の中央値。")
 
 
+def same(d):
+    runs = {}
+    for path in sorted(glob.glob(os.path.join(d, "*.json"))):
+        who, i = os.path.splitext(os.path.basename(path))[0].rsplit("_", 1)
+        r = json.load(open(path))
+        runs.setdefault((r["digest"], r["drive"]), {}).setdefault(who, []).append((int(i), r))
+    print("| 要約値（画像と姿勢、走行） | 走行 | 計測の行が全部同じか |\n|---|---|---|")
+    ok = shared = 0
+    for (dg, dr), by in runs.items():
+        names = "、".join(f"{who} × {len(rs)}" for who, rs in by.items())
+        every = [r for rs in by.values() for _, r in rs]
+        equal = all(json.dumps(r["rows"], sort_keys=True) == json.dumps(every[0]["rows"], sort_keys=True) for r in every)
+        if len(by) > 1:
+            shared += 1
+            ok += equal
+        verdict = "–（片方だけ）" if len(by) < 2 else ("同じ" if equal else "**違う**")
+        print(f"| `{dg}`、`{dr}` | {names} | {verdict} |")
+    n = [r for by in runs.values() for rs in by.values() for _, r in rs]
+    print(f"\n走行 {len(n)} 本、各 {n[0]['sec']} 秒、計測 {len(n[0]['rows'])} フレーム。両方にある要約値 {shared} 種類のうち、行が全部同じもの {ok} 種類。")
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("what", choices=("drive", "speed"))
+    ap.add_argument("what", choices=("drive", "speed", "same"))
     ap.add_argument("dir")
     args = ap.parse_args()
-    (drive if args.what == "drive" else speed)(args.dir)
+    {"drive": drive, "speed": speed, "same": same}[args.what](args.dir)
 
 
 if __name__ == "__main__":

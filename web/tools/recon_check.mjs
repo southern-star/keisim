@@ -18,6 +18,11 @@
 //                              keyframes the view draws, by default every static class within 10 m; --far 14: all a
 //                              keyframe holds, as G4 was measured; every measurement has all of src/recon.js ACCUM_VARIANTS on
 //                              the same frame under accum.variants, the pictures as _acc_<name>.png)
+//                              [--fill oracle] [--fillshow all] [--filltint 1]   (&fill=: what the view leaves dark is
+//                              filled in, src/fill.js, docs/recon_fill.md; every measurement then has, under "fill", the
+//                              same frame with this frame's fill and with the one before it, the holes only and all of the
+//                              fill alone; the pictures: _fill_holes.png, _fill_all.png, _fill_holesTint.png, _fill_image.png
+//                              (the fill's own image) and the maps _fill_<name>Map.png)
 //                              [--measure 0]   (no measurements: the page draws what a visitor's draws; the digests only)
 //                              [--size 1920x1080]   (the window; 1280x720) [--name NAME]   (--out DIR/NAME.json)
 //                              [--recon off]   (the page without ?recon: checks that it loads nothing of ReconView and
@@ -78,7 +83,7 @@ try {
   const off = args.recon === 'off', loaded = [];
   if (args.fonts === 'block') await page.setRequestInterception(true);
   page.on('request', (r) => {
-    if (/\/(recon|depth|unproject)\.js|OrbitControls/.test(r.url())) loaded.push(r.url().split('/').pop());
+    if (/\/(recon|depth|unproject|fill)\.js|OrbitControls/.test(r.url())) loaded.push(r.url().split('/').pop());
     if (args.fonts === 'block') { if (/fonts\.(googleapis|gstatic)\.com/.test(r.url())) r.abort(); else r.continue(); }
   });
   page.on('console', (m) => { if (m.type() === 'error') console.log(`[error] ${m.text().slice(0, 300)}`); });
@@ -89,6 +94,8 @@ try {
     ...(args.model ? { model: args.model } : {}), ...(args.ort ? { ort: args.ort } : {}),
     ...(args.layout && !off ? { layout: args.layout } : {}), ...(args.accum && !off ? { accum: args.accum } : {}),
     ...(args.keep && !off ? { accumkeep: args.keep } : {}), ...(args.far && !off ? { accumfar: args.far } : {}),
+    ...(args.fill && !off ? { fill: args.fill } : {}), ...(args.fillshow && !off ? { fillshow: args.fillshow } : {}),
+    ...(args.filltint && !off ? { filltint: args.filltint } : {}),
     ...(args.ground ? { reconground: args.ground } : {}), ...(args.ratio ? { reconratio: args.ratio } : {}),
     ...(args.scaled ? { reconscaled: args.scaled } : {}) });
   const t0 = Date.now();
@@ -99,6 +106,9 @@ try {
   };
   await open();
   if (!off && !(await page.evaluate(() => !!window.__pilot.recon))) throw new Error('the page has no ReconView (?recon)');
+  if (!off && !!args.fill !== (await page.evaluate(() => !!window.__pilot.recon.fill)) || (!args.fill && loaded.includes('fill.js'))) {
+    throw new Error(args.fill ? 'the page has no fill (?fill)' : 'the page has a fill without ?fill');
+  }
   if (off) {
     const has = await page.evaluate(() => !!window.__pilot.recon || !!document.getElementById('recon-view'));
     console.log(`without ?recon: ${has || loaded.length ? `FAIL: ReconView is there (${loaded.join(', ')})` : 'no ReconView, none of its modules requested'}`);
@@ -177,6 +187,7 @@ try {
       const png = await page.evaluate(() => window.__pilot.recon.snapshot(window.__pilot.state().car));
       for (const k of ['recon', 'town', 'map', 'oracle', 'oracleMap', 'current', 'currentMap']) if (png[k]) fs.writeFileSync(`${tag}_${k}.png`, Buffer.from(png[k].split(',')[1], 'base64'));
       for (const [k, v] of Object.entries(png.accum || {})) fs.writeFileSync(`${tag}_acc_${k}.png`, Buffer.from(v.split(',')[1], 'base64'));
+      for (const [k, v] of Object.entries(png.fill || {})) if (v) fs.writeFileSync(`${tag}_fill_${k}.png`, Buffer.from(v.split(',')[1], 'base64'));
     }
   }
   const total = (name, get) => {
@@ -195,6 +206,17 @@ try {
       `clearly in front of the current frame's surface at ${a('before')} pixels (${pc(a('before'), rows.reduce((x, r) => x + (r.drawn || 0), 0))} of its pixels; right there ${pc(a('beforeGood'), a('before'))})`);
     for (const name of Object.keys(fin.variants || {})) total(`  keyframes drawn as ${name.padEnd(8)}`, (r) => (r.accum ? r.accum.variants[name] : null));
     console.log(`  keyframes made ${fin.made}, kept vertices ${fin.vertices}, of them inside a car's or rider's box ${fin.ghostVertices} (${pc(fin.ghostVertices, fin.vertices)}), keyframes with ${10} or more of those: ${fin.ghostKeyframes}`);
+  }
+  if (rows.some((r) => r.fill)) {
+    const NAMES = { holes: 'the holes filled, this frame\'s fill', holesPrev: 'the holes filled, the fill before', all: 'the fill alone, this frame\'s', allPrev: 'the fill alone, the one before' };
+    for (const [k, name] of Object.entries(NAMES)) {
+      total(`  ${name}:`, (r) => (r.fill ? r.fill[k] : null));
+      const a = (key) => rows.reduce((x, r) => x + (r.fill && r.fill[k] ? r.fill[k][key] : 0), 0);
+      console.log(`    it draws ${a('added')} pixels where the view draws nothing: right ${pc(a('addedGood'), a('added'))}, through ${pc(a('addedThrough'), a('added'))}, phantom ${pc(a('addedPhantom'), a('added'))}`);
+    }
+    const fs2 = rows.filter((r) => r.fill), mean = (get) => fs2.reduce((x, r) => x + get(r.fill), 0) / fs2.length, aged = fs2.filter((r) => r.fill.age);
+    console.log(`  the fill: ${mean((f) => f.stats.triangles).toFixed(0)} triangles of ${mean((f) => f.stats.valid).toFixed(0)} valid vertices, cut at edges ${mean((f) => f.stats.edge).toFixed(0)}, cells over a hole ${mean((f) => f.stats.holeCells).toFixed(0)}, ` +
+      `${mean((f) => f.ms).toFixed(1)} ms; the fill before: ${aged.length ? `${(aged.reduce((x, r) => x + r.fill.age.frames, 0) / aged.length).toFixed(1)} model frames, ${(aged.reduce((x, r) => x + r.fill.age.metres, 0) / aged.length).toFixed(2)} m earlier` : '-'}`);
   }
   const vs = rows.find((r) => r.variants);
   for (const name of vs ? Object.keys(vs.variants) : []) {
