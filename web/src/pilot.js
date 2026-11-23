@@ -264,7 +264,7 @@ async function mainSession(ortDir, gpu, adapter, bytes) {
   throw new Error('推論エンジンを起動できませんでした');
 }
 
-export async function installPilot({ ctx, scene, renderer, camera, sunDir, modelPipeline, mainSize, renderMain, params, status, progress = () => {} }) {
+export async function installPilot({ ctx, scene, renderer, camera, sunDir, modelPipeline, mainSize, renderMain, needBuffer, params, status, progress = () => {} }) {
   const T = ctx.town;
   const lanes = buildLanes(T.data);
   const nav = createNavigator(T.data, lanes);
@@ -540,6 +540,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
       rgb: new Uint8Array(cam.width * cam.height * 3), remap: cyl ? makeRemap(shots.length * w, h, cyl.mapX, cyl.mapY) : null };
   }) : null;
   const rigW = rig ? Math.max(...views.map((v) => v.w)) : CAM.W, rigH = rig ? Math.max(...views.map((v) => v.h)) : CAM.H;
+  if (needBuffer) needBuffer(rigW, rigH);                   // the camera images are drawn into the canvas: it must hold them
   // ReconView (?recon=oracle): with every model frame the same shots' depth, and from both a 3D view of its own
   let reconMode = ['oracle', 'model'].includes(params.get('recon')) ? params.get('recon') : null;
   if (reconMode && !rig) console.warn('[pilot] ?recon needs the multi-camera model (?pilot=mc)');
