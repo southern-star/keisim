@@ -95,15 +95,26 @@ window.__ctx = ctx; window.THREE = THREE;
 // ego mode draws signal heads larger so the lamps stay visible at KeiSim's 320x160 camera resolution
 ctx.signalScale = Number(params.get('sigscale') || (EGO || PILOT ? 2.2 : 1));
 
+// The pilot draws the model's camera images into the canvas's drawing buffer (src/pilot.js): the buffer must hold the
+// largest of them, whatever the window's size. null: no need (no pilot).
+let minBuffer = null;
 function resize() {
   let w = SHOT ? Number(params.get('w') || 1280) : innerWidth, h = SHOT ? Number(params.get('h') || 720) : innerHeight;
   if (PILOT) {                                    // KeiSim's 2:1 car camera, centred
     w = Math.min(innerWidth, 2 * innerHeight); h = Math.round(w / 2);
     canvas.style.left = `${Math.round((innerWidth - w) / 2)}px`; canvas.style.top = `${Math.round((innerHeight - h) / 2)}px`;
   }
-  renderer.setSize(w, h, !SHOT);
+  // a window too small for those images (a phone held upright: the canvas is 390 x 195, the wide camera's faces are
+  // 230 high): the drawing buffer is larger than the canvas is shown, in the same proportions
+  let bw = w, bh = h;
+  if (minBuffer && w > 0 && h > 0 && (w < minBuffer.w || h < minBuffer.h)) {
+    const k = Math.max(minBuffer.w / w, minBuffer.h / h);
+    bw = Math.ceil(w * k); bh = Math.ceil(h * k);
+  }
+  renderer.setSize(bw, bh, !SHOT);
+  if (bw !== w || bh !== h) { canvas.style.width = `${w}px`; canvas.style.height = `${h}px`; }
   camera.aspect = w / h; camera.updateProjectionMatrix();
-  pipeline.setSize(w, h, quality.pixelRatio);
+  pipeline.setSize(bw, bh, quality.pixelRatio);
   ctx.wires.setResolution(pipeline.size.x, pipeline.size.y);
 }
 addEventListener('resize', resize);
@@ -323,6 +334,7 @@ async function main() {
       setProgress.model = true;
       const progress = (f) => setProgress(0.45 + 0.55 * Math.min(1, f));
       pilot = await installPilot({ ctx, scene, renderer, camera, sunDir, modelPipeline, mainSize: () => pipeline.size, params, status, progress,
+        needBuffer: (w, h) => { minBuffer = { w, h }; resize(); },   // the size of its largest camera image
         renderMain: (cam) => pipeline.render(scene, cam, sunDir, simT) });   // the town from another camera (src/recon.js snapshot)
     } catch (e) {
       console.error(e); errors.push({ module: 'pilot', message: String(e && e.stack || e) });
