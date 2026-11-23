@@ -9,7 +9,12 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { buildCar, carGlass } from './cars.js';
+import { buildCar2 } from './cars2.js';
+import { carGlass2, CAR_GLASS } from './carglass.js';
+
+const PARKED_FROM = 100000;                   // src/parked.js PARKED_ID: the ids of the parked cars start here
 import { makeBike, BIKE_FINE_DIST } from './bikes.js';
+import { makePerson, PED_DETAIL_DIST } from './people.js';
 
 const DETAIL_DIST = 70;           // m: detailed cars closer than this to the camera (main view)
 
@@ -112,22 +117,50 @@ export function build(ctx) {
   const detailMats = {
     glass: carGlass(M), interior: M.toon('#1d2027', { paint: 0.01 }),
     trim: M.toon('#2a2c33', { paint: 0.02 }), tire: mTire, hub: M.toon('#a9afb8', { paint: 0.02 }), head: mHead,
-    plateW: mPlateW, plateY: mPlateY, cargo: mCargo,
+    plateW: mPlateW, plateY: mPlateY, cargo: mCargo, seat: M.toon('#4d505b', { paint: 0.02 }), plateG: M.toon('#2f6b4a', { paint: 0.01 }),
+    beacon: M.emissive('#ff3b30', 1.8),              // the red lamp on the roof of a patrol car (src/world/cars2.js)
   };
+  // the highlight of the lofted cars (off with ?carshine=0): a brighter band where the lit paint turns from the side
+  // up towards the sky (the shoulder, the edges of the roof), added to the body colour's cel material
+  const SHINE = /* glsl */`
+    { vec3 nW = inverseTransformDirection(normal, viewMatrix);
+      float band = smoothstep(0.17, 0.26, nW.y) * (1.0 - smoothstep(0.55, 0.7, nW.y));
+      vec3 dd = reflectedLight.directDiffuse;
+      // as bright on a dark paint as on a pale one: the light that falls on it, not the light it gives back
+      float lit = max(max(dd.r, dd.g), dd.b) / max(max(max(diffuseColor.r, diffuseColor.g), diffuseColor.b), 0.04);
+      outgoingLight += vec3(lit) * band * 0.16; }`;
+  const shineMat = (rgb) => {
+    const m = M.toon(new THREE.Color(`rgb(${q8(rgb[0])},${q8(rgb[1])},${q8(rgb[2])})`), { paint: 0.03, name: 'carshine' });
+    if (!m.userData.shine) {
+      m.userData.shine = true;
+      const base = m.onBeforeCompile;
+      m.onBeforeCompile = (shader, r) => { base(shader, r); shader.fragmentShader = shader.fragmentShader.replace('#include <opaque_fragment>', SHINE + '\n#include <opaque_fragment>'); };
+      m.customProgramCacheKey = () => 'paint+carshine';
+    }
+    return m;
+  };
+  // the glass of the lofted cars (?cardetail=2): see-through 'clear' unless ?carglass=tint|solid (src/world/carglass.js; solid: cars.js' glass)
+  const glass2 = { solid: detailMats.glass };
+  for (const k of Object.keys(CAR_GLASS)) glass2[k] = carGlass2(M, k);
   const plain = (g) => {
     const x = g.index ? g.toNonIndexed() : g;
     for (const name of Object.keys(x.attributes)) if (!['position', 'normal', 'uv'].includes(name)) x.deleteAttribute(name);
     if (!x.attributes.uv) x.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(x.attributes.position.count * 2), 2));
     return x;
   };
-  function makeDetail(kind, L, W, H, rgb) {
-    const { parts, tails } = buildCar(kind, L, W, H, rgb);
+  /** level 1: cars.js, 2: the lofted cars of the redesign (cars2.js, ?cardetail=2; id varies what the size leaves open). */
+  function makeDetail(kind, L, W, H, rgb, id = 0, level = ctx.carDetail === 2 ? 2 : 1, opt = null) {
+    const { parts, tails } = level === 2 ? buildCar2(kind, L, W, H, rgb, id, opt) : buildCar(kind, L, W, H, rgb);
     const byKey = new Map();
     for (const [geo, key] of parts) { if (!byKey.has(key)) byKey.set(key, []); byKey.get(key).push(plain(geo)); }
     const g = new THREE.Group(), out = { g, tails: [] };
     for (const [key, geos] of byKey) {
-      const mesh = new THREE.Mesh(mergeGeometries(geos, false), key === 'body' ? colorMat(rgb, 0.03) : detailMats[key]);
+      const see = level === 2 && key === 'glass' ? (opt && opt.glass) || ctx.carGlass || 'clear' : 'solid';
+      const shine = level === 2 && (opt && opt.shine != null ? opt.shine : ctx.carShine);
+      const mesh = new THREE.Mesh(mergeGeometries(geos, false), key === 'body' ? (shine ? shineMat(rgb) : colorMat(rgb, 0.03)) : key === 'glass' ? glass2[see] || glass2.solid : detailMats[key]);
       mesh.castShadow = key !== 'glass'; mesh.receiveShadow = true;
+      // see-through glass stays out of the outline pass, so that it draws the lines of what is inside the car
+      if (see !== 'solid' && glass2[see] && !(opt && opt.glassLines === false)) ctx.noOutline(mesh);
       g.add(mesh);
     }
     if (tails.length) {
@@ -168,7 +201,7 @@ export function build(ctx) {
   const cars = new Map(), peds = new Map(), bikes = new Map();          // KeiSim actor id -> slot
   const drop = (slot, parent) => {
     parent.remove(slot.g);
-    slot.g.traverse((o) => { if (o.isMesh) o.geometry.dispose(); });
+    slot.g.traverse((o) => { if (o.isMesh) o.geometry.dispose(); if (o.isSkinnedMesh && o.skeleton) o.skeleton.dispose(); });
   };
 
   /**
@@ -183,14 +216,16 @@ export function build(ctx) {
     for (const s of bikes.values()) s.g.visible = false;
     for (const v of veh) {
       const [id, x, y, yaw, L, W, H, r, gg, b, kind, brake] = v;
-      const sig = `${kind}|${L.toFixed(2)}|${W.toFixed(2)}|${H.toFixed(2)}|${q8(r)},${q8(gg)},${q8(b)}`;
+      // a parked car has nobody at the wheel: src/parked.js' ids, or a 13th item 0 (nobody) in the row
+      const empty = ctx.carDetail === 2 && (id >= PARKED_FROM || v[12] === 0);
+      const sig = `${kind}|${L.toFixed(2)}|${W.toFixed(2)}|${H.toFixed(2)}|${q8(r)},${q8(gg)},${q8(b)}${empty ? '|empty' : ''}`;
       let s = cars.get(id);
       if (!s || s.sig !== sig) {
         if (s) drop(s, carRoot);
         const car = makeCar(kind, L, W, H, [r, gg, b]);
         s = { ...(ctx.mergeActors ? mergeCar(car) : car), sig, brake: -1 };
         if (ctx.carDetail) {                       // plain and detailed models side by side in one group
-          const plainG = s.g, det = makeDetail(kind, L, W, H, [r, gg, b]);
+          const plainG = s.g, det = makeDetail(kind, L, W, H, [r, gg, b], id, undefined, empty ? { driver: false } : null);
           s.g = new THREE.Group(); s.g.add(plainG, det.g);
           s.plain = plainG; s.detail = det.g; s.tails = s.tails.concat(det.tails);
         }
@@ -205,6 +240,7 @@ export function build(ctx) {
       if (bk !== s.brake) { s.brake = bk; for (const m of s.tails) m.material = bk ? mTailOn : mTail; }
     }
     if (ctx.carDetail) view(viewMode);
+    if (ctx.pedDetail && ctx.camera) ctx.camera.getWorldPosition(camPos);
     for (const p of ped) {
       const [id, x, y, yaw, h] = p;
       const sig = `${h.toFixed(2)}|${p.slice(5, 14).map(q8).join(',')}`;
@@ -212,6 +248,11 @@ export function build(ctx) {
       if (!s || s.sig !== sig) {
         if (s) drop(s, pedRoot);
         s = { ...makePed(h, p.slice(5, 8), p.slice(8, 11), p.slice(11, 14), id), sig };
+        if (ctx.pedDetail) {                       // plain and detailed models side by side in one group
+          const plainG = s.g, det = makePerson(ctx, mBike, h, [rgbColor(p.slice(5, 8)), rgbColor(p.slice(8, 11)), rgbColor(p.slice(11, 14))], id);
+          s.g = new THREE.Group(); s.g.add(plainG, det.g);
+          s.plain = plainG; s.detail = det;
+        }
         peds.set(id, s);
         pedRoot.add(s.g);
       }
@@ -222,7 +263,15 @@ export function build(ctx) {
       const sw = Math.sin(p[14]) * 0.45;
       s.legs[0].rotation.x = sw; s.legs[1].rotation.x = -sw;
       s.arms[0].rotation.x = -sw * 0.7; s.arms[1].rotation.x = sw * 0.7;
+      if (s.detail) {
+        // the walk follows KeiSim's phase; the time since the call before (ctx.time: ego mode's q.t) only paces the
+        // settling into the standing pose. Frames that are not consecutive: at most one second counts
+        const t = ctx.time, dt = s.t === undefined || t === undefined || t < s.t ? undefined : Math.min(1, t - s.t);
+        s.t = t;
+        if (pedNear(s)) s.detail.pose({ phase: p[14], dt });      // far away the plain model is shown: nothing to pose
+      }
     }
+    if (ctx.pedDetail) viewPeds(viewMode);
     if (bike.length && ctx.camera) ctx.camera.getWorldPosition(camPos);
     for (const b of bike) {
       const [id, x, y, yaw, kind, h] = b;
@@ -248,8 +297,22 @@ export function build(ctx) {
   /** Which car models are shown: 'main' (detailed within DETAIL_DIST of the camera, plain beyond) or 'model' (plain
    *  everywhere: the KeiPilot frame, as in training). */
   let viewMode = 'main';
+  const pedNear = (s) => viewMode === 'main' && s.g.position.distanceTo(camPos) < PED_DETAIL_DIST;
+  /** The same for the pedestrians of ?peddetail=1 (src/world/people.js): detailed within PED_DETAIL_DIST, their thin
+   *  parts (sticks, cords) only as near as the bicycles' (BIKE_FINE_DIST); the plain one beyond and in the model frame. */
+  function viewPeds(mode) {
+    viewMode = mode;
+    if (ctx.camera) ctx.camera.getWorldPosition(camPos);
+    for (const s of peds.values()) {
+      if (!s.detail) continue;
+      const d = s.g.position.distanceTo(camPos), near = mode === 'main' && d < PED_DETAIL_DIST;
+      s.detail.g.visible = near; s.plain.visible = !near;
+      for (const m of s.detail.fine) m.visible = near && d < BIKE_FINE_DIST;
+    }
+  }
   function view(mode) {
     viewMode = mode;
+    if (ctx.pedDetail) viewPeds(mode);
     if (!ctx.carDetail) return;
     if (ctx.camera) ctx.camera.getWorldPosition(camPos);
     for (const s of cars.values()) {
@@ -268,7 +331,10 @@ export function build(ctx) {
   }
 
   ctx.add(root);
+  // the gallery (src/gallery_cars.js) puts single detailed models side by side: { g, tails } of a level, and its lamps
+  const detailModel = (level, kind, L, W, H, rgb, id = 0, opt = null) => makeDetail(kind, L, W, H, rgb, id, level, opt);
+  const setBrake = (model, on) => { for (const m of model.tails) m.material = on ? mTailOn : mTail; };
   /** A detailed car of its own (not one of the pool): its group, origin on the ground at the centre, facing +Z. */
   const detail = (kind, L, W, H, rgb) => makeDetail(kind, L, W, H, rgb).g;
-  ctx.services.actors = { update, reset, view, detail, cars, peds, bikes };
+  ctx.services.actors = { update, reset, view, detail, cars, peds, bikes, detailModel, setBrake };
 }

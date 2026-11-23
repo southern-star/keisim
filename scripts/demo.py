@@ -39,6 +39,8 @@ def main():
     ap.add_argument("--renderer", default="keisim", choices=["keisim", "keiview"], help="camera renderer")
     ap.add_argument("--keiview_roads", default="plain", choices=["plain", "detail"],
                     help="KeiView road surface: plain (as trained) or detail (markings, signs, ...)")
+    ap.add_argument("--keiview_peds", default="plain", choices=["plain", "detail"],
+                    help="KeiView pedestrians: plain (as trained) or detail (types, clothes, gait)")
     ap.add_argument("--no_safety", action="store_true",
                     help="model: without the safety layers (BrakeHold / RedHold, and YieldHold for camera rigs)")
     ap.add_argument("--rig", default=None, choices=list(CAMERA_RIGS),
@@ -74,6 +76,7 @@ def main():
     cfg = set_camera_rig(EnvConfig(), args.rig)
     cfg.renderer = args.renderer
     cfg.keiview_roads = args.keiview_roads
+    cfg.keiview_peds = args.keiview_peds
     town = args.town
     if args.osm_town:
         from keisim.realworld import osm_town

@@ -22,6 +22,7 @@ const EGO = params.has('ego');                    // KeiSim ego-camera mode (src
 const ROADS = params.get('roads') === 'detail' ? 'detail' : 'plain';
 const PILOT = params.has('pilot');                // KeiPilot drives in the browser (src/pilot.js)
 const PILOT_MC = params.get('pilot') === 'mc';     // ... with the multi-camera model (two cameras, src/rig.js)
+const GALLERY = params.get('gallery');            // ?gallery=cars|people: models on a flat ground (src/gallery.js)
 if (PILOT) {                                      // the intro board describes the driving demo, not the walk
   document.body.classList.add('pilot-mode');
   document.title = PILOT_MC ? 'KeiPilot Mc — マルチカメラで自動運転' : 'KeiPilot — ブラウザで自動運転';
@@ -86,6 +87,10 @@ ctx.sky = sky;
 ctx.mergeActors = PILOT;                         // pilot: each car one mesh per material (src/world/actors.js)
 ctx.carDetail = PILOT ? params.get('cardetail') !== '0' : params.get('cardetail') === '1';   // detailed cars near the camera
                                                  // (src/world/cars.js): pilot by default, ego mode only on request (tests)
+if (params.get('cardetail') === '2') ctx.carDetail = 2;   // the lofted cars of the redesign (src/world/cars2.js): on request
+ctx.pedDetail = params.get('peddetail') === '1';          // the detailed pedestrians near the camera (src/world/people.js): on request
+ctx.carShine = params.get('carshine') !== '0';            // the highlight band on their paint, unless ?carshine=0 (src/world/actors.js)
+ctx.carGlass = params.get('carglass') || 'clear';         // their glass: see-through 'clear' (default) or 'tint', or 'solid' as cars.js (src/world/carglass.js)
 window.__ctx = ctx; window.THREE = THREE;
 // ego mode draws signal heads larger so the lamps stay visible at KeiSim's 320x160 camera resolution
 ctx.signalScale = Number(params.get('sigscale') || (EGO || PILOT ? 2.2 : 1));
@@ -287,6 +292,13 @@ function start() {
 }
 
 async function main() {
+  if (GALLERY) {
+    try {
+      const { installGallery } = await import('./gallery.js');
+      await installGallery({ kind: GALLERY, ctx, scene, camera, renderer, pipeline, sky, sunDir, params, shot: SHOT, canvas });
+    } catch (e) { console.error(e); errors.push({ module: 'gallery', message: String(e && e.stack || e) }); }
+    window.__ready = true; return;
+  }
   try { await build(); } catch (e) {
     console.error(e); errors.push({ module: 'load', message: String(e && e.stack || e) });
     const lab = $('loadlabel'); if (lab) lab.textContent = String(e.message || e);

@@ -352,6 +352,7 @@ def worker(wid, args, quota, out_dir, counter):
     cfg.render_rgb = cfg.render_seg = False
     cfg.renderer = args.renderer
     cfg.keiview_roads = args.keiview_roads
+    cfg.keiview_peds = args.keiview_peds
     cfg.expert_yield_visible = bool(args.yield_visible)
     cfg.expert_bike_visible = bool(args.bike_visible)
     cfg.expert_bike_sweep = bool(args.bike_sweep)
@@ -689,6 +690,8 @@ def parse_args(argv=None):
                          "keisim/render/rays.py; ReconView's depth head, docs/recon_view.md). KeiView only, no --history")
     ap.add_argument("--keiview_roads", default="plain", choices=["plain", "detail"],
                     help="KeiView road surface: plain (every KeiView dataset so far) or detail (markings, signs, ...)")
+    ap.add_argument("--keiview_peds", default="plain", choices=["plain", "detail"],
+                    help="KeiView pedestrians: plain (every KeiView dataset so far) or detail (types, clothes, gait)")
     ap.add_argument("--episodes_per_town", type=int, default=1, help="episodes before switching town")
     ap.add_argument("--town_style", default="classic", choices=list(TOWN_STYLES),
                     help="town style (keisim/config.py); twophase: right turns wait for gaps in the oncoming traffic; "
@@ -740,6 +743,7 @@ def main():
                renderer=args.renderer, town_style=args.town_style, jam_fixes=args.jam_fixes, late_yield=True,
                **({"osm_towns": args.osm_towns, "osm_seed0": args.osm_seed0} if args.osm_towns else {}),
                **({"keiview_roads": args.keiview_roads} if args.keiview_roads != "plain" else {}),
+               **({"keiview_peds": args.keiview_peds} if args.keiview_peds != "plain" else {}),
                **({"yield_visible": 1} if args.yield_visible else {}),
                **({"expert_wait_back": args.expert_wait_back} if args.expert_wait_back else {}),
                **({"ego_patience": args.ego_patience} if args.ego_patience else {}),

@@ -66,9 +66,10 @@ def _vfov(cam_cfg):
 
 class KeiViewRenderer:
     def __init__(self, cam_cfg, quality="medium", gl="auto", node="node", max_dist=160.0, log_path=None, roads="plain",
-                 cameras=None, depth_stitch="planar"):
+                 cameras=None, depth_stitch="planar", peds="plain"):
         """cameras: every camera of the rig (EnvConfig.cameras, cam_cfg first), for render_rig().
-        depth_stitch: how render_rig_depth() puts a cylinder's depth together from its faces (rays.DepthStitcher)."""
+        depth_stitch: how render_rig_depth() puts a cylinder's depth together from its faces (rays.DepthStitcher).
+        peds: plain, or detail (the pedestrians of web/src/world/people.js near the camera)."""
         self.cfg = cam_cfg
         self.cameras = tuple(cameras) if cameras else (cam_cfg,)
         # what each camera draws: its pinhole shots, and the maps that stitch them (None: one plain image)
@@ -106,6 +107,10 @@ class KeiViewRenderer:
             raise ValueError(f"roads must be plain or detail (got {roads!r})")
         if roads == "detail":                           # road surface detailing (web/src/world/roaddeco.js)
             cmd += ["--roads", "detail"]
+        if peds not in ("plain", "detail"):
+            raise ValueError(f"peds must be plain or detail (got {peds!r})")
+        if peds == "detail":                            # detailed pedestrians near the camera (web/src/world/people.js)
+            cmd += ["--peds", "detail"]
         self.proc = subprocess.Popen(cmd, cwd=WEB_DIR, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self._log)
         hello = self._read()
         if not hello.get("ok"):
