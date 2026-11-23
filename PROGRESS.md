@@ -1,8 +1,77 @@
 # PROGRESS.md — KeiView の車と歩行者の作り直し
 
 設計図: `CarRedesign_Handoff.md`（車）、`PedRedesign_Handoff.md`（歩行者）。
-作業ブランチ: `car-ped-redesign-p0`（`main` の babe835 から）。新しい記録を上に足す。
+作業ブランチ: `car-ped-redesign-p0`（`main` の babe835 から。2026-11-23 に PR #69 で `main` へマージ）。新しい記録を上に足す。
 絵は `docs/cars/` と `docs/people/` に JPEG（品質 0.9）で置いてある。撮ったときは PNG で、コミットの前に変換した（PNG のままだと 130 MB あったため）。
+
+## 2026-11-23 別の PC での確かめ（pytest、RTX 3060 での計測、歩行者のデモ動画）
+
+ここまでの作業をした PC では Python を走らせられなかったので、RTX 3060 の PC で確かめた。
+同じ日に PR #69 として `main` にマージした（`41fbebd`）。
+
+### pytest
+
+- ブランチのまま（`b2586b1`）: 89 通過、1 スキップ。スキップした `test_keiview_draws_the_rig` も、`web/node_modules` を置いて走らせると通った。
+- `main`（ReconView、PR #66〜#71）をマージしたあと（`5e2fcc7`）: 121 通過、4 スキップ、失敗 0。
+  スキップは `runs/keipilot_mc14/last.pt` がない 2 件と `onnxruntime` がない 2 件で、この作り直しとは関係しない。
+- マージの衝突は 2 か所。どちらも両方を残した。
+  - `keisim/render/keiview.py`: `KeiViewRenderer` の引数に `main` の `depth_stitch` とこちらの `peds`。
+  - `web/src/world/actors.js`: `main` の `detail()`（ReconView の split 表示の自車）と、こちらの `detailModel()`・`setBrake()`。
+    `detail()` はこちらの `makeDetail()` を通るので、`?cardetail=2` では自車も作り直した車になる（画面では見ていない）。
+
+Python 側の確かめ（pytest のほかに）
+
+- 既定（`keiview_peds="plain"`）の KeiView の絵は、もとの `main`（`babe835`）とビット単位で同じ（13 フレーム × 2 台、RGB とラベル、2 回とも）。
+- `keiview_peds="detail"` で変わるのは歩行者の画素だけ。不正な値は `ValueError`。
+- マージの前後で、既定・`detail` どちらの絵も同じ（52 / 52 の配列）。
+- `collect.py`・`evaluate.py`・`demo.py` の `--help` に `--keiview_peds` が出る。`tools/` の 4 本はコンパイルが通る。
+- マージ後の `node tools/check.mjs --town 1000`、`golden.mjs`（既定と `cardetail=1` の 6 / 6 フレームが `main` と同じ）、
+  `cars_check.mjs`、`people_check.mjs`: すべて RESULT: OK。
+
+### RTX 3060 での計測
+
+ANGLE（OpenGL 4.5）。ほかの仕事が同じ PC で動いていないときに測った。値は中央値で、括弧はいちばん速い回どうし。
+
+歩行者（`node tools/people_bench.mjs`、45 m 以内に 20 人、いちばん遠い人 41 m）
+
+| 条件 | 簡易 | 詳細 | 差 |
+|---|---|---|---|
+| エゴモードの 1 フレーム、歩行中、320 × 160・画質 medium（`--w 320 --h 160 --q medium`） | 5.15 ms | 6.01 ms | **+0.87 ms**（+0.84） |
+| エゴモードの 1 フレーム、歩行中、1280 × 720・画質 high（既定） | 25.26 ms | 25.82 ms | +0.56 ms（+0.74） |
+| 描くだけ、320 × 160・画質 medium | 2.71 ms | 3.58 ms | +0.87 ms（+0.84） |
+| 描くだけ、1280 × 720・画質 high | 2.76 ms | 3.56 ms | +0.80 ms（+0.71） |
+| `actors.update()`（姿勢の計算） | 0.028 ms | 0.18 ms | +0.15 ms |
+
+設計図の「RTX 3060 で 3 ms 以内」を満たす。描画呼び出しは 1280 × 720 で 909 → 1253。
+
+車（`node tools/cars_bench.mjs`、1280 × 720・画質 high、36 台、エゴモードのページ）
+
+| 車 | 1 フレーム | 車の分 | 今の詳細モデルとの差 |
+|---|---|---|---|
+| なし | 2.85 ms（2.84） | — | — |
+| 簡易 | 4.90 ms（4.72） | 2.05 ms | — |
+| 今の詳細モデル（`cars.js`） | 3.75 ms（3.69） | 0.90 ms | — |
+| 作り直し、`solid` | 4.14 ms（4.06） | 1.29 ms | **+10.4 %** |
+| 作り直し、`tint` | 4.01 ms（3.95） | 1.16 ms | +6.9 % |
+| 作り直し、`clear` | 4.03 ms（3.94） | 1.18 ms | +7.5 % |
+
+不変条件 8 の 10 % を、`solid` だけがわずかに超える。ただし不変条件 8 はパイロットモードでの値で、これはエゴモードのページの同じ場面。
+
+### 歩行者のデモ動画
+
+- `kv_pedestrian.mp4` と同じルート（町 1000、エピソード 9001）は、今のシミュレーションでは歩行者の前で止まる場面がない。
+  テストの 20 ルートを調べ、エキスパートが歩行者の前で止まる町 1003・エピソード 9000（昼）を撮った。
+- ステップ 230〜400 の 17 秒（10 fps）。298〜343 でエキスパートが歩行者の前に止まる。エキスパートの運転なので左右は同じシミュレーション。
+- 1280 × 640。左が簡易、右が詳細。上はモデルのカメラの 100° を 640 × 320・画質 medium（モデルの入力の 2 倍）、下は望遠 40°。
+- 動画はリポジトリに入れていない（`runs/ped_demo/ped_plain_vs_detail_1003_9000.mp4`、git の管理外）。
+
+### 走らせていないもの・確かめていないこと（2026-11-23）
+
+- パイロットモードでの車の計測: `pilot_check.mjs` に `cardetail` を渡す選択肢がない。
+- 内蔵 GPU での計測: この PC には RTX 3060 しかない。
+- `evaluate.py`・`collect.py` を `--keiview_peds detail` で最後まで走らせること。単眼のリグでの `detail`。
+- ReconView の split 表示と `?cardetail=2` の組み合わせ。
+- 45 m の境目で簡易と詳細が入れ替わる瞬間は、動画に映る範囲でしか見ていない。
 
 ## 2026-11-22 車 P3・歩行者 P3
 
