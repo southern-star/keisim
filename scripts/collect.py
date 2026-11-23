@@ -354,6 +354,7 @@ def worker(wid, args, quota, out_dir, counter):
     cfg.keiview_roads = args.keiview_roads
     cfg.keiview_peds = args.keiview_peds
     cfg.expert_yield_visible = bool(args.yield_visible)
+    cfg.expert_hidden_cars = bool(args.hidden_cars)
     cfg.expert_bike_visible = bool(args.bike_visible)
     cfg.expert_bike_sweep = bool(args.bike_sweep)
     cfg.expert_wait_back = float(args.expert_wait_back)
@@ -699,6 +700,9 @@ def parse_args(argv=None):
     ap.add_argument("--jam_fixes", type=int, default=0, choices=[0, 1], help="box rule + hidden jam release (long2/3)")
     ap.add_argument("--yield_visible", type=int, default=0, choices=[0, 1],
                     help="the expert gives way only to cars the camera sees (EnvConfig.expert_yield_visible)")
+    ap.add_argument("--hidden_cars", type=int, default=0, choices=[0, 1],
+                    help="見えにくい右折: right turns at two-phase signals wait while the oncoming lanes they give way to "
+                         "are hidden behind other cars (EnvConfig.expert_hidden_cars)")
     ap.add_argument("--osm_towns", nargs="*", default=[], metavar="NAME[:S,W,N,E]",
                     help="drive real towns (keisim/realworld.py; boxes of OSM_BOXES or given) instead of procedural "
                          "ones; a town is picked per --episodes_per_town episodes. Use --jam_fixes 1 as evaluate.py does")
@@ -745,6 +749,7 @@ def main():
                **({"keiview_roads": args.keiview_roads} if args.keiview_roads != "plain" else {}),
                **({"keiview_peds": args.keiview_peds} if args.keiview_peds != "plain" else {}),
                **({"yield_visible": 1} if args.yield_visible else {}),
+               **({"hidden_cars": 1} if args.hidden_cars else {}),
                **({"expert_wait_back": args.expert_wait_back} if args.expert_wait_back else {}),
                **({"ego_patience": args.ego_patience} if args.ego_patience else {}),
                **({"npc_past_line": args.npc_past_line} if args.npc_past_line else {}),

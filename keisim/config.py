@@ -386,6 +386,16 @@ class EnvConfig:
     # horizontal field of view, not behind a building; Traffic.visible_from), so its labels follow from the image:
     # with all of them, a car outside the 100 deg view made the expert wait where the image looked clear.
     expert_yield_visible: bool = False
+    # 見えにくい右折: a right turn waiting at a two-phase signal (its connector's wait point) assumes a car wherever the
+    # oncoming lanes it gives way to are hidden from the camera behind another car (or a building) within reach of
+    # the crossing: an oncoming car waiting to turn right itself hides the lane beside it, and through traffic comes
+    # out from behind it (右直事故). Traffic.hidden_spot finds the nearest spot before the crossing where a kei car could
+    # be unseen; it counts as a car there at the lane's speed limit, with min_arrival's rules (it stops at a yellow
+    # light it can stop for, it queues behind a car standing to go elsewhere), never on red, and on the connector
+    # itself (inside the junction) only on green. So the expert waits until it sees the lane clear or the light
+    # stops the oncoming traffic, whether or not a car is really there: the labels follow from what the camera
+    # shows. With expert_yield_visible, cars hide one another too (Traffic.visible_from(cars=True)). Off: as before.
+    expert_hidden_cars: bool = False
     # Bicycles (TrafficConfig.bicycles) for the expert: only the riders the first camera (on the labelled pose) sees
     # right now (Bicycles.visible_from) count for the 巻き込み確認 before a left turn and for the give-way tables;
     # riders it does not see that come up from behind faster than the ego do not move its path over either

@@ -18,8 +18,8 @@ from .parked import (PARKED_OWNER, PK_CLEAR, PK_DECIDE, PK_GAP0, PK_GIVE_ROOM, P
                      PK_PASS_V, PK_SLOW_AT, PK_SLOW_B, PK_WAIT, PK_ZONE)
 from .route import LC_CHECK, LC_PUSH, LC_PUSH_TO, change_room, link_map
 from .traffic import (BIKE_END, BIKE_FREE, BIKE_IN, BIKE_KEEP, BIKE_LEFT, BIKE_LEFT_WAIT, BIKE_MIN, BIKE_OUT,
-                      BIKE_PASS_DV, BIKE_PASS_V, CW_MARGIN, CW_REACH, PASS_SPEED, YIELD_GAP, Traffic, corridor_gaps,
-                      sweep_gaps, vehicle_circles)
+                      BIKE_PASS_DV, BIKE_PASS_V, CW_MARGIN, CW_REACH, HIDE_DIMS, PASS_SPEED, YIELD_GAP, Traffic,
+                      corridor_gaps, sweep_gaps, vehicle_circles)
 
 PATH_S = np.arange(1, 11) * 2.0          # label waypoints every 2 m up to 20 m
 LABEL_VERSION = 7                        # 3: yellow per traffic law; 4: at yellow, stop whenever the ego still can;
@@ -400,6 +400,35 @@ class Expert:
         cam = (x + c.x * math.cos(yaw) - c.y * math.sin(yaw), y + c.x * math.sin(yaw) + c.y * math.cos(yaw))
         return w.bikes.visible_from(cam, yaw, math.radians(c.fov_deg) / 2, c.max_dist, w.town)
 
+    def with_hidden(self, conn, on_lane, pose):
+        """EnvConfig.expert_hidden_cars: the give-way tables `on_lane` with a car (HIDE_DIMS, at the lane's speed
+        limit) at the nearest spot of each lane `conn` gives way to that the rig's first camera on `pose` cannot see
+        (Traffic.hidden_spot) -> a new dict, or on_lane itself when every lane is in view. Such a car counts only
+        while its approach has green or yellow (min_arrival: on yellow, if it would not stop), and on the connector
+        itself (inside the junction) only on green."""
+        w = self.env.world
+        tr, lanes = w.traffic, w.town.lanes
+        c = self.env.cfg.camera
+        x, y, yaw = float(pose[0]), float(pose[1]), float(pose[2])
+        cam = (x + c.x * math.cos(yaw) - c.y * math.sin(yaw), y + c.x * math.sin(yaw) + c.y * math.cos(yaw))
+        half = math.radians(c.fov_deg) / 2
+        out = on_lane
+        self.hidden_why = []
+        for b, _, s2 in conn.yields:
+            spot = tr.hidden_spot(b, s2, cam, yaw, half, c.max_dist, w.town, why=True)
+            if spot is None:
+                continue
+            lid, sl, why = spot
+            st = w.town.signal_state_for_lane(lanes[b].pred[0], w.t)
+            if st == TL_RED or (lid == b and st != TL_GREEN):
+                continue            # (one hidden all along does not run the red: the ego clears the junction)
+            if out is on_lane:
+                out = dict(on_lane)
+            self.hidden_why.append(why)
+            row = (sl, lanes[lid].speed_limit, HIDE_DIMS[0], False, None if lid == b else b, None, False)
+            out[lid] = sorted(list(out.get(lid, ())) + [row], key=lambda e: -e[0])
+        return out
+
     def bike_rules(self, route, s, v, bikes, pts, cum, real):
         """The speed rules for bicycles -> target speed (inf: none binds). Behind one the ego cannot pass (less
         than BIKE_MIN beside it on the path bike_scan allows) it follows, BIKE_GAP0 behind at a stand. Passing
@@ -688,6 +717,7 @@ class Expert:
         # up to 16-21 km/h over the 5-10 m from its stop to the wait point, too fast where the corner hides the cars
         # with priority (KeiView's walls and hedges): models that saw a car late hit it.
         yield_tta = math.nan          # label for the model's auxiliary head: earliest arrival of a car with priority
+        hidden = False                # EnvConfig.expert_hidden_cars: the yield binds for a hidden spot alone
         ss_creep = False              # 徐行 after a 止まれ line (diagnostics)
         if tr.has_yields:
             s_front = s + hl
@@ -702,7 +732,8 @@ class Expert:
                 x, y, yaw = float(pose[0]), float(pose[1]), float(pose[2])
                 cam = (x + c.x * math.cos(yaw) - c.y * math.sin(yaw), y + c.x * math.sin(yaw) + c.y * math.cos(yaw))
                 half = math.radians(c.fov_deg) / 2
-                return tr.yield_tables(visible=tr.visible_from(cam, yaw, half, c.max_dist, w.town),
+                return tr.yield_tables(visible=tr.visible_from(cam, yaw, half, c.max_dist, w.town,
+                                                               cars=env.cfg.expert_hidden_cars),
                                        bikes_visible=None if w.bikes is None else
                                        w.bikes.visible_from(cam, yaw, half, c.max_dist, w.town))
             for jn in route.junctions:
@@ -727,12 +758,18 @@ class Expert:
                                 v_x, ss_creep = min(v_x, CROSSING_V), True
                             if v_x < target:
                                 target, reason = v_x, "crossing"
-                        tta = tr.min_arrival(conn, w.t, tables())
+                        on = tables()
+                        tta = tr.min_arrival(conn, w.t, on)
+                        seen_clear = tta >= YIELD_GAP
+                        if env.cfg.expert_hidden_cars and jn["signalized"]:
+                            on_h = self.with_hidden(conn, on, pose)
+                            if on_h is not on:
+                                tta = min(tta, tr.min_arrival(conn, w.t, on_h))
                         yield_tta = min(tta, YIELD_TTA_MAX)
                         if tta < YIELD_GAP:
                             v_y = stop_profile(max(d_wait, 0.0), self.B_COMF)
                             if v_y < target:
-                                target, reason = v_y, "yield"
+                                target, reason, hidden = v_y, "yield", seen_clear
                     elif not jn["signalized"]:
                         # priority crossings: the first crossing only (past the near lane, a stop for the far one
                         # would leave the car standing across the near one)
@@ -874,7 +911,8 @@ class Expert:
         # lead_owner: what the gap is to (>= 0: NPC vehicle index in world.traffic, <= -2: pedestrian, -1: nothing)
         return {"path": path, "target_speed": float(target), "tl_state": int(tl), "reason": reason,
                 "gap": g, "lead_owner": int(lead_o[0]), "target_nolight": float(target_nolight),
-                "yield_tta": float(yield_tta), "ss_d": float(ss_d), "ss_go": float(ss_go), "ss_creep": ss_creep, **lt}
+                "yield_tta": float(yield_tta), "hidden": hidden,
+                "ss_d": float(ss_d), "ss_go": float(ss_go), "ss_creep": ss_creep, **lt}
 
     def blocked_at(self, route, s_stop):
         """Don't block the box: True if the exit beyond the junction of the route's stop line at `s_stop` has no

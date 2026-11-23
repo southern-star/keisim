@@ -6,7 +6,7 @@ import math
 import numpy as np
 
 from .config import TL_GREEN, TL_RED, TL_YELLOW, TrafficConfig
-from .geometry import box_corners, curvature_of, rays_clear, wrap
+from .geometry import box_corners, curvature_of, obb_overlap, rays_clear, rays_hit, wrap
 from .parked import (PARKED_OWNER, PK_ACC, PK_BACK, PK_CLEAR, PK_CONVOY, PK_CONVOY_GAP, PK_CONVOY_ROOM, PK_DECIDE,
                      PK_EXIT, PK_GIVE_ROOM, PK_IN, PK_KEEP, PK_MARGIN, PK_ONCOMING_T, PK_OUT, PK_PASS_V, PK_RATE,
                      PK_SWING_V, PK_WAIT, PK_YIELD_B, PK_YIELD_D, PK_ZONE)
@@ -168,6 +168,9 @@ SWEEP_MIN = 0.05            # m: ... for the cars whose front corner swings out 
 SWEEP_STAND = 0.5           # m/s: ... against the cars standing (slower than this): a moving one is left to the give-way
 #                             rules (an NPC turning left that stopped for the ego still coming up to its right turn's
 #                             wait point broke them: the ego, no longer waiting for it, drove into its nose)
+HIDE_DIMS = (3.4, 1.48)     # m: EnvConfig.expert_hidden_cars: the smallest car that could be on the road unseen (a kei
+#                             car), as a box at the spots Traffic.hidden_spot tests
+HIDE_STEP = 1.0             # m between those spots along a lane
 YIELD_GAP = 5.0             # s: a yielding turn goes only if no car with priority reaches the crossing sooner
 LC_GIVE_UP = 8.0            # s: an NPC waiting this long at the end of its lane change window stays in its lane (two
                             # cars side by side that want each other's lane would wait for ever)
@@ -942,14 +945,18 @@ class Traffic:
             lst.sort(key=lambda e: -e[0])
         return on_lane
 
-    def visible_from(self, cam, yaw, half_fov, max_dist, town=None):
+    def visible_from(self, cam, yaw, half_fov, max_dist, town=None, cars=False):
         """NPCs a camera at `cam` (x, y) looking along `yaw` can see -> bool (n,): a corner of the car within
         +-half_fov (rad) of its axis and max_dist of it, and (given `town`) the line to that corner not through a
-        building (Town.building_edges, 2D: cars do not hide one another, nor walls and trees)."""
+        building (Town.building_edges, 2D: walls and trees do not hide). cars: nor through another NPC's outline
+        (2D, whatever the heights: EnvConfig.expert_hidden_cars); off, cars do not hide one another."""
         if self.n == 0:
             return np.zeros(0, bool)
         cam = np.asarray(cam, float)
         cs = box_corners(self.xy[:, 0], self.xy[:, 1], self.yaw, self.dims[:, 0], self.dims[:, 1])    # (n, 4, 2)
+        if cars:
+            own = np.arange(self.n)
+            return self._corners_seen(cam, yaw, half_fov, max_dist, cs, town, own[:, None] == own[None, :]).any(axis=1)
         rel = cs - cam
         seen = (np.abs(wrap(np.arctan2(rel[..., 1], rel[..., 0]) - yaw)) < half_fov) & \
             (np.hypot(*(self.xy - cam).T) < max_dist)[:, None]
@@ -962,6 +969,85 @@ class Traffic:
             seen[:] = False
             seen[i[ok], k[ok]] = True
         return seen.any(axis=1)
+
+    def _corners_seen(self, cam, yaw, half_fov, max_dist, cs, town, skip):
+        """Which corners `cs` (m, 4, 2) of m boxes a camera at `cam` looking along `yaw` sees -> bool (m, 4): within
+        +-half_fov of its axis, the box's centre within max_dist, the line to the corner through no building
+        (`town`) and no NPC's outline except those that skip (m, n) marks for that box (its own, or cars on it)."""
+        rel = cs - cam
+        seen = (np.abs(wrap(np.arctan2(rel[..., 1], rel[..., 0]) - yaw)) < half_fov) & \
+            (np.hypot(*(cs.mean(axis=1) - cam).T) < max_dist)[:, None]
+        if not seen.any():
+            return seen
+        i, k = np.nonzero(seen)
+        far = float(np.hypot(*(cs[i, k] - cam).T).max())
+        if town is not None and len(town.buildings):
+            edges, centre, rad = town.building_edges()
+            near = np.hypot(*(centre - cam).T) < far + rad + 0.5
+            ok = rays_clear(cam, cs[i, k], edges[np.repeat(near, 4)])
+            i, k = i[ok], k[ok]
+        out = np.zeros_like(seen)
+        if self.n and len(i):
+            nc = box_corners(self.xy[:, 0], self.xy[:, 1], self.yaw, self.dims[:, 0], self.dims[:, 1])
+            near = np.flatnonzero(np.hypot(*(self.xy - cam).T) < far + 5.0)
+            ne = np.stack([nc[near], np.roll(nc[near], -1, axis=1)], axis=2).reshape(-1, 2, 2)   # 4 edges each
+            hit = rays_hit(cam, cs[i, k], ne).reshape(len(i), len(near), 4).any(axis=2)          # (q, near)
+            hit &= ~skip[i][:, near]
+            ok = ~hit.any(axis=1)
+            i, k = i[ok], k[ok]
+        out[i, k] = True
+        return out
+
+    def hidden_spot(self, b, s2, cam, yaw, half_fov, max_dist, town=None, reach=None, why=False):
+        """EnvConfig.expert_hidden_cars: the nearest spot before the crossing at `s2` on lane `b` (a connector), going
+        back along it and then along the lane before it, where a kei car (HIDE_DIMS, on the lane's line, HIDE_STEP
+        apart) could be without the camera seeing any of its corners -> (lane, s of the spot's centre) or None.
+        Spots that an NPC's outline overlaps are not tested (the car there is who is there); the search ends `reach`
+        m before the crossing (default: as far as the lane's speed limit goes in YIELD_GAP s, plus a car length).
+        why: also say what hides it -> (lane, s, "view" | "building" | "car"): out of the field of view or range, behind
+        a building, behind a car (the first that holds of these)."""
+        lanes = self.town.lanes
+        vmax = 1.05 * lanes[b].speed_limit
+        reach = vmax * YIELD_GAP + HIDE_DIMS[0] if reach is None else reach
+        pred = lanes[b].pred[0]
+        spots = []                                          # (lane, s), nearest to the crossing first
+        d = HIDE_DIMS[0] / 2                                # from the crossing back to the spot's centre
+        while d <= reach:
+            if d <= s2:
+                spots.append((b, s2 - d))
+            elif lanes[pred].length - (d - s2) >= 0.0:
+                spots.append((pred, lanes[pred].length - (d - s2)))
+            else:
+                break
+            d += HIDE_STEP
+        if not spots:
+            return None
+        xy = np.array([lanes[l].poly.interp1(sl) for l, sl in spots])
+        hd = np.array([lanes[l].poly.heading1(sl) for l, sl in spots])
+        cs = box_corners(xy[:, 0], xy[:, 1], hd, np.full(len(xy), HIDE_DIMS[0]), np.full(len(xy), HIDE_DIMS[1]))
+        if self.n:
+            nc = box_corners(self.xy[:, 0], self.xy[:, 1], self.yaw, self.dims[:, 0], self.dims[:, 1])
+            r_n = np.hypot(self.dims[:, 0], self.dims[:, 1]) / 2
+            close = np.hypot(xy[:, None, 0] - self.xy[None, :, 0], xy[:, None, 1] - self.xy[None, :, 1]) < \
+                r_n[None, :] + math.hypot(*HIDE_DIMS) / 2
+            over = np.zeros_like(close)
+            for q, j in zip(*np.nonzero(close)):
+                over[q, j] = obb_overlap(cs[q], nc[j])[0]
+        else:
+            over = np.zeros((len(xy), 0), bool)
+        taken = over.any(axis=1)
+        seen = self._corners_seen(np.asarray(cam, float), yaw, half_fov, max_dist, cs, town, over).any(axis=1)
+        for q in range(len(spots)):
+            if not taken[q] and not seen[q]:
+                if not why:
+                    return spots[q]
+                if not self._corners_seen(np.asarray(cam, float), yaw, half_fov, max_dist, cs[q:q + 1], None,
+                                          np.ones((1, self.n), bool)).any():
+                    return spots[q] + ("view",)
+                bld = not self._corners_seen(np.asarray(cam, float), yaw, half_fov, max_dist, cs[q:q + 1], town,
+                                             np.ones((1, self.n), bool)).any()
+                return spots[q] + ("building" if bld else "car",)
+        return None
 
     def must_yield(self, conn, t, on_lane):
         """True if a car with priority over connector `conn` (Lane) is in its crossing or reaches it within

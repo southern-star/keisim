@@ -230,7 +230,7 @@ def test_two_phase_signals_and_yields():
 def test_right_turn_gap_acceptance():
     """must_yield: an oncoming car close to the crossing makes a right turn wait; a far one, or one stopping at its
     red light, does not."""
-    from keisim.config import TL_GREEN, town_config
+    from keisim.config import TL_GREEN, TL_RED, town_config
 
     cfg = EnvConfig()
     cfg.render_rgb = cfg.render_seg = False
@@ -849,6 +849,80 @@ def test_visible_from_field_of_view_and_buildings():
     assert not narrow[5:].any()
 
 
+def test_visible_from_cars_hide_one_another():
+    """Traffic.visible_from(cars=True) (EnvConfig.expert_hidden_cars): a car straight behind another one, as the
+    camera sees them, is hidden; without cars=True cars do not hide one another."""
+    import math
+
+    cfg = EnvConfig()
+    cfg.render_rgb = cfg.render_seg = False
+    env = KeiEnv(cfg)
+    for ep in range(20):
+        env.reset(town_seed=5, episode_seed=ep, route_length=500.0)
+        if env.world.traffic.n >= 3:
+            break
+    tr = env.world.traffic
+    tr.xy[:] = 1000.0
+    tr.xy[:3] = [[20, 0], [30, 0], [30, 6]]                    # car 1 behind car 0; car 2 beside car 1, in the clear
+    tr.yaw[:3] = 0.0
+    tr.dims[:3, :2] = [4.0, 1.7]
+    half = math.radians(60)
+    assert tr.visible_from((0, 0), 0.0, half, 110.0)[:3].tolist() == [True, True, True]
+    assert tr.visible_from((0, 0), 0.0, half, 110.0, cars=True)[:3].tolist() == [True, False, True]
+    tr.dims[0, :2] = [4.0, 0.8]                                 # a narrow box 0 leaves car 1's corners in view
+    assert tr.visible_from((0, 0), 0.0, half, 110.0, cars=True)[1]
+
+
+def test_expert_hidden_cars_waits_behind_an_oncoming_turner():
+    """EnvConfig.expert_hidden_cars: at a two-phase right turn's wait point with nobody coming, the expert goes; a
+    car standing between the camera and the oncoming lane it gives way to hides part of that lane, and the expert
+    waits there (plan "hidden") while the oncoming approach has green. Traffic.hidden_spot finds no spot when every
+    car is far away, and a spot on the lane behind the car that hides it."""
+    import math
+    from keisim.config import TL_GREEN, TL_RED, town_config
+
+    cfg = EnvConfig()
+    cfg.render_rgb = cfg.render_seg = False
+    cfg.town = town_config("twophase")
+    env = KeiEnv(cfg)
+    for ep in range(60):                        # a route through a signalised turn that gives way, with traffic
+        env.reset(town_seed=1012, episode_seed=ep, route_length=600.0)
+        jn = next((j for j in env.route.junctions if j["signalized"] and env.world.town.lanes[j["lane"]].yields),
+                  None)
+        if jn is not None and env.world.traffic.n >= 3:
+            break
+    w = env.world
+    town, tr, hl = w.town, w.traffic, w.ego.LENGTH / 2
+    conn = town.lanes[jn["lane"]]
+    b, _, s2 = conn.yields[0]
+    pred = town.lanes[b].pred[0]
+    w.t = next(t for t in np.arange(0.0, 200.0, 0.5) if town.signal_state_for_lane(pred, t) == TL_GREEN)
+    tr.xy[:] = 1e4
+    tr.v[:] = 0.0
+    s = jn["s_in"] + conn.wait_s - hl                           # the front bumper at the wait point
+    p0, p1 = env.route.poly.interp(np.array([s, s + 0.5]))
+    pose = (float(p0[0]), float(p0[1]), float(np.arctan2(p1[1] - p0[1], p1[0] - p0[0])))
+    c = cfg.camera
+    cam = (pose[0] + c.x * math.cos(pose[2]), pose[1] + c.x * math.sin(pose[2]))
+    assert tr.hidden_spot(b, s2, cam, pose[2], math.pi, 200.0) is None
+    assert env.expert.plan(pose=pose, s=s)["reason"] != "yield"
+    env.cfg.expert_hidden_cars = True
+    plan = env.expert.plan(pose=pose, s=s)
+    assert plan["reason"] != "yield" and not plan["hidden"]
+    # a van standing halfway between the camera and the lane 20 m before the crossing (on the lane before it)
+    q = np.array(town.lanes[pred].poly.interp1(town.lanes[pred].length - (20.0 - s2)))
+    m = (np.asarray(cam) + q) / 2
+    tr.xy[0] = m
+    tr.yaw[0] = math.atan2(*(q - np.asarray(cam))[::-1]) + math.pi / 2
+    tr.dims[0, :2] = [4.8, 1.9]
+    spot = tr.hidden_spot(b, s2, cam, pose[2], math.pi, 200.0)
+    assert spot is not None and spot[0] in (b, pred)
+    plan = env.expert.plan(pose=pose, s=s)
+    assert plan["reason"] == "yield" and plan["hidden"]
+    w.t = next(t for t in np.arange(w.t, w.t + 200.0, 0.5) if town.signal_state_for_lane(pred, t) == TL_RED)
+    assert env.expert.plan(pose=pose, s=s)["reason"] != "yield"     # red: nobody comes from behind it
+
+
 def test_expert_yield_visible_counts_only_cars_in_view():
     """EnvConfig.expert_yield_visible: the give-way rule's tables hold only the cars Traffic.visible_from passes,
     seen from the camera on the planned pose; without it, every car."""
@@ -1455,7 +1529,7 @@ def test_curve_course():
 def test_crosswalks_at_signals():
     """Zebras at two-phase signals (Town.ped_crossings): where they are, their pedestrian light, and people crossing
     on them with it while the cars give way (TrafficConfig.crosswalks); off, nobody uses them."""
-    from keisim.config import TL_GREEN, town_config
+    from keisim.config import TL_GREEN, TL_RED, town_config
     from keisim.roadnet import PED_FLASH, PED_GREEN, PED_RED
     assert not Town(1000).ped_crossings                          # split signals (classic): no pedestrian light
     town = Town(1012, town_config("twophase"))
@@ -1601,7 +1675,7 @@ def test_scramble_crossings():
     """TownConfig.scramble: a third phase with every car light red, in which people cross on the four zebras and the
     two diagonals (Town.ped_crossings, painted inside the junction); the zebras are red in the cars' phases. With
     scramble 0 the towns are as before (two phases everywhere)."""
-    from keisim.config import TL_GREEN, town_config
+    from keisim.config import TL_GREEN, TL_RED, town_config
     from keisim.roadnet import PED_RED
     cfg = town_config("suburban")
     cfg.main_roads, cfg.scramble = 3, 1.0
