@@ -9,6 +9,7 @@
 set -o pipefail
 cd "$(dirname "$0")/../.." || exit 1
 D=runs/eval/recon_fill
+P1=models/reconfill.onnx               # this script's model (the page's default is another since docs/recon_fill.md 6.19)
 PY=${PY:-.venv/bin/python}
 PYONNX=${PYONNX:-uv run --offline --with onnx --with onnxruntime python}
 STEPS=${*:-time train}
@@ -51,7 +52,7 @@ fi
 if [[ " $STEPS " == *" fidelity "* ]]; then
   mkdir -p $D/p1
   for town in 1000 1015-98782ab7 osm_sapporo; do
-    run --town $town --sec 60 --every 2 --recon model --fill model --out ../$D/p1 --shotdir ../runs/recon_fill/p1/shots --shots all > $D/p1/$town.log
+    run --town $town --sec 60 --every 2 --recon model --fill model --fillmodel $P1 --out ../$D/p1 --shotdir ../runs/recon_fill/p1/shots --shots all > $D/p1/$town.log
     echo "fidelity $town: $(grep '^digest' $D/p1/$town.log)"
   done
 fi
@@ -76,7 +77,7 @@ if [[ " $STEPS " == *" drive "* ]]; then
     for i in ${DRIVE_RUNS:-1 2 3 4}; do
       run --town $town --sec 60 --every 1 --recon off --model models/keipilot_mc_depth.onnx --out ../$D/p1_drive --name ${town}_off_$i > $D/p1_drive/${town}_off_$i.log
       run --town $town --sec 60 --every 1 --recon model --measure 0 --out ../$D/p1_drive --name ${town}_accum_$i > $D/p1_drive/${town}_accum_$i.log
-      run --town $town --sec 60 --every 1 --recon model --fill model --measure 0 --out ../$D/p1_drive --name ${town}_fillm_$i > $D/p1_drive/${town}_fillm_$i.log
+      run --town $town --sec 60 --every 1 --recon model --fill model --fillmodel $P1 --measure 0 --out ../$D/p1_drive --name ${town}_fillm_$i > $D/p1_drive/${town}_fillm_$i.log
       echo "drive $town $i: $(grep -h '^digest' $D/p1_drive/${town}_{off,accum,fillm}_$i.log | awk '{print $4}' | tr '\n' ' ')"
     done
   done
@@ -88,7 +89,7 @@ if [[ " $STEPS " == *" speed "* ]]; then
   for i in 1 2 3 4 5; do
     for town in 1000 osm_sapporo; do
       run --town $town --realtime 30 --sec 2 --every 2 --recon model --measure 0 > $D/p1_speed/${town}_accum_$i.log
-      run --town $town --realtime 30 --sec 2 --every 2 --recon model --fill model ${FILLWORKER:+--fillworker $FILLWORKER} --measure 0 > $D/p1_speed/${town}_fillm_$i.log
+      run --town $town --realtime 30 --sec 2 --every 2 --recon model --fill model --fillmodel $P1 ${FILLWORKER:+--fillworker $FILLWORKER} --measure 0 > $D/p1_speed/${town}_fillm_$i.log
     done
     grep -h "^real time" $D/p1_speed/*_$i.log | cut -c1-200
   done

@@ -6,7 +6,8 @@
 // fill=oracle: the image is the town's own, drawn with the model frame (src/pilot.js: the colour, by the model
 // frames' pipeline; src/recon.js capture: the depth). The upper bound of what a model can fill in, the tool to measure
 // with (tools/recon_check.mjs --fill oracle) and to write training data with (tools/fill_dump.mjs).
-// fill=model: the image is a small model's (keipilot/fillnet.py, models/reconfill.onnx), from the view's own picture
+// fill=model: the image is a small model's (keipilot/fillnet.py and fillgen.py; models/reconfill_gen.onnx unless
+// &fillmodel= names another: models/reconfill.onnx is the regression alone), from the view's own picture
 // without a fill (colour and depth from the chase camera) and, for models with the input, the current frame alone by
 // the loose triangle rule. It runs after the driving model has answered, in the worker src/pilot.js gives it, and
 // the fill shows when it answers; a turn that comes while it is still running is skipped. A measurement also makes

@@ -3,6 +3,8 @@
 # (keipilot.onnx and keipilot_mc.onnx, 30 MB each) are taken from the releases rather than from git, each from the
 # newest release that has it. keipilot_mc_depth.onnx (KeiPilot Mc with ReconView's depth head, for ?pilot=mc&recon=model:
 # docs/recon_view.md) is an experiment's model and may be in a pre-release; without it the site has no ?recon=model.
+# reconfill_gen.onnx (ReconFill's fill model, for &fill=model: docs/recon_fill.md) likewise; without it &fill=model
+# draws no fill.
 # One-time setup: Settings -> Pages -> Source: GitHub Actions. After publishing a release with a new model, run this
 # workflow by hand (gh workflow run pages.yml --ref main).
 name: pages
@@ -53,6 +55,7 @@ jobs:
           fi
           fetch keipilot_mc.onnx || echo "::warning::no release has keipilot_mc.onnx yet; the site has no ?pilot=mc"
           fetch keipilot_mc_depth.onnx pre || echo "::warning::no release has keipilot_mc_depth.onnx; the site has no ?recon=model"
+          fetch reconfill_gen.onnx pre || echo "::warning::no release has reconfill_gen.onnx; the site has no &fill=model"
       - name: Site
         if: steps.model.outputs.ok == '1'
         run: |

@@ -24,7 +24,7 @@
 // ?recon=model: the same from the model's own depth output (then the default model is models/keipilot_mc_depth.onnx).
 // &fill=oracle (with ?recon; src/fill.js, loaded only then; docs/recon_fill.md): what that view leaves dark is filled in
 // from the town itself, drawn from the view's camera with the model frame (development and measurements).
-// &fill=model: filled in by a small model of its own (models/reconfill.onnx, or &fillmodel=; WebGPU only), a second
+// &fill=model: filled in by a small model of its own (models/reconfill_gen.onnx, or &fillmodel=; WebGPU only), a second
 // session in the driving model's worker, or with &fillworker=own in a worker of its own.
 // &layout=split: the main view from the same camera behind the car, with the car's body, beside the reconstruction;
 // the model's frames are drawn as before (the body is hidden and the camera back in the car while they are drawn).
@@ -579,7 +579,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
       if (want === 'model') {
         try {
           status('補完のモデルを読み込み中…');
-          const model = await fetchModel(params.get('fillmodel') || 'models/reconfill.onnx', () => {});
+          const model = await fetchModel(params.get('fillmodel') || 'models/reconfill_gen.onnx', () => {});
           if (params.get('fillworker') === 'own' || !session.load) {
             const own = await workerSession(ORT, gpu, false, model);
             fillSession = { inputNames: own.inputNames, where: 'own worker', run: (feeds) => own.run(feeds) };
