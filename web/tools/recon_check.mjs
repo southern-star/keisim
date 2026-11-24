@@ -89,7 +89,12 @@ try {
     if (/\/(recon|depth|unproject|fill)\.js|OrbitControls/.test(r.url())) loaded.push(r.url().split('/').pop());
     if (args.fonts === 'block') { if (/fonts\.(googleapis|gstatic)\.com/.test(r.url())) r.abort(); else r.continue(); }
   });
-  page.on('console', (m) => { if (m.type() === 'error') console.log(`[error] ${m.text().slice(0, 300)}`); });
+  page.on('console', (m) => {
+    if (m.type() !== 'error') return;
+    console.log(`[error] ${m.text().slice(0, 300)}`);
+    // a model's graph the GPU refuses computes nothing, without failing the page
+    if (m.text().includes('WebGPU validation error') && !failed) { console.log('FAIL: a WebGPU validation error'); failed = true; }
+  });
   page.on('pageerror', (e) => { console.log(`[pageerror] ${e.message}`); failed = true; });
   const q = new URLSearchParams({ pilot: 'mc', town, ...(off ? {} : { recon: args.recon || 'oracle' }), ...(args.ep ? { ep: args.ep } : {}), ...(args.tdir ? { tdir: args.tdir } : {}),
     ...(args.traffic ? { traffic: args.traffic } : {}), ...(args.cars ? { cars: args.cars } : {}),
@@ -225,6 +230,10 @@ try {
     for (const [k, name] of Object.entries(NAMES)) part(name, (f) => f[k]);
     part('the holes filled, the town\'s own fill of this frame', (f) => f.oracle && f.oracle.holes);
     part('the town\'s own fill alone', (f) => f.oracle && f.oracle.all);
+    const fl = rows.filter((r) => r.fill && r.fill.flicker), fn = fl.reduce((x, r) => x + r.fill.flicker.pixels, 0);
+    if (fn) console.log(`  flicker: this fill against the one before, from the same camera, at the holes both fill with the same surface: colours ${(fl.reduce((x, r) => x + r.fill.flicker.sum, 0) / fn).toFixed(2)} apart (0..255; ${fn} pixels of ${fl.length} frames)`);
+    const cl = rows.filter((r) => r.fill && r.fill.colour), cs = (k) => cl.reduce((x, r) => x + r.fill.colour[k], 0);
+    if (cl.length && cs('pixels')) console.log(`  colour: this fill against the town's own of the same frame, at the holes both fill with the same surface: ${(cs('sum') / cs('pixels')).toFixed(2)} apart (0..255), sharpness ${(cs('step') / cs('stepTown')).toFixed(2)} (${cs('pixels')} pixels of ${cl.length} frames)`);
     const stale = rows.filter((r) => r.fill && r.fill.fresh === false).length;
     if (stale) { console.log(`  FAIL: ${stale} measurements without this frame's fill`); failed = true; }
     const fs2 = rows.filter((r) => r.fill), mean = (get) => fs2.reduce((x, r) => x + get(r.fill), 0) / fs2.length, aged = fs2.filter((r) => r.fill.age);

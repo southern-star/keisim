@@ -26,10 +26,14 @@ import { cameraRays, levelFrame, unproject } from './unproject.js';
 // alone with a wide edge ratio: surfaces the cameras see but the view's rule cuts)
 export const FILL = { every: 2, offset: [4, 600], tint: 0xff8ad8, loose: { ground: 'height', ratio: 2.0, scaled: false } };
 
+// depths within 10 % of each other, as a difference of 16 bit codes (65535 over ln(400 / 0.25))
+const FLICKER_CODES = Math.round(65535 * Math.log(1.1) / Math.log(1600));
+
 export function createFill({ world, origin, table, rule, params, label, rr, rscene, measCam, carFrame, meshTriangles, triangles, reconDepth,
   keyframes, observed, bare, session = null }) {
   const mode = params.get('fill');
   const loose = !!session && session.inputNames.includes('loose_rgb');     // the model takes the loose rule's picture
+  const prevIn = !!session && session.inputNames.includes('prev_rgb');     // ... and the fill before this one
   const show = params.get('fillshow') === 'all' ? 'all' : 'holes';
   const tint = params.get('filltint') === '1';
   const W = CHASE.width, H = CHASE.height, w = Math.ceil(W / STEP), h = Math.ceil(H / STEP), n = w * h;
@@ -184,6 +188,19 @@ export function createFill({ world, origin, table, rule, params, label, rr, rsce
       feeds.loose_rgb = { data: chw(colour(pose)), dims: [1, 3, H, W] };
       triangles(rule);
     }
+    if (prevIn) {
+      // the fill before the one in the making (the one that is shown), alone, from this frame's chase camera, as a
+      // training sample's (take() below); all zero when there is none
+      feeds.prev_dep = { data: new Float32Array(W * H), dims: [1, 1, H, W] };
+      feeds.prev_rgb = { data: new Float32Array(3 * W * H), dims: [1, 3, H, W] };
+      if (cur.seq) {
+        layers({ slot: cur, how: 'all', obs: false });
+        if (tint) cur.mesh.material.color.set(0xffffff);
+        feeds.prev_dep.data = Float32Array.from(reconDepth(pose));
+        feeds.prev_rgb.data = chw(colour(pose));
+        if (tint) cur.mesh.material.color.set(FILL.tint);
+      }
+    }
     layers('view');
     prepMs = performance.now() - t0;
     const g = gen, t1 = performance.now();
@@ -252,10 +269,45 @@ export function createFill({ world, origin, table, rule, params, label, rr, rsce
       age: prev.seq ? { frames: cur.frame - prev.frame, metres: Math.hypot(cur.pose.x - prev.pose.x, cur.pose.y - prev.pose.y) } : null,
       holes: one(cur, 'holes', true, 'holes'), holesPrev: one(prev, 'holes', true, 'holesPrev'),
       all: one(cur, 'all', false, 'all'), allPrev: one(prev, 'all', false, 'allPrev') };
+    // flicker: this fill and the one before, each alone, from this frame's chase camera; where the view has a hole
+    // and the two fills have the same surface (depths within 10 %), how far apart their colours are
+    const alone = (s) => { layers({ slot: s, how: 'all', obs: false }); return { R: reconDepth(pose), C: colour(pose) }; };
+    if (prev.seq) {
+      const a = alone(cur), b = alone(prev);
+      let nf = 0, sum = 0, both = 0;
+      for (let i = 0, o = 0; i < RP.length; i++, o += 3) {
+        if (RP[i] !== 0 || a.R[i] === 0 || b.R[i] === 0) continue;
+        both++;
+        if (Math.abs(a.R[i] - b.R[i]) > FLICKER_CODES) continue;
+        nf++;
+        sum += (Math.abs(a.C[o] - b.C[o]) + Math.abs(a.C[o + 1] - b.C[o + 1]) + Math.abs(a.C[o + 2] - b.C[o + 2])) / 3;
+      }
+      out.flicker = { pixels: nf, both, sum };
+    }
     if (mode === 'model') {
       Object.assign(out, { prepMs, inferMs, skipped, fresh: cur.frame === frameNo });
       // the town's own fill of the same frame, from the same input
       if (orc.seq && orc.frame === frameNo) out.oracle = { stats: orc.stats, holes: one(orc, 'holes', true, 'oracleHoles'), all: one(orc, 'all', false, 'oracleAll') };
+      // the colours: this fill against the town's own fill of the same frame, each alone, where the view has a hole
+      // and both have the same surface: how far apart (sum), and the colour steps between neighbours in a row of
+      // this fill (step) and of the town's (stepTown): their ratio is the sharpness
+      if (orc.seq && orc.frame === cur.frame) {
+        const a = alone(cur), b = alone(orc), ok = new Uint8Array(RP.length);
+        const d3 = (C, o, D, p) => (Math.abs(C[o] - D[p]) + Math.abs(C[o + 1] - D[p + 1]) + Math.abs(C[o + 2] - D[p + 2])) / 3;
+        let nc = 0, sum = 0, pairs = 0, step = 0, stepTown = 0;
+        for (let i = 0; i < RP.length; i++) {
+          if (RP[i] !== 0 || a.R[i] === 0 || b.R[i] === 0 || Math.abs(a.R[i] - b.R[i]) > FLICKER_CODES) continue;
+          ok[i] = 1; nc++;
+          sum += d3(a.C, 3 * i, b.C, 3 * i);
+        }
+        for (let i = 0; i + 1 < RP.length; i++) {
+          if (!ok[i] || !ok[i + 1] || (i + 1) % W === 0) continue;
+          pairs++;
+          step += d3(a.C, 3 * i, a.C, 3 * i + 3);
+          stepTown += d3(b.C, 3 * i, b.C, 3 * i + 3);
+        }
+        out.colour = { pixels: nc, sum, pairs, step, stepTown };
+      }
     }
     layers('view');
     return out;
@@ -307,5 +359,5 @@ export function createFill({ world, origin, table, rule, params, label, rr, rsce
       return out;
     },
     state: () => ({ mode, show, tint, every: FILL.every, made, ms, triangles: cur.geo.drawRange.count / 3, cells: cur.stats ? cur.stats.holeCells : 0,
-      ...(mode === 'model' ? { loose, where: session.where, prepMs, inferMs, skipped } : {}) }) };
+      ...(mode === 'model' ? { loose, prevIn, where: session.where, prepMs, inferMs, skipped } : {}) }) };
 }

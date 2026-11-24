@@ -3,11 +3,16 @@
     python tools/recon_g3.py drive runs/eval/recon/g3_drive      (does ReconView change the drive?)
     python tools/recon_g3.py speed runs/eval/recon/g3_speed      (the page's speed in real time)
     python tools/recon_g3.py same runs/eval/recon_fill/p0_same   (two checkouts' measurements, docs/recon_fill/p0.sh)
+    python tools/recon_g3.py shape runs/eval/recon_fill/p2 runs/eval/recon_fill/p1 runs/eval/recon_fill/p2_base_p1
+                                                                 (is another fill model's shape the first one's?
+                                                                  --colours: the same model, after a change of the page)
 
 drive: per town and setting the "drive" digests of its runs (the car's state, the model's plan and its input images
 every second: web/tools/recon_check.mjs) and whether a run without ReconView has the same one. speed: frames per
 second of the main view, model calls per second, inference and model-frame times, the mesh's time. same: the runs
-<checkout>_<i>.json of two checkouts with the same arguments; runs of the same digests must have the same rows."""
+<checkout>_<i>.json of two checkouts with the same arguments; runs of the same digests must have the same rows.
+shape: the measurements of two fill models (the first directory against the others); where a town's runs have the
+same digests, the fill's rows (holes, holesPrev, all, allPrev: all of them depths) must be the same."""
 import argparse
 import glob
 import json
@@ -20,7 +25,7 @@ import numpy as np
 TOWNS = {"1000": "town 1000", "1015-98782ab7": "town 1015（二段階の信号）", "osm_sapporo": "札幌（OSM）"}
 CFG = {"public": "recon なし、公開の ONNX", "off": "recon なし、深度つきの ONNX", "model": "`recon=model`（蓄積なし）", "split": "`recon=model&layout=split`（蓄積なし）",
        "accum": "`recon=model`（蓄積あり）", "fill": "`recon=model&fill=oracle`", "fillall": "`recon=model&fill=oracle&fillshow=all`",
-       "fillm": "`recon=model&fill=model`", "randa": "補完あり、乱数の重み、幅 16・32・64・128", "randb": "補完あり、乱数の重み、幅 24・48・96・192",
+       "fillm": "`recon=model&fill=model`", "fillg": "`recon=model&fill=model`、色を生成する重み", "randa": "補完あり、乱数の重み、幅 16・32・64・128", "randb": "補完あり、乱数の重み、幅 24・48・96・192",
        "randc": "補完あり、乱数の重み、幅 12・24・48・96", "randnl": "補完あり、乱数の重み、幅 16〜128、緩い規則の入力なし",
        "randaown": "補完あり、乱数の重み、幅 16〜128、別のワーカー"}
 REAL = re.compile(r"real time (\d+) s.*?: ([\d.]+) fps \(min ([\d.]+)\), ([\d.]+) model calls/s, inference ([\d.]+) ms, model frame ([\d.]+) ms"
@@ -43,7 +48,7 @@ def drive(d):
     print("| 町 | 設定 | 走行の要約値（回数） | recon なしと同じ要約値の走行 | 判定 |\n|---|---|---|---:|---|")
     for town in [t for t in TOWNS if t in runs] + [t for t in runs if t not in TOWNS]:
         base = Counter(x[1] for x in runs[town].get("off", []))
-        for cfg in ("off", "model", "split", "accum", "fill", "fillall", "fillm"):
+        for cfg in ("off", "model", "split", "accum", "fill", "fillall", "fillm", "fillg"):
             rs = sorted(runs[town].get(cfg, []))
             if not rs:
                 continue
@@ -109,11 +114,49 @@ def same(d):
     print(f"\n走行 {len(n)} 本、各 {n[0]['sec']} 秒、計測 {len(n[0]['rows'])} フレーム。両方にある要約値 {shared} 種類のうち、行が全部同じもの {ok} 種類。")
 
 
+def shape(d, others, colours=False):
+    kinds = ("holes", "holesPrev", "all", "allPrev")
+
+    def leaves(a, b):
+        """The largest difference of two rows' numbers; inf where their structure differs."""
+        if isinstance(a, dict) and isinstance(b, dict):
+            return max([leaves(a[k], b[k]) if k in b else float("inf") for k in a] + [0.0 if set(b) <= set(a) else float("inf")])
+        if isinstance(a, list) and isinstance(b, list):
+            return max([leaves(x, y) for x, y in zip(a, b)] + [0.0 if len(a) == len(b) else float("inf")])
+        if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+            return abs(a - b)
+        return 0.0 if a == b else float("inf")
+
+    print(f"| 町 | 要約値（画像と姿勢、走行） | 同じ要約値の走行 | フレーム | 補完の行（穴、全部、できたて、1 回前{'、ちらつき' if colours else ''}）の差の最大 |\n|---|---|---|---:|---|")
+    for path in sorted(glob.glob(os.path.join(d, "*.json"))):
+        a = json.load(open(path))
+        town = TOWNS.get(os.path.splitext(os.path.basename(path))[0], os.path.basename(path))
+        hit = None
+        for o in others:
+            q = os.path.join(o, os.path.basename(path))
+            if os.path.exists(q):
+                b = json.load(open(q))
+                if (b["digest"], b["drive"]) == (a["digest"], a["drive"]):
+                    hit = (o, b)
+                    break
+        if hit is None:
+            print(f"| {town} | `{a['digest']}`、`{a['drive']}` | なし | – | –（比べられない） |")
+            continue
+        # colours: the flicker too, where both runs have it (the same model must paint the same picture)
+        worst = max(leaves(ra["fill"].get(k), rb["fill"].get(k)) for ra, rb in zip(a["rows"], hit[1]["rows"])
+                    for k in kinds + (("flicker",) if colours and "flicker" in ra["fill"] and "flicker" in rb["fill"] else ()))
+        print(f"| {town} | `{a['digest']}`、`{a['drive']}` | `{hit[0]}` | {len(a['rows'])} | {'0（全部同じ）' if worst == 0 else f'**{worst:g}**'} |")
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("what", choices=("drive", "speed", "same"))
+    ap.add_argument("what", choices=("drive", "speed", "same", "shape"))
     ap.add_argument("dir")
+    ap.add_argument("others", nargs="*")
+    ap.add_argument("--colours", action="store_true", help="shape: the same model in both: its flicker must be the same too")
     args = ap.parse_args()
+    if args.what == "shape":
+        return shape(args.dir, args.others, args.colours)
     {"drive": drive, "speed": speed, "same": same}[args.what](args.dir)
 
 
