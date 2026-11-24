@@ -11,6 +11,8 @@ Inputs, all from ReconView's chase camera, float32:
   in_rgb    (1, 3, 160, 320)  the view without a fill, RGB 0..255 (the background where there is no surface)
   in_dep    (1, 1, 160, 320)  its depth as 16 bit codes 0..65535 (web/src/unproject.js; 0: no surface)
   loose_rgb, loose_dep        the current frame alone by the loose triangle rule, the same way (models with loose input)
+  prev_rgb, prev_dep          the fill before this one drawn alone from this frame's chase camera, the same way; all
+                              zero when there is none (models with it: keipilot/fillgen.py FillGen with prev)
 Outputs:
   rgb    (3, 160, 320) float32  the fill's colours, 0..255
   depth  (80, 160) float32      metres from the chase camera along the lines of sight of the pixels (2i, 2j); 0: no
@@ -35,12 +37,12 @@ class FillOnnx(nn.Module):
     def __init__(self, net):
         super().__init__()
         self.net = net
+        self.names = ["in_rgb", "in_dep"] + (["loose_rgb", "loose_dep"] if net.loose else []) + (["prev_rgb", "prev_dep"] if getattr(net, "prev", False) else [])
 
-    def forward(self, in_rgb, in_dep, loose_rgb=None, loose_dep=None):
-        if self.net.loose:
-            rgb, code, surf = self.net(in_rgb / 255.0, in_dep / 65535.0, loose_rgb / 255.0, loose_dep / 65535.0)
-        else:
-            rgb, code, surf = self.net(in_rgb / 255.0, in_dep / 65535.0)
+    def forward(self, *args):
+        a = {k: v / (255.0 if k.endswith("rgb") else 65535.0) for k, v in zip(self.names, args)}
+        more = {k: a[k] for k in ("prev_rgb", "prev_dep") if k in a}
+        rgb, code, surf = self.net(a["in_rgb"], a["in_dep"], a.get("loose_rgb"), a.get("loose_dep"), **more)
         metres = code_to_metres(code)
         depth = torch.where((surf > 0) & (metres <= MAX_R), metres, torch.zeros_like(metres))
         return rgb[0].clamp(0.0, 1.0) * 255.0, depth[0, 0, ::2, ::2]
@@ -57,6 +59,7 @@ def same_shape(a, b, data, every=9):
         x = ds[i]
         feeds = {"in_rgb": (x["in_rgb"][None] * 255.0).numpy().round(), "in_dep": (x["in_dep"][None] * 65535.0).numpy().round(),
                  "loose_rgb": (x["loose_rgb"][None] * 255.0).numpy().round(), "loose_dep": (x["loose_dep"][None] * 65535.0).numpy().round()}
+        feeds.update(prev_rgb=np.zeros_like(feeds["in_rgb"]), prev_dep=np.zeros_like(feeds["in_dep"]))    # no fill before
         (ra, da), (rb, db) = (s.run(None, {k.name: feeds[k.name] for k in s.get_inputs()}) for s in (sa, sb))
         worst, flips, rgb, n = max(worst, float(np.abs(da - db).max())), flips + int(((da > 0) != (db > 0)).sum()), rgb + float(np.abs(ra - rb).mean()), n + 1
     print(f"{os.path.basename(a)} against {os.path.basename(b)} on {n} eval samples: depth differs by at most {worst:g} m, pixels whose surface differs: {flips}; "
@@ -92,6 +95,9 @@ def main():
     feeds = {"in_rgb": rng.uniform(0, 255, (1, 3, H, W)).astype(np.float32), "in_dep": dep}
     if model.loose:
         feeds.update(loose_rgb=rng.uniform(0, 255, (1, 3, H, W)).astype(np.float32), loose_dep=np.roll(dep, 7, 3))
+    if getattr(model, "prev", False):
+        feeds.update(prev_rgb=rng.uniform(0, 255, (1, 3, H, W)).astype(np.float32), prev_dep=np.roll(dep, 11, 2))
+    assert list(feeds) == net.names
     os.makedirs(os.path.dirname(os.path.abspath(args.dst)), exist_ok=True)
     torch.onnx.export(net, tuple(torch.from_numpy(v) for v in feeds.values()), args.dst, opset_version=17, dynamo=False,
                       input_names=list(feeds), output_names=["rgb", "depth"])

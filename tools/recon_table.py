@@ -189,6 +189,12 @@ def fill_tables(runs):
     npx = sum(f["pixels"] for f in fl)
     flicker = (f"ちらつき（今の補完と 1 回前の補完を、同じ追跡カメラから 1 枚ずつ描き、どちらも同じ面で埋めた穴の画素の色の差、0〜255）: "
                f"{sum(f['sum'] for f in fl) / npx:.2f}（{npx:,} 画素、{len(fl)} フレーム）。" if npx else "")
+    cl = [(r["t"], r["fill"]["colour"]) for r in every if r["fill"].get("colour")]
+    if cl and sum(c["pixels"] for _, c in cl):
+        part = lambda cs: (f"L1 {sum(c['sum'] for c in cs) / max(1, sum(c['pixels'] for c in cs)):.2f}、鮮明さ {sum(c['step'] for c in cs) / max(1e-9, sum(c['stepTown'] for c in cs)):.2f}")
+        tmax = max(t for t, _ in cl)
+        flicker += (f"ページの中の色（補完と、同じフレームの正解の補完を 1 枚ずつ描き、どちらも同じ面で埋めた穴の画素で。色の L1 は 0〜255、鮮明さは隣の画素との差の比）: "
+                    f"全体で {part([c for _, c in cl])}、最後の 20 秒で {part([c for t, c in cl if t > tmax - 20])}（{sum(c['pixels'] for _, c in cl):,} 画素、{len(cl)} フレーム）。")
     m = lambda get: np.mean([get(r["fill"]) for r in every])
     aged = [r["fill"]["age"] for r in every if r["fill"].get("age")]
     print(f"\n補完のメッシュ（{len(every)} フレームの平均）: 有効な頂点 {m(lambda f: f['stats']['valid']):,.0f} / {f0['stats']['vertices']:,}、三角形 {m(lambda f: f['stats']['triangles']):,.0f}、"

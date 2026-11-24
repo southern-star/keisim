@@ -17,7 +17,9 @@ browser's ONNX holds it as a constant: the same input gives the same picture).
 
 The other way to the colours (docs/recon_fill.md 6.10; param "g"): the same colour net without noise and times gives
 the difference straight from the condition, trained by an L1 loss and against a patch discriminator (PatchDisc,
-gan_losses below)."""
+gan_losses below). With prev=True (6.14) the condition also holds the fill before this one, drawn from this frame's
+chase camera (colour, depth, "a surface here"; all zero where there is none): what was painted there before is
+painted again."""
 from __future__ import annotations
 
 import torch
@@ -62,7 +64,7 @@ class ColourNet(nn.Module):
 
 
 class FillGen(nn.Module):
-    def __init__(self, shape, width=(16, 32, 64, 128), scale=0.15, seed=0, param="u"):
+    def __init__(self, shape, width=(16, 32, 64, 128), scale=0.15, seed=0, param="u", prev=False):
         """shape: a FillNet or its configuration (P1's net; frozen). scale: the standard deviation of the town's colour
         minus P1's at the holes (colours in 0..1). param: what the colour net's output is: "u", the average velocity
         itself (the paper's form; the one step is e - u, so the net has to reproduce the noise image exactly to take
@@ -74,8 +76,9 @@ class FillGen(nn.Module):
         for p in self.shape.parameters():
             p.requires_grad_(False)
         assert param in ("u", "x", "g")
-        self.loose, self.scale, self.seed, self.param = self.shape.loose, float(scale), seed, param
-        self.colour = ColourNet((11 if self.loose else 6) + 5, width, noise=param != "g")
+        self.loose, self.scale, self.seed, self.param, self.prev = self.shape.loose, float(scale), seed, param, prev
+        self.ncond = (11 if self.loose else 6) + 5 + (5 if prev else 0)
+        self.colour = ColourNet(self.ncond, width, noise=param != "g")
         g = torch.Generator().manual_seed(seed)
         self.register_buffer("noise", torch.randn(1, 3, CHASE.height, CHASE.width, generator=g))
 
@@ -88,13 +91,21 @@ class FillGen(nn.Module):
         self.shape.eval()                                   # P1's net never trains
         return self
 
-    def condition(self, in_rgb, in_dep, loose_rgb=None, loose_dep=None):
-        """(cond, P1's colour clamped to 0..1, code, surface logit); nothing of it carries a gradient."""
+    def condition(self, in_rgb, in_dep, loose_rgb=None, loose_dep=None, prev_rgb=None, prev_dep=None):
+        """(cond, P1's colour clamped to 0..1, code, surface logit); nothing of it carries a gradient. prev_rgb,
+        prev_dep: the fill before, from this frame's camera (models with prev; None: there is none)."""
         with torch.no_grad():
             x, _rgb0, _code0 = self.shape.inputs(in_rgb, in_dep, loose_rgb, loose_dep)
             rgb, code, surf = self.shape(in_rgb, in_dep, loose_rgb, loose_dep)
             rgb = rgb.clamp(0.0, 1.0)
-            cond = torch.cat([x, rgb, code, torch.sigmoid(surf)], 1)
+            cond = [x, rgb, code, torch.sigmoid(surf)]
+            if self.prev:
+                if prev_rgb is None:
+                    cond.append(torch.zeros_like(rgb[:, :1]).expand(-1, 5, -1, -1))
+                else:
+                    v = (prev_dep > 0).to(rgb.dtype)
+                    cond += [prev_rgb * v, prev_dep, v]
+            cond = torch.cat(cond, 1)
         return cond, rgb, code, surf
 
     def velocity(self, z, t, dt, cond):
@@ -102,9 +113,9 @@ class FillGen(nn.Module):
         out = self.colour(z, t, dt, cond)
         return out if self.param == "u" else (z - out) / t
 
-    def forward(self, in_rgb, in_dep, loose_rgb=None, loose_dep=None, noise=None):
+    def forward(self, in_rgb, in_dep, loose_rgb=None, loose_dep=None, noise=None, prev_rgb=None, prev_dep=None):
         """As FillNet: (rgb, code, surface logit). One step from the fixed noise image (or the one given)."""
-        cond, rgb, code, surf = self.condition(in_rgb, in_dep, loose_rgb, loose_dep)
+        cond, rgb, code, surf = self.condition(in_rgb, in_dep, loose_rgb, loose_dep, prev_rgb, prev_dep)
         if self.param == "g":
             return rgb + self.scale * self.colour(None, None, None, cond), code, surf
         e = (self.noise if noise is None else noise).to(rgb.dtype).expand_as(rgb)
@@ -115,7 +126,7 @@ class FillGen(nn.Module):
 
     def config(self):
         return {"kind": "gen", "shape": self.shape.config(), "width": list(self.colour.width), "scale": self.scale, "seed": self.seed,
-                "param": self.param}
+                "param": self.param, "prev": self.prev}
 
 
 def sample_times(n, mu, sigma, ratio, device):
@@ -192,10 +203,51 @@ class PatchDisc(nn.Module):
         return self.net(torch.cat([rgb, cond], 1))
 
 
-def gan_picture(gen, batch, w_seen=0.5):
+def degrade_prev(rgb, dep, blur=1.0, noise=0.04, cuts=3):
+    """What the page's picture of the fill before lacks against the town's: per sample a Gaussian blur (sigma up to
+    `blur` pixels, over the pixels with a surface), noise (sigma up to `noise`) and up to `cuts` rectangles without a
+    surface. Returns (rgb, dep)."""
+    n, _, h, w = rgb.shape
+    v = (dep > 0).to(rgb.dtype)
+    sig = torch.rand(n, device=rgb.device) * blur
+    r = torch.arange(-2, 3, device=rgb.device, dtype=torch.float32)
+    k = torch.exp(-(r[None] ** 2) / (2.0 * sig.clamp(min=1e-3)[:, None] ** 2))
+    k = (k / k.sum(1, keepdim=True)).to(rgb.dtype)
+    k2 = (k[:, :, None] * k[:, None, :])                      # (n, 5, 5)
+    conv = lambda a: F.conv2d(a.reshape(1, -1, h, w), k2.repeat_interleave(a.shape[1], 0)[:, None], padding=2, groups=n * a.shape[1]).reshape(a.shape)
+    rgb = conv(rgb * v) / conv(v).clamp(min=1e-3)
+    rgb = (rgb + torch.randn_like(rgb) * (torch.rand(n, 1, 1, 1, device=rgb.device) * noise).to(rgb.dtype)).clamp(0.0, 1.0)
+    keep = torch.ones_like(v)
+    for i in range(n):
+        for _ in range(int(torch.randint(0, cuts + 1, (1,)))):
+            ch, cw = int(torch.randint(8, 61, (1,))), int(torch.randint(8, 81, (1,)))
+            y, x = int(torch.randint(0, h - ch + 1, (1,))), int(torch.randint(0, w - cw + 1, (1,)))
+            keep[i, :, y:y + ch, x:x + cw] = 0.0
+    return rgb * v * keep, dep * keep
+
+
+def training_prev(ema, batch, p_drop=0.25, p_self=1.0 / 3.0):
+    """The "fill before" of a training batch (6.14): the town's own, degraded; for a share p_drop of the samples none
+    at all; for a share p_self the net's own answer (the moving average ema, no gradient) to the degraded town's,
+    degraded again. Returns (prev_rgb, prev_dep)."""
+    with torch.no_grad():
+        rgb, dep = degrade_prev(batch["prev_rgb"], batch["prev_dep"])
+        u = torch.rand(rgb.shape[0], device=rgb.device)
+        own = (u >= p_drop) & (u < p_drop + p_self)
+        if own.any():
+            b = {k: v[own] for k, v in batch.items()}
+            out = ema(b["in_rgb"], b["in_dep"], b["loose_rgb"], b["loose_dep"], prev_rgb=rgb[own], prev_dep=dep[own])[0].clamp(0.0, 1.0)
+            rgb = rgb.clone()
+            rgb[own], _ = degrade_prev(out.to(rgb.dtype), dep[own], cuts=0)
+        keep = (u >= p_drop).float().view(-1, 1, 1, 1)
+        return rgb.float() * keep, dep.float() * keep
+
+
+def gan_picture(gen, batch, w_seen=0.5, prev=None):
     """(cond, the generator's colour (B, 3, H, W) with its gradient, the same put into the town's picture outside the
-    target pixels, the pixels' weights w (B, 1, H, W): 0 outside the target, holes 1, the rest w_seen)."""
-    cond, rgb1, _code, _surf = gen.condition(batch["in_rgb"], batch["in_dep"], batch["loose_rgb"], batch["loose_dep"])
+    target pixels, the pixels' weights w (B, 1, H, W): 0 outside the target, holes 1, the rest w_seen). prev: (rgb,
+    dep) of the fill before, for a generator with prev."""
+    cond, rgb1, _code, _surf = gen.condition(batch["in_rgb"], batch["in_dep"], batch["loose_rgb"], batch["loose_dep"], *(prev or (None, None)))
     gt = batch["gt_dep"]
     target = (gt > 0) & (gt <= CODE_MAX_R)
     w = target.float() * torch.where(batch["in_dep"] > 0, w_seen, 1.0)

@@ -6,6 +6,8 @@
 #                                                net's output as the clean picture, 6.8), its offline numbers
 #   RUN=2x EPOCHS=20 bash docs/recon_fill/p2.sh train
 #   RUN=g1 bash docs/recon_fill/p2.sh train      the other way (6.10): L1 and a patch discriminator (g1, g2, g3)
+#   bash docs/recon_fill/p2.sh basec             P2c-0: the page's colour measure of P1's and run g2's fills
+#   RUN=p1 bash docs/recon_fill/p2.sh train      P2c (6.14): the fill before as a condition (p1, p2, p3), from run g2
 #   bash docs/recon_fill/p2.sh lines             the "lines" measure of the models so far (before the gate got it)
 #   RUN=1 bash docs/recon_fill/p2.sh export fidelity same drive speed     that model in the browser (gate G-P2b)
 #   bash docs/recon_fill/p2.sh tables            the tables of the browser's runs
@@ -18,6 +20,7 @@ PYONNX=${PYONNX:-uv run --offline --with onnx --with onnxruntime python}
 STEPS=${*:-base}
 RUN=${RUN:-1}
 GEN=models/reconfill_gen.onnx
+[[ $RUN == p* ]] && GEN=models/reconfill_genp.onnx
 O=runs/reconfill_gen$RUN
 TOWNS="1000 1015-98782ab7 osm_sapporo"
 run() { (cd web && node tools/recon_check.mjs "$@" 2>&1 | grep -v '^\[warn\]\|^\[error\] Failed to load resource\|onnxruntime'); }
@@ -32,12 +35,25 @@ if [[ " $STEPS " == *" base "* ]]; then
   done
 fi
 
+# 0c. P2c-0 (6.14): the page's colour measure (and the flicker) of P1's fill and of run g2's, before P2c's training
+if [[ " $STEPS " == *" basec "* ]]; then
+  mkdir -p $D/p2c_base_p1 $D/p2c_base_g2
+  for town in $TOWNS; do
+    run --town $town --sec 60 --every 2 --recon model --fill model --out ../$D/p2c_base_p1 > $D/p2c_base_p1/$town.log
+    run --town $town --sec 60 --every 2 --recon model --fill model --fillmodel models/reconfill_gen.onnx --out ../$D/p2c_base_g2 > $D/p2c_base_g2/$town.log
+    echo "basec $town: $(grep -h '^  colour\|^digest' $D/p2c_base_p1/$town.log $D/p2c_base_g2/$town.log | sed 's/.*surface: //' | tr '\n' ' ')"
+  done
+fi
+
 # 1. a colour net on top of P1's net, and its numbers on the eval towns' samples
 if [[ " $STEPS " == *" train "* ]]; then
   TRAIN=scripts/train_fillgen.py
   NAME="P2（色を生成、$RUN 本目）"
   case $RUN in
     g*) TRAIN=scripts/train_fillgan.py; NAME="P2（L1 + PatchGAN、${RUN#g} 本目）"; EPOCHS=${EPOCHS:-60} ;;&
+    p*) TRAIN=scripts/train_fillgan.py; NAME="P2c（1 回前の画つき、${RUN#p} 本目。1 回前の画なしで）"; EPOCHS=${EPOCHS:-60} ;;&
+    p1) SET="--lam 30 --prev --init runs/reconfill_geng2/last.pt --d_warm 500" ;;
+    p2|p3) SET="--lam 30 --prev --init runs/reconfill_geng2/last.pt --d_warm 500 ${SETP:?what run p1 missed decides (6.14): SETP='--p_self 0.5' or '--p_drop 0.125'}" ;;
     g1) SET="--lam 100" ;;
     g2) SET="--lam ${LAM2:?30 if run g1 is blurred (sharpness under 0.5), 300 if it misses the L1 or the lines: LAM2=..}" ;;
     g3) SET="--lam ${LAM3:?the better of runs g1 and g2: LAM3=..} --width 32 64 128 256" ;;
@@ -50,7 +66,8 @@ if [[ " $STEPS " == *" train "* ]]; then
   cp $O/log.json $D/p2_train_$RUN.json
   $PY tools/fill_eval.py runs/reconfill_b/last.pt $O/last.pt --names "P1（回帰）" "$NAME" --data data/recon_fill/eval \
     --out $D/p2_offline_$RUN.json --sheet docs/recon_fill/p2_offline_$RUN.jpg --frames ${SHEET_FRAMES:-60 300 520 700}
-  [[ $RUN == g* ]] || $PY tools/fill_gen_diag.py $O/last.pt --out $D/p2_diag_$RUN.json --sheet docs/recon_fill/p2_diag_$RUN.jpg
+  [[ $RUN == p* ]] && $PY tools/fill_prev_eval.py $O/last.pt --out $D/p2c_offline_$RUN.json --sheet docs/recon_fill/p2c_offline_$RUN.jpg
+  [[ $RUN == [gp]* ]] || $PY tools/fill_gen_diag.py $O/last.pt --out $D/p2_diag_$RUN.json --sheet docs/recon_fill/p2_diag_$RUN.jpg
 fi
 
 # 1b. the "lines" measure (tools/fill_eval.py) of the pictures so far: what the gate's line is set from

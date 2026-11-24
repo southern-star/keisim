@@ -185,3 +185,46 @@ def test_fillgan_keeps_the_shape_and_the_measures_tell_noise_from_lines():
     stripes = (torch.arange(64)[None, None, None, :] // 4 % 2).float().expand(1, 3, 64, 64)
     ratio = lambda x: (lambda c, e: c / e)(*coherence(x, region))
     assert ratio(stripes) > 0.95 and ratio(torch.rand(1, 3, 64, 64)) < 0.45
+
+
+def test_fillgan_with_the_fill_before():
+    """P2c (docs/recon_fill.md 6.14): with prev=True and no fill before, a net started from one without it answers the
+    same; the depth stays P1's; the degraded fill before has no surface where it had none; dropped samples have none."""
+    import torch
+    from keipilot import fillgen
+    from keipilot.fillnet import FillNet
+    torch.manual_seed(0)
+    shape = FillNet(loose=False)
+    torch.nn.init.normal_(shape.head.weight, std=0.05)
+    old = fillgen.FillGen(shape, scale=0.2, param="g").eval()
+    torch.nn.init.normal_(old.colour.head.weight, std=0.05)
+    gen = fillgen.FillGen(shape, scale=0.2, param="g", prev=True).eval()
+    state, first = old.colour.state_dict(), "enc.0.0.weight"
+    w = torch.zeros_like(gen.colour.state_dict()[first])
+    w[:, :state[first].shape[1]] = state[first]
+    gen.colour.load_state_dict({**state, first: w})
+    rgb, dep = torch.rand(2, 3, CHASE.height, CHASE.width), torch.rand(2, 1, CHASE.height, CHASE.width)
+    dep[:, :, :, :100] = 0.0
+    prgb, pdep = torch.rand_like(rgb), torch.rand_like(dep)
+    pdep[:, :, :40] = 0.0
+    with torch.no_grad():
+        want, none, with_prev = old(rgb, dep), gen(rgb, dep), gen(rgb, dep, prev_rgb=prgb, prev_dep=pdep)
+    assert torch.equal(none[0], want[0]) and torch.equal(with_prev[0], want[0])          # the new planes' weights are zero
+    assert torch.equal(with_prev[1], want[1]) and torch.equal(with_prev[2], want[2])
+    cfg = gen.config()
+    assert cfg["prev"] is True and fillgen.FillGen(**{k: v for k, v in cfg.items() if k != "kind"}).ncond == 16
+
+    drgb, ddep = fillgen.degrade_prev(prgb, pdep)
+    assert torch.all(ddep[pdep == 0] == 0) and torch.all(drgb[(ddep == 0).expand_as(drgb)] == 0) and float(drgb.max()) <= 1.0
+    batch = {"in_rgb": rgb, "in_dep": dep, "loose_rgb": rgb, "loose_dep": dep, "gt_rgb": torch.rand_like(rgb), "gt_dep": dep.clamp(min=0.1), "prev_rgb": prgb, "prev_dep": pdep}
+    nrgb, ndep = fillgen.training_prev(gen, batch, p_drop=1.0)
+    assert float(nrgb.abs().sum()) == 0 and float(ndep.abs().sum()) == 0
+    srgb, sdep = fillgen.training_prev(gen, batch, p_drop=0.0, p_self=1.0)
+    assert srgb.shape == rgb.shape and torch.all(sdep[pdep == 0] == 0)
+    gen.train()
+    disc = fillgen.PatchDisc(gen.ncond)
+    cond, fake, comp, wgt = fillgen.gan_picture(gen, batch, prev=(srgb, sdep))
+    assert cond.shape[1] == 16
+    lg, _ = fillgen.gen_loss(disc, cond, fake, comp, batch["gt_rgb"], wgt)
+    lg.backward()
+    assert gen.colour.enc[0][0].weight.grad[:, 11:].abs().sum() > 0

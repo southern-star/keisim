@@ -4,7 +4,8 @@
     python tools/recon_g3.py speed runs/eval/recon/g3_speed      (the page's speed in real time)
     python tools/recon_g3.py same runs/eval/recon_fill/p0_same   (two checkouts' measurements, docs/recon_fill/p0.sh)
     python tools/recon_g3.py shape runs/eval/recon_fill/p2 runs/eval/recon_fill/p1 runs/eval/recon_fill/p2_base_p1
-                                                                 (is another fill model's shape the first one's?)
+                                                                 (is another fill model's shape the first one's?
+                                                                  --colours: the same model, after a change of the page)
 
 drive: per town and setting the "drive" digests of its runs (the car's state, the model's plan and its input images
 every second: web/tools/recon_check.mjs) and whether a run without ReconView has the same one. speed: frames per
@@ -113,7 +114,7 @@ def same(d):
     print(f"\n走行 {len(n)} 本、各 {n[0]['sec']} 秒、計測 {len(n[0]['rows'])} フレーム。両方にある要約値 {shared} 種類のうち、行が全部同じもの {ok} 種類。")
 
 
-def shape(d, others):
+def shape(d, others, colours=False):
     kinds = ("holes", "holesPrev", "all", "allPrev")
 
     def leaves(a, b):
@@ -126,7 +127,7 @@ def shape(d, others):
             return abs(a - b)
         return 0.0 if a == b else float("inf")
 
-    print("| 町 | 要約値（画像と姿勢、走行） | 同じ要約値の走行 | フレーム | 補完の行（穴、全部、できたて、1 回前）の差の最大 |\n|---|---|---|---:|---|")
+    print(f"| 町 | 要約値（画像と姿勢、走行） | 同じ要約値の走行 | フレーム | 補完の行（穴、全部、できたて、1 回前{'、ちらつき' if colours else ''}）の差の最大 |\n|---|---|---|---:|---|")
     for path in sorted(glob.glob(os.path.join(d, "*.json"))):
         a = json.load(open(path))
         town = TOWNS.get(os.path.splitext(os.path.basename(path))[0], os.path.basename(path))
@@ -141,7 +142,9 @@ def shape(d, others):
         if hit is None:
             print(f"| {town} | `{a['digest']}`、`{a['drive']}` | なし | – | –（比べられない） |")
             continue
-        worst = max(leaves(ra["fill"].get(k), rb["fill"].get(k)) for ra, rb in zip(a["rows"], hit[1]["rows"]) for k in kinds)
+        # colours: the flicker too, where both runs have it (the same model must paint the same picture)
+        worst = max(leaves(ra["fill"].get(k), rb["fill"].get(k)) for ra, rb in zip(a["rows"], hit[1]["rows"])
+                    for k in kinds + (("flicker",) if colours and "flicker" in ra["fill"] and "flicker" in rb["fill"] else ()))
         print(f"| {town} | `{a['digest']}`、`{a['drive']}` | `{hit[0]}` | {len(a['rows'])} | {'0（全部同じ）' if worst == 0 else f'**{worst:g}**'} |")
 
 
@@ -150,9 +153,10 @@ def main():
     ap.add_argument("what", choices=("drive", "speed", "same", "shape"))
     ap.add_argument("dir")
     ap.add_argument("others", nargs="*")
+    ap.add_argument("--colours", action="store_true", help="shape: the same model in both: its flicker must be the same too")
     args = ap.parse_args()
     if args.what == "shape":
-        return shape(args.dir, args.others)
+        return shape(args.dir, args.others, args.colours)
     {"drive": drive, "speed": speed, "same": same}[args.what](args.dir)
 
 
