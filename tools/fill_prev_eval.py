@@ -3,6 +3,7 @@ towns' samples, at the holes.
 
     python tools/fill_prev_eval.py runs/reconfill_genp1/last.pt --out runs/eval/recon_fill/p2c_offline_p1.json [--sheet X.jpg]
     python tools/fill_prev_eval.py --table runs/eval/recon_fill/p2c_offline_p1.json
+    python tools/fill_prev_eval.py CKPT --rounds 1 8 16 32 --out ...      (more rounds; a sheet needs rounds 1 and 8)
 
 Rows: without a fill before; with the town's own fill before (the training data's: nearly the answer, so no measure of
 the page); and the rounds: the net's own answer given back as the fill before, 1, 2, 4 and 8 times, from the same
@@ -36,6 +37,7 @@ def table(r):
 
 
 def main():
+    global ROUNDS
     ap = argparse.ArgumentParser()
     ap.add_argument("ckpt", nargs="?")
     ap.add_argument("--data", default="data/recon_fill/eval")
@@ -45,7 +47,9 @@ def main():
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--bs", type=int, default=32)
     ap.add_argument("--table", default=None)
+    ap.add_argument("--rounds", type=int, nargs="+", default=list(ROUNDS))
     args = ap.parse_args()
+    ROUNDS = tuple(sorted(args.rounds))
     if args.table:
         return table(json.load(open(args.table)))
     dev = args.device
