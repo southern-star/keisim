@@ -39,9 +39,12 @@ def sample(gen, cond, rgb1, steps, mean):
 
 def table(r):
     print(f"{r['samples']} 組（評価用の 14 組に 1 組）、穴の画素\n")
-    print("| 作り方 | 色の L1（0〜255） | 鮮明さ |\n|---|---:|---:|")
+    grain = all("lines" in v for v in r["steps"].values())
+    print("| 作り方 | 色の L1（0〜255） | 鮮明さ |" + (" 線らしさ |" if grain else "") + "\n|---|---:|---:|" + ("---:|" if grain else ""))
     for k, v in r["steps"].items():
-        print(f"| {k} | {v['rgb_l1']:.1f} | {v['sharpness']:.2f} |")
+        print(f"| {k} | {v['rgb_l1']:.1f} | {v['sharpness']:.2f} |" + (f" {v['lines']:.2f} |" if grain else ""))
+    if grain:
+        print(f"| 正解の画そのもの | 0.0 | 1.00 | {next(iter(r['steps'].values()))['lines_gt']:.2f} |")
     n = r["noise"]
     print(f"\n1 ステップの答え（色の差 ÷ 尺度）と、出発点の乱数の画: 相関 {n['corr_noise']:.2f}（細かい成分だけでは {n['hi_corr_noise']:.2f}、乱数の細かい成分のうち答えに残った割合 {100 * n['hi_left']:.0f} %）。"
           f"正解の色の差との相関: {n['corr_town']:.2f}。分散: 答え {n['var']:.2f}、正解 {n['var_town']:.2f}（細かい成分: {n['hi_var']:.2f}、{n['hi_var_town']:.2f}）。")
@@ -91,7 +94,7 @@ def main():
                 ok = (surf[0] > 0).float()
                 pics.append(np.hstack([(p * (ok if 0 < j < len(row) - 1 else 1)).permute(1, 2, 0).cpu().numpy()[:, :, ::-1] * 255 for j, p in enumerate(row)]).astype(np.uint8))
     n = S["n"]
-    out = {"ckpt": args.ckpt, "config": gen.config(), "samples": len(idx), "steps": {k: {m: a.result()[m] for m in ("rgb_l1", "sharpness")} for k, a in acc.items()},
+    out = {"ckpt": args.ckpt, "config": gen.config(), "samples": len(idx), "steps": {k: {m: a.result()[m] for m in ("rgb_l1", "sharpness", "lines", "lines_gt")} for k, a in acc.items()},
            "noise": {"var": S["xx"] / n, "var_town": S["gg"] / n, "corr_noise": S["xe"] / (S["xx"] * S["ee"]) ** 0.5, "corr_town": S["xg"] / (S["xx"] * S["gg"]) ** 0.5,
                      "hi_var": S["hxx"] / n, "hi_var_town": S["hgg"] / n, "hi_corr_noise": S["hxe"] / (S["hxx"] * S["hee"]) ** 0.5, "hi_left": S["hxe"] / S["hee"]}}
     if args.out:

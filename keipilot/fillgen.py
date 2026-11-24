@@ -13,7 +13,11 @@ depth, the probability of a surface). The times go in as two constant planes, t 
 normalisation layers a time embedding could modulate).
 
 FillGen is called like FillNet and answers like it: (rgb, code, surface logit), with one fixed noise image (the
-browser's ONNX holds it as a constant: the same input gives the same picture)."""
+browser's ONNX holds it as a constant: the same input gives the same picture).
+
+The other way to the colours (docs/recon_fill.md 6.10; param "g"): the same colour net without noise and times gives
+the difference straight from the condition, trained by an L1 loss and against a patch discriminator (PatchDisc,
+gan_losses below)."""
 from __future__ import annotations
 
 import torch
@@ -28,12 +32,13 @@ T_MIN = 0.05                      # param "x": no training time below this (u = 
 
 
 class ColourNet(nn.Module):
-    """u(z, t, t - r | condition): (B, 3, H, W)."""
+    """u(z, t, t - r | condition): (B, 3, H, W). With noise=False the input is the condition alone."""
 
-    def __init__(self, cond, width=(16, 32, 64, 128), norm="none"):
+    def __init__(self, cond, width=(16, 32, 64, 128), norm="none", noise=True):
         super().__init__()
-        self.width = w = tuple(width)
-        cin = 3 + 2 + cond
+        self.width, self.noise = tuple(width), noise
+        w = self.width
+        cin = (3 + 2 if noise else 0) + cond
         self.enc = nn.ModuleList(nn.Sequential(*_block(cin if i == 0 else w[i - 1], c, norm), *_block(c, c, norm)) for i, c in enumerate(w))
         self.wide = nn.Sequential(*_block(w[-1], w[-1], norm, 2), *_block(w[-1], w[-1], norm, 4))
         self.lat = nn.ModuleList(nn.Conv2d(w[i + 1], w[i], 1) for i in range(len(w) - 1))
@@ -44,8 +49,8 @@ class ColourNet(nn.Module):
 
     def forward(self, z, t, dt, cond):
         """z (B, 3, H, W); t, dt (B, 1, 1, 1): the time and t - r; cond (B, C, H, W)."""
-        hw = z.shape[2:]
-        x = torch.cat([z, t.expand(-1, 1, *hw), dt.expand(-1, 1, *hw), cond], 1)
+        hw = cond.shape[2:]
+        x = torch.cat([z, t.expand(-1, 1, *hw), dt.expand(-1, 1, *hw), cond], 1) if self.noise else cond
         skips = []
         for i, enc in enumerate(self.enc):
             x = enc(x if i == 0 else F.max_pool2d(x, 2))
@@ -62,14 +67,15 @@ class FillGen(nn.Module):
         minus P1's at the holes (colours in 0..1). param: what the colour net's output is: "u", the average velocity
         itself (the paper's form; the one step is e - u, so the net has to reproduce the noise image exactly to take
         it out), or "x": the net gives f and u = (z - f) / t (for r = t, f is the clean image; the one step from
-        t = 1 is f itself, and a fresh net answers P1's colour)."""
+        t = 1 is f itself, and a fresh net answers P1's colour); or "g": no noise and no times, the net gives the
+        difference from the condition alone (trained against a discriminator: gan_losses)."""
         super().__init__()
         self.shape = shape if isinstance(shape, FillNet) else FillNet(**shape)
         for p in self.shape.parameters():
             p.requires_grad_(False)
-        assert param in ("u", "x")
+        assert param in ("u", "x", "g")
         self.loose, self.scale, self.seed, self.param = self.shape.loose, float(scale), seed, param
-        self.colour = ColourNet((11 if self.loose else 6) + 5, width)
+        self.colour = ColourNet((11 if self.loose else 6) + 5, width, noise=param != "g")
         g = torch.Generator().manual_seed(seed)
         self.register_buffer("noise", torch.randn(1, 3, CHASE.height, CHASE.width, generator=g))
 
@@ -99,6 +105,8 @@ class FillGen(nn.Module):
     def forward(self, in_rgb, in_dep, loose_rgb=None, loose_dep=None, noise=None):
         """As FillNet: (rgb, code, surface logit). One step from the fixed noise image (or the one given)."""
         cond, rgb, code, surf = self.condition(in_rgb, in_dep, loose_rgb, loose_dep)
+        if self.param == "g":
+            return rgb + self.scale * self.colour(None, None, None, cond), code, surf
         e = (self.noise if noise is None else noise).to(rgb.dtype).expand_as(rgb)
         one = torch.ones(rgb.shape[0], 1, 1, 1, dtype=rgb.dtype, device=rgb.device)
         out = self.colour(e, one, one, cond)
@@ -163,3 +171,52 @@ def colour_scale(gen, loader, device, batches=40):
             d = (b["gt_rgb"] - rgb1)[hole]
             s, n = s + float((d.double() ** 2).sum()), n + d.numel()
     return (s / max(1, n)) ** 0.5
+
+
+# ---------------------------------------------------------------------- the other way: L1 and a patch discriminator
+class PatchDisc(nn.Module):
+    """Is this patch of the picture the town's, given the condition? One logit per 34 x 34 pixel patch (every 4
+    pixels). Spectral normalisation, no normalisation layers."""
+
+    def __init__(self, cond, width=(32, 64, 128)):
+        super().__init__()
+        sn = nn.utils.parametrizations.spectral_norm
+        c, layers = 3 + cond, []
+        for i, w in enumerate(width):
+            layers += [sn(nn.Conv2d(c, w, 4, stride=2 if i < 2 else 1, padding=1)), nn.LeakyReLU(0.2, inplace=True)]
+            c = w
+        layers.append(sn(nn.Conv2d(c, 1, 4, padding=1)))
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, rgb, cond):
+        return self.net(torch.cat([rgb, cond], 1))
+
+
+def gan_picture(gen, batch, w_seen=0.5):
+    """(cond, the generator's colour (B, 3, H, W) with its gradient, the same put into the town's picture outside the
+    target pixels, the pixels' weights w (B, 1, H, W): 0 outside the target, holes 1, the rest w_seen)."""
+    cond, rgb1, _code, _surf = gen.condition(batch["in_rgb"], batch["in_dep"], batch["loose_rgb"], batch["loose_dep"])
+    gt = batch["gt_dep"]
+    target = (gt > 0) & (gt <= CODE_MAX_R)
+    w = target.float() * torch.where(batch["in_dep"] > 0, w_seen, 1.0)
+    fake = rgb1 + gen.scale * gen.colour(None, None, None, cond)
+    return cond, fake, torch.where(target, fake.to(batch["gt_rgb"].dtype), batch["gt_rgb"]), w
+
+
+def _patch_mean(d, w):
+    """The mean of the discriminator's map d, every patch weighted by the mean pixel weight in its place."""
+    wd = F.adaptive_avg_pool2d(w, d.shape[2:])
+    return (d.float() * wd).sum() / wd.sum().clamp(min=1e-6)
+
+
+def disc_loss(disc, cond, comp, gt_rgb, w):
+    """The hinge loss of the discriminator: the town's picture against the generator's (no gradient into it)."""
+    real, fake = disc(gt_rgb, cond), disc(comp.detach(), cond)
+    return _patch_mean(F.relu(1.0 - real.float()), w) + _patch_mean(F.relu(1.0 + fake.float()), w), {"d_real": _patch_mean(real, w).item(), "d_fake": _patch_mean(fake, w).item()}
+
+
+def gen_loss(disc, cond, fake, comp, gt_rgb, w, lam=100.0):
+    """lam times the colour's L1 (colours in 0..1) minus the discriminator's mean answer to the generator's picture."""
+    l1 = ((fake.float() - gt_rgb).abs().mean(1, keepdim=True) * w).sum() / w.sum().clamp(min=1.0)
+    adv = -_patch_mean(disc(comp, cond), w)
+    return lam * l1 + adv, {"l1": 255.0 * l1.item(), "adv": adv.item()}

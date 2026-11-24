@@ -143,3 +143,45 @@ def test_fillgen_keeps_the_shape_and_learns_only_the_colour():
         assert torch.allclose(gx.velocity(z, t, t, cond), z / 0.5)
     loss, _ = fillgen.meanflow_loss(gx.train(), batch)
     assert torch.isfinite(loss)
+
+
+def test_fillgan_keeps_the_shape_and_the_measures_tell_noise_from_lines():
+    """The other way to the colours (docs/recon_fill.md 6.10): param "g" has no noise, a fresh net answers P1's colour,
+    the depth is P1's; the discriminator's loss reaches the colour net alone. tools/fill_eval.py's "lines" is high for
+    stripes and low for noise."""
+    import torch
+    from keipilot import fillgen
+    from keipilot.fillnet import FillNet
+    from tools.fill_eval import coherence
+    torch.manual_seed(0)
+    shape = FillNet(loose=False)
+    torch.nn.init.normal_(shape.head.weight, std=0.05)
+    gen = fillgen.FillGen(shape, scale=0.2, param="g").eval()
+    rgb, dep = torch.rand(2, 3, CHASE.height, CHASE.width), torch.rand(2, 1, CHASE.height, CHASE.width)
+    dep[:, :, :, :100] = 0.0
+    with torch.no_grad():
+        want, got = shape(rgb, dep), gen(rgb, dep)
+    assert torch.equal(got[1], want[1]) and torch.equal(got[2], want[2]) and torch.equal(got[0], want[0].clamp(0, 1))
+    again = fillgen.FillGen(**{k: v for k, v in gen.config().items() if k != "kind"})
+    assert again.param == "g" and again.colour.noise is False
+
+    disc = fillgen.PatchDisc(11)
+    batch = {"in_rgb": rgb, "in_dep": dep, "loose_rgb": rgb, "loose_dep": dep, "gt_rgb": torch.rand_like(rgb), "gt_dep": dep.clamp(min=0.1)}
+    torch.nn.init.normal_(gen.colour.head.weight, std=0.05)
+    gen.train()
+    cond, fake, comp, w = fillgen.gan_picture(gen, batch)
+    assert disc(comp, cond).shape[1:] == (1, 38, 78)
+    ld, _ = fillgen.disc_loss(disc, cond, comp, batch["gt_rgb"], w)
+    ld.backward()
+    assert gen.colour.head.weight.grad is None and disc.net[0].parametrizations.weight.original.grad.abs().sum() > 0
+    lg, parts = fillgen.gen_loss(disc, cond, fake, comp, batch["gt_rgb"], w)
+    lg.backward()
+    assert torch.isfinite(lg) and all(p.grad is None for p in shape.parameters()) and gen.colour.head.weight.grad.abs().sum() > 0
+    # outside the target pixels the discriminator sees the town's own picture
+    target = (batch["gt_dep"] > 0) & (batch["gt_dep"] <= fillgen.CODE_MAX_R)
+    assert torch.equal(comp[(~target).expand_as(comp)], batch["gt_rgb"][(~target).expand_as(comp)])
+
+    region = torch.ones(1, 1, 64, 64, dtype=torch.bool)
+    stripes = (torch.arange(64)[None, None, None, :] // 4 % 2).float().expand(1, 3, 64, 64)
+    ratio = lambda x: (lambda c, e: c / e)(*coherence(x, region))
+    assert ratio(stripes) > 0.95 and ratio(torch.rand(1, 3, 64, 64)) < 0.45

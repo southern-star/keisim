@@ -7,9 +7,10 @@ towns of the measurements).
 
 Two kinds of pixels, both where the town has a surface within 80 m: holes (the view drew nothing there) and seen
 ones. Per kind: is a surface predicted (at the holes also over the pixels where the town has none: the sky must stay
-empty), the depth's AbsRel and the share within 25 % (the measurement's "drawn right"), the colour's L1 (0..255) and
-the sharpness: the mean colour step between neighbouring pixels over the town's own (1: as sharp as the town; less:
-blurred).
+empty), the depth's AbsRel and the share within 25 % (the measurement's "drawn right"), the colour's L1 (0..255), the
+sharpness: the mean colour step between neighbouring pixels over the town's own (1: as sharp as the town; less:
+blurred), and "lines": how much of the detail is edges and lines (coherence() below; noise scores low, a blur high; the
+town's own is in the result as "lines_gt").
 Baselines: "ground": every hole is the flat ground (the depth of keipilot/filldata.py ground_depth, no colour);
 "inpaint": cv2.inpaint of the view's picture (colour only); "loose": the loose rule's picture where it has a surface;
 "view": the view itself at the seen pixels."""
@@ -26,7 +27,22 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from keipilot.filldata import FillDataset  # noqa: E402
 from keipilot.fillnet import CODE_MAX_R, code_to_metres, load_fillnet  # noqa: E402
 
-KEYS = ("pixels", "surface_ok", "surface_n", "rel", "within", "l1", "grad", "grad_gt", "grad_n", "covered")
+KEYS = ("pixels", "surface_ok", "surface_n", "rel", "within", "l1", "grad", "grad_gt", "grad_n", "covered", "co", "en", "co_gt", "en_gt")
+
+
+def coherence(rgb, region, k=5):
+    """How much of the picture's detail is lines and edges: the brightness's gradients (central differences, inside the
+    region only) as a structure tensor over k x k pixels; returns the sums over the region of the tensor's
+    anisotropy sqrt((Jxx - Jyy)^2 + 4 Jxy^2) and of its trace. Their ratio is 1 where all gradients of a
+    neighbourhood point one way (an edge, a ramp) and near 0 where they point every way (noise)."""
+    import torch.nn.functional as F
+    y = rgb.float().mean(1, keepdim=True)
+    m = region.float()
+    gx = F.pad(y[..., :, 2:] - y[..., :, :-2], (1, 1)) * F.pad(m[..., :, 2:] * m[..., :, :-2], (1, 1))
+    gy = F.pad(y[..., 2:, :] - y[..., :-2, :], (0, 0, 1, 1)) * F.pad(m[..., 2:, :] * m[..., :-2, :], (0, 0, 1, 1))
+    pool = lambda a: F.avg_pool2d(a, k, 1, k // 2)
+    xx, yy, xy = pool(gx * gx), pool(gy * gy), pool(gx * gy)
+    return float((torch.sqrt((xx - yy) ** 2 + 4 * xy * xy) * m).sum()), float(((xx + yy) * m).sum())
 
 
 class Acc:
@@ -58,13 +74,17 @@ class Acc:
             s["grad"] += float(g(rgb)) * 255.0
             s["grad_gt"] += float(g(gt_rgb)) * 255.0
             s["grad_n"] += float(both.sum())
+            for k, x in (("", rgb), ("_gt", gt_rgb)):
+                co, en = coherence(x, region)
+                s["co" + k], s["en" + k] = s["co" + k] + co, s["en" + k] + en
 
     def result(self):
         s, has = self.s, self.has
         d = lambda what, a, b: (a / b if b and what in has else None)
         return {"pixels": int(s["pixels"]), "surface_acc": d("surface", s["surface_ok"], s["surface_n"]), "covered": d("surface", s["covered"], s["pixels"]),
                 "abs_rel": d("depth", s["rel"], s["pixels"]), "within25": d("depth", s["within"], s["pixels"]), "rgb_l1": d("rgb", s["l1"], s["pixels"]),
-                "sharpness": d("rgb", s["grad"], s["grad_gt"]), "gt_step": d("rgb", s["grad_gt"], s["grad_n"])}
+                "sharpness": d("rgb", s["grad"], s["grad_gt"]), "gt_step": d("rgb", s["grad_gt"], s["grad_n"]),
+                "lines": d("rgb", s["co"], s["en"]), "lines_gt": d("rgb", s["co_gt"], s["en_gt"])}
 
 
 def evaluate(model, ds, device, bs=32, workers=4, baselines=True):
@@ -109,16 +129,24 @@ def table(r):
     f = lambda v, s="{:.1f} %", k=100.0: "–" if v is None else s.format(k * v)
     print(f"{r['samples']:,} 組（{'、'.join(r['data'])}）。対象は、街に 80 m 以内の面がある画素\n")
     print("穴の画素（補完なしの画に何もない所）\n")
-    print("| | 画素 | 面があるかの正答率 | 面を出した割合 | 深度の AbsRel | 25 % 以内（面あり） | 色の L1（0〜255） | 鮮明さ |\n|---|---:|---:|---:|---:|---:|---:|---:|")
+    grain = "lines" in r["models"][0]["holes"]["model"]
+    g = lambda v: f" {f(v.get('lines'), '{:.2f}', 1.0)} |" if grain else ""
+    print("| | 画素 | 面があるかの正答率 | 面を出した割合 | 深度の AbsRel | 25 % 以内（面あり） | 色の L1（0〜255） | 鮮明さ |" + (" 線らしさ |" if grain else "") + "\n|---|---:|---:|---:|---:|---:|---:|---:|" + ("---:|" if grain else ""))
     rows = [(m["name"], m["holes"]["model"]) for m in r["models"]] + [(JA[k], r["models"][0]["holes"][k]) for k in ("ground", "inpaint", "loose")]
     for name, v in rows:
-        print(f"| {name} | {v['pixels']:,} | {f(v['surface_acc'])} | {f(v['covered'])} | {f(v['abs_rel'])} | {f(v['within25'])} | {f(v['rgb_l1'], '{:.1f}', 1.0)} | {f(v['sharpness'], '{:.2f}', 1.0)} |")
+        print(f"| {name} | {v['pixels']:,} | {f(v['surface_acc'])} | {f(v['covered'])} | {f(v['abs_rel'])} | {f(v['within25'])} | {f(v['rgb_l1'], '{:.1f}', 1.0)} | {f(v['sharpness'], '{:.2f}', 1.0)} |{g(v)}")
+    if grain:
+        print(f"| 正解の画そのもの | | | | | | 0.0 | 1.00 | {r['models'][0]['holes']['model']['lines_gt']:.2f} |")
     print("\n見えた画素（補完なしの画に面がある所）\n")
-    print("| | 画素 | 面を出した割合 | 深度の AbsRel | 25 % 以内（面あり） | 色の L1（0〜255） | 鮮明さ |\n|---|---:|---:|---:|---:|---:|---:|")
+    print("| | 画素 | 面を出した割合 | 深度の AbsRel | 25 % 以内（面あり） | 色の L1（0〜255） | 鮮明さ |" + (" 線らしさ |" if grain else "") + "\n|---|---:|---:|---:|---:|---:|---:|" + ("---:|" if grain else ""))
     rows = [(m["name"], m["holes"]["model"]["seen"]) for m in r["models"]] + [(JA["view"], r["models"][0]["holes"]["view"]["seen"])]
     for name, v in rows:
-        print(f"| {name} | {v['pixels']:,} | {f(v['covered'])} | {f(v['abs_rel'])} | {f(v['within25'])} | {f(v['rgb_l1'], '{:.1f}', 1.0)} | {f(v['sharpness'], '{:.2f}', 1.0)} |")
+        print(f"| {name} | {v['pixels']:,} | {f(v['covered'])} | {f(v['abs_rel'])} | {f(v['within25'])} | {f(v['rgb_l1'], '{:.1f}', 1.0)} | {f(v['sharpness'], '{:.2f}', 1.0)} |{g(v)}")
+    if grain:
+        print(f"| 正解の画そのもの | | | | | 0.0 | 1.00 | {r['models'][0]['holes']['model']['seen']['lines_gt']:.2f} |")
     print("\n鮮明さ: 隣の画素との色の差の平均を、正解の画のそれで割った値（1 が正解と同じ）。")
+    if grain:
+        print("線らしさ: 明るさの勾配が、5×5 画素の中でどれだけ同じ向きにそろっているか（縁や線だけなら 1、画素がばらばらの乱数なら 0 に近い。ぼけた画は高く出る）。")
 
 
 def sheet(path, models, ds, frames, device):

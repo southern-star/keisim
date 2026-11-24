@@ -5,6 +5,8 @@
 #   RUN=1 bash docs/recon_fill/p2.sh train       a colour net (RUN=1, 2, 3: the settings of 6.2; 2x: run 1's with the
 #                                                net's output as the clean picture, 6.8), its offline numbers
 #   RUN=2x EPOCHS=20 bash docs/recon_fill/p2.sh train
+#   RUN=g1 bash docs/recon_fill/p2.sh train      the other way (6.10): L1 and a patch discriminator (g1, g2, g3)
+#   bash docs/recon_fill/p2.sh lines             the "lines" measure of the models so far (before the gate got it)
 #   RUN=1 bash docs/recon_fill/p2.sh export fidelity same drive speed     that model in the browser (gate G-P2b)
 #   MAIN=/path/to/a/checkout/of/main ... same    (its web/ needs node_modules, models and .towns)
 set -o pipefail
@@ -15,6 +17,7 @@ PYONNX=${PYONNX:-uv run --offline --with onnx --with onnxruntime python}
 STEPS=${*:-base}
 RUN=${RUN:-1}
 GEN=models/reconfill_gen.onnx
+O=runs/reconfill_gen$RUN
 TOWNS="1000 1015-98782ab7 osm_sapporo"
 run() { (cd web && node tools/recon_check.mjs "$@" 2>&1 | grep -v '^\[warn\]\|^\[error\] Failed to load resource\|onnxruntime'); }
 
@@ -30,22 +33,34 @@ fi
 
 # 1. a colour net on top of P1's net, and its numbers on the eval towns' samples
 if [[ " $STEPS " == *" train "* ]]; then
+  TRAIN=scripts/train_fillgen.py
+  NAME="P2（色を生成、$RUN 本目）"
   case $RUN in
+    g*) TRAIN=scripts/train_fillgan.py; NAME="P2（L1 + PatchGAN、${RUN#g} 本目）"; EPOCHS=${EPOCHS:-60} ;;&
+    g1) SET="--lam 100" ;;
+    g2) SET="--lam ${LAM2:?30 if run g1 is blurred (sharpness under 0.5), 300 if it misses the L1 or the lines: LAM2=..}" ;;
+    g3) SET="--lam ${LAM3:?the better of runs g1 and g2: LAM3=..} --width 32 64 128 256" ;;
     1) SET="--mu -2.0 --sigma 2.0 --ratio 0.75 --p 0.75" ;;
     2) SET="--mu -0.4 --sigma 1.0 --ratio 0.25 --p 1.0" ;;
     2x) SET="--mu -2.0 --sigma 2.0 --ratio 0.75 --p 0.75 --param x" ;;
     3) SET="${SET3:?the better of runs 1 and 2: SET3='--mu .. --sigma .. --ratio .. --p ..'} --width 32 64 128 256" ;;
   esac
-  O=runs/reconfill_gen$RUN
-  [ -f $O/.done ] || { $PY scripts/train_fillgen.py --shape runs/reconfill_b/last.pt --data data/recon_fill/train --val data/recon_fill/eval --out $O --epochs ${EPOCHS:-100} $SET > $O.log 2>&1 && touch $O/.done; } || exit 1
+  [ -f $O/.done ] || { $PY $TRAIN --shape runs/reconfill_b/last.pt --data data/recon_fill/train --val data/recon_fill/eval --out $O --epochs ${EPOCHS:-100} $SET > $O.log 2>&1 && touch $O/.done; } || exit 1
   cp $O/log.json $D/p2_train_$RUN.json
-  $PY tools/fill_eval.py runs/reconfill_b/last.pt $O/last.pt --names "P1（回帰）" "P2（色を生成、$RUN 本目）" --data data/recon_fill/eval \
+  $PY tools/fill_eval.py runs/reconfill_b/last.pt $O/last.pt --names "P1（回帰）" "$NAME" --data data/recon_fill/eval \
     --out $D/p2_offline_$RUN.json --sheet docs/recon_fill/p2_offline_$RUN.jpg --frames ${SHEET_FRAMES:-60 300 520 700}
-  $PY tools/fill_gen_diag.py $O/last.pt --out $D/p2_diag_$RUN.json --sheet docs/recon_fill/p2_diag_$RUN.jpg
+  [[ $RUN == g* ]] || $PY tools/fill_gen_diag.py $O/last.pt --out $D/p2_diag_$RUN.json --sheet docs/recon_fill/p2_diag_$RUN.jpg
+fi
+
+# 1b. the "lines" measure (tools/fill_eval.py) of the pictures so far: what the gate's line is set from
+if [[ " $STEPS " == *" lines "* ]]; then
+  $PY tools/fill_eval.py runs/reconfill_b/last.pt runs/reconfill_gen1/last.pt runs/reconfill_gen2x/last.pt \
+    --names "P1（回帰）" "mean-flow 1 本目（1 ステップ）" "mean-flow 2 本目（1 ステップ）" --data data/recon_fill/eval --out $D/p2_lines.json
+  for r in 1 2x; do $PY tools/fill_gen_diag.py runs/reconfill_gen$r/last.pt --out $D/p2_diag_$r.json; done
 fi
 
 if [[ " $STEPS " == *" export "* ]]; then
-  $PYONNX scripts/export_fill_onnx.py runs/reconfill_gen$RUN/last.pt web/$GEN 2>&1 | tail -n 3
+  $PYONNX scripts/export_fill_onnx.py $O/last.pt web/$GEN 2>&1 | tail -n 3
   $PYONNX scripts/export_fill_onnx.py --same web/models/reconfill.onnx web/$GEN
 fi
 

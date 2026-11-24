@@ -1,0 +1,446 @@
+{
+ "data": [
+  "eval"
+ ],
+ "samples": 883,
+ "runs": [
+  "1000",
+  "1000_bikes",
+  "1015-98782ab7",
+  "osm_sapporo"
+ ],
+ "models": [
+  {
+   "name": "P1\uff08\u56de\u5e30\uff09",
+   "ckpt": "runs/reconfill_b/last.pt",
+   "config": {
+    "width": [
+     16,
+     32,
+     64,
+     128
+    ],
+    "loose": false,
+    "norm": "none"
+   },
+   "holes": {
+    "model": {
+     "pixels": 5137801,
+     "surface_acc": 0.9018847045830812,
+     "covered": 0.8955414972280943,
+     "abs_rel": 0.4694991098514228,
+     "within25": 0.7459993098214587,
+     "rgb_l1": 28.797609255376535,
+     "sharpness": 0.17248936530320963,
+     "gt_step": 12.704799722083608,
+     "lines": 0.8002209379971427,
+     "lines_gt": 0.5607807204181369,
+     "seen": {
+      "pixels": 34914255,
+      "surface_acc": 0.998591692705458,
+      "covered": 0.998591692705458,
+      "abs_rel": 0.15150853072942555,
+      "within25": 0.9435624789931791,
+      "rgb_l1": 13.69614161379965,
+      "sharpness": 0.45889972234638965,
+      "gt_step": 7.363775594625185,
+      "lines": 0.8078106326210592,
+      "lines_gt": 0.6960414374902499
+     }
+    },
+    "ground": {
+     "pixels": 5137801,
+     "surface_acc": 0.7390193786299405,
+     "covered": 0.5480605418543848,
+     "abs_rel": 1.1896269465526206,
+     "within25": 0.22694028048186374,
+     "rgb_l1": null,
+     "sharpness": null,
+     "gt_step": null,
+     "lines": null,
+     "lines_gt": null,
+     "seen": {
+      "pixels": 0,
+      "surface_acc": null,
+      "covered": null,
+      "abs_rel": null,
+      "within25": null,
+      "rgb_l1": null,
+      "sharpness": null,
+      "gt_step": null,
+      "lines": null,
+      "lines_gt": null
+     }
+    },
+    "inpaint": {
+     "pixels": 5137801,
+     "surface_acc": null,
+     "covered": null,
+     "abs_rel": null,
+     "within25": null,
+     "rgb_l1": 32.43214599285916,
+     "sharpness": 0.33958856661429265,
+     "gt_step": 12.704799722083608,
+     "lines": 0.7600845638192406,
+     "lines_gt": 0.5607807204181369,
+     "seen": {
+      "pixels": 0,
+      "surface_acc": null,
+      "covered": null,
+      "abs_rel": null,
+      "within25": null,
+      "rgb_l1": null,
+      "sharpness": null,
+      "gt_step": null,
+      "lines": null,
+      "lines_gt": null
+     }
+    },
+    "loose": {
+     "pixels": 5137801,
+     "surface_acc": 0.7677005313949693,
+     "covered": 0.594804469850039,
+     "abs_rel": 0.6655151825289652,
+     "within25": 0.4633933856138064,
+     "rgb_l1": 61.87800716870408,
+     "sharpness": 0.5745634440611272,
+     "gt_step": 12.704799722083608,
+     "lines": 0.6476802906379292,
+     "lines_gt": 0.5607807204181369,
+     "seen": {
+      "pixels": 0,
+      "surface_acc": null,
+      "covered": null,
+      "abs_rel": null,
+      "within25": null,
+      "rgb_l1": null,
+      "sharpness": null,
+      "gt_step": null,
+      "lines": null,
+      "lines_gt": null
+     }
+    },
+    "view": {
+     "pixels": 0,
+     "surface_acc": null,
+     "covered": null,
+     "abs_rel": null,
+     "within25": null,
+     "rgb_l1": null,
+     "sharpness": null,
+     "gt_step": null,
+     "lines": null,
+     "lines_gt": null,
+     "seen": {
+      "pixels": 34914255,
+      "surface_acc": 1.0,
+      "covered": 1.0,
+      "abs_rel": 0.16214844252906155,
+      "within25": 0.9301339524500809,
+      "rgb_l1": 15.166126799426195,
+      "sharpness": 0.7373934255245268,
+      "gt_step": 7.363775594625185,
+      "lines": 0.6670756486333846,
+      "lines_gt": 0.6960414374902499
+     }
+    }
+   }
+  },
+  {
+   "name": "mean-flow 1 \u672c\u76ee\uff081 \u30b9\u30c6\u30c3\u30d7\uff09",
+   "ckpt": "runs/reconfill_gen1/last.pt",
+   "config": {
+    "kind": "gen",
+    "shape": {
+     "width": [
+      16,
+      32,
+      64,
+      128
+     ],
+     "loose": false,
+     "norm": "none"
+    },
+    "width": [
+     16,
+     32,
+     64,
+     128
+    ],
+    "scale": 0.14484940967803323,
+    "seed": 0,
+    "param": "u"
+   },
+   "holes": {
+    "model": {
+     "pixels": 5137801,
+     "surface_acc": 0.9018847045830812,
+     "covered": 0.8955414972280943,
+     "abs_rel": 0.4694991098514228,
+     "within25": 0.7459993098214587,
+     "rgb_l1": 40.10542735225817,
+     "sharpness": 1.5786959083072734,
+     "gt_step": 12.704799722083608,
+     "lines": 0.4087493823240216,
+     "lines_gt": 0.5607807204181369,
+     "seen": {
+      "pixels": 34914255,
+      "surface_acc": 0.998591692705458,
+      "covered": 0.998591692705458,
+      "abs_rel": 0.15150853072942555,
+      "within25": 0.9435624789931791,
+      "rgb_l1": 22.62709716901449,
+      "sharpness": 2.0691663043863735,
+      "gt_step": 7.363775594625185,
+      "lines": 0.4734584526581377,
+      "lines_gt": 0.6960414374902499
+     }
+    },
+    "ground": {
+     "pixels": 5137801,
+     "surface_acc": 0.7390193786299405,
+     "covered": 0.5480605418543848,
+     "abs_rel": 1.1896269465526206,
+     "within25": 0.22694028048186374,
+     "rgb_l1": null,
+     "sharpness": null,
+     "gt_step": null,
+     "lines": null,
+     "lines_gt": null,
+     "seen": {
+      "pixels": 0,
+      "surface_acc": null,
+      "covered": null,
+      "abs_rel": null,
+      "within25": null,
+      "rgb_l1": null,
+      "sharpness": null,
+      "gt_step": null,
+      "lines": null,
+      "lines_gt": null
+     }
+    },
+    "inpaint": {
+     "pixels": 5137801,
+     "surface_acc": null,
+     "covered": null,
+     "abs_rel": null,
+     "within25": null,
+     "rgb_l1": 32.43214599285916,
+     "sharpness": 0.33958856661429265,
+     "gt_step": 12.704799722083608,
+     "lines": 0.7600845638192406,
+     "lines_gt": 0.5607807204181369,
+     "seen": {
+      "pixels": 0,
+      "surface_acc": null,
+      "covered": null,
+      "abs_rel": null,
+      "within25": null,
+      "rgb_l1": null,
+      "sharpness": null,
+      "gt_step": null,
+      "lines": null,
+      "lines_gt": null
+     }
+    },
+    "loose": {
+     "pixels": 5137801,
+     "surface_acc": 0.7677005313949693,
+     "covered": 0.594804469850039,
+     "abs_rel": 0.6655151825289652,
+     "within25": 0.4633933856138064,
+     "rgb_l1": 61.87800716870408,
+     "sharpness": 0.5745634440611272,
+     "gt_step": 12.704799722083608,
+     "lines": 0.6476802906379292,
+     "lines_gt": 0.5607807204181369,
+     "seen": {
+      "pixels": 0,
+      "surface_acc": null,
+      "covered": null,
+      "abs_rel": null,
+      "within25": null,
+      "rgb_l1": null,
+      "sharpness": null,
+      "gt_step": null,
+      "lines": null,
+      "lines_gt": null
+     }
+    },
+    "view": {
+     "pixels": 0,
+     "surface_acc": null,
+     "covered": null,
+     "abs_rel": null,
+     "within25": null,
+     "rgb_l1": null,
+     "sharpness": null,
+     "gt_step": null,
+     "lines": null,
+     "lines_gt": null,
+     "seen": {
+      "pixels": 34914255,
+      "surface_acc": 1.0,
+      "covered": 1.0,
+      "abs_rel": 0.16214844252906155,
+      "within25": 0.9301339524500809,
+      "rgb_l1": 15.166126799426195,
+      "sharpness": 0.7373934255245268,
+      "gt_step": 7.363775594625185,
+      "lines": 0.6670756486333846,
+      "lines_gt": 0.6960414374902499
+     }
+    }
+   }
+  },
+  {
+   "name": "mean-flow 2 \u672c\u76ee\uff081 \u30b9\u30c6\u30c3\u30d7\uff09",
+   "ckpt": "runs/reconfill_gen2x/last.pt",
+   "config": {
+    "kind": "gen",
+    "shape": {
+     "width": [
+      16,
+      32,
+      64,
+      128
+     ],
+     "loose": false,
+     "norm": "none"
+    },
+    "width": [
+     16,
+     32,
+     64,
+     128
+    ],
+    "scale": 0.14484940967803323,
+    "seed": 0,
+    "param": "x"
+   },
+   "holes": {
+    "model": {
+     "pixels": 5137801,
+     "surface_acc": 0.9018847045830812,
+     "covered": 0.8955414972280943,
+     "abs_rel": 0.4694991098514228,
+     "within25": 0.7459993098214587,
+     "rgb_l1": 39.35256937132339,
+     "sharpness": 1.6373070869810296,
+     "gt_step": 12.704799722083608,
+     "lines": 0.38136633796128994,
+     "lines_gt": 0.5607807204181369,
+     "seen": {
+      "pixels": 34914255,
+      "surface_acc": 0.998591692705458,
+      "covered": 0.998591692705458,
+      "abs_rel": 0.15150853072942555,
+      "within25": 0.9435624789931791,
+      "rgb_l1": 20.551664467887115,
+      "sharpness": 1.5104698828779162,
+      "gt_step": 7.363775594625185,
+      "lines": 0.46802645649726415,
+      "lines_gt": 0.6960414374902499
+     }
+    },
+    "ground": {
+     "pixels": 5137801,
+     "surface_acc": 0.7390193786299405,
+     "covered": 0.5480605418543848,
+     "abs_rel": 1.1896269465526206,
+     "within25": 0.22694028048186374,
+     "rgb_l1": null,
+     "sharpness": null,
+     "gt_step": null,
+     "lines": null,
+     "lines_gt": null,
+     "seen": {
+      "pixels": 0,
+      "surface_acc": null,
+      "covered": null,
+      "abs_rel": null,
+      "within25": null,
+      "rgb_l1": null,
+      "sharpness": null,
+      "gt_step": null,
+      "lines": null,
+      "lines_gt": null
+     }
+    },
+    "inpaint": {
+     "pixels": 5137801,
+     "surface_acc": null,
+     "covered": null,
+     "abs_rel": null,
+     "within25": null,
+     "rgb_l1": 32.43214599285916,
+     "sharpness": 0.33958856661429265,
+     "gt_step": 12.704799722083608,
+     "lines": 0.7600845638192406,
+     "lines_gt": 0.5607807204181369,
+     "seen": {
+      "pixels": 0,
+      "surface_acc": null,
+      "covered": null,
+      "abs_rel": null,
+      "within25": null,
+      "rgb_l1": null,
+      "sharpness": null,
+      "gt_step": null,
+      "lines": null,
+      "lines_gt": null
+     }
+    },
+    "loose": {
+     "pixels": 5137801,
+     "surface_acc": 0.7677005313949693,
+     "covered": 0.594804469850039,
+     "abs_rel": 0.6655151825289652,
+     "within25": 0.4633933856138064,
+     "rgb_l1": 61.87800716870408,
+     "sharpness": 0.5745634440611272,
+     "gt_step": 12.704799722083608,
+     "lines": 0.6476802906379292,
+     "lines_gt": 0.5607807204181369,
+     "seen": {
+      "pixels": 0,
+      "surface_acc": null,
+      "covered": null,
+      "abs_rel": null,
+      "within25": null,
+      "rgb_l1": null,
+      "sharpness": null,
+      "gt_step": null,
+      "lines": null,
+      "lines_gt": null
+     }
+    },
+    "view": {
+     "pixels": 0,
+     "surface_acc": null,
+     "covered": null,
+     "abs_rel": null,
+     "within25": null,
+     "rgb_l1": null,
+     "sharpness": null,
+     "gt_step": null,
+     "lines": null,
+     "lines_gt": null,
+     "seen": {
+      "pixels": 34914255,
+      "surface_acc": 1.0,
+      "covered": 1.0,
+      "abs_rel": 0.16214844252906155,
+      "within25": 0.9301339524500809,
+      "rgb_l1": 15.166126799426195,
+      "sharpness": 0.7373934255245268,
+      "gt_step": 7.363775594625185,
+      "lines": 0.6670756486333846,
+      "lines_gt": 0.6960414374902499
+     }
+    }
+   }
+  }
+ ]
+}
