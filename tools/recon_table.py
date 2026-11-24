@@ -185,11 +185,16 @@ def fill_tables(runs):
             if pick(rows, k):
                 print(f"| {TOWNS.get(town, town)} | {label} | {a('added'):,} | {pc(a('addedGood'), a('added'))} | {pc(a('addedThrough'), a('added'))} | {pc(a('addedPhantom'), a('added'))} |")
 
+    fl = [r["fill"]["flicker"] for r in every if r["fill"].get("flicker")]
+    npx = sum(f["pixels"] for f in fl)
+    flicker = (f"ちらつき（今の補完と 1 回前の補完を、同じ追跡カメラから 1 枚ずつ描き、どちらも同じ面で埋めた穴の画素の色の差、0〜255）: "
+               f"{sum(f['sum'] for f in fl) / npx:.2f}（{npx:,} 画素、{len(fl)} フレーム）。" if npx else "")
     m = lambda get: np.mean([get(r["fill"]) for r in every])
     aged = [r["fill"]["age"] for r in every if r["fill"].get("age")]
     print(f"\n補完のメッシュ（{len(every)} フレームの平均）: 有効な頂点 {m(lambda f: f['stats']['valid']):,.0f} / {f0['stats']['vertices']:,}、三角形 {m(lambda f: f['stats']['triangles']):,.0f}、"
           f"縁で捨てた三角形 {m(lambda f: f['stats']['edge']):,.0f}、穴にかかるマス {m(lambda f: f['stats']['holeCells']):,.0f}、作る時間 {m(lambda f: f['ms']):.1f} ms。"
           + (f"「1 回前」の補完は、平均でモデルのフレーム {np.mean([a['frames'] for a in aged]):.1f} 回前、{np.mean([a['metres'] for a in aged]):.2f} m 手前のもの。" if aged else "")
+          + flicker
           + (f"補完のモデル: 入力を作る時間 {m(lambda f: f['prepMs']):.1f} ms、推論（往復）{m(lambda f: f['inferMs']):.1f} ms。" if "inferMs" in f0 else ""))
 
 

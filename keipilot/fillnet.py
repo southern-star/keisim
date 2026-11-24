@@ -109,8 +109,15 @@ def macs(model):
 
 
 def load_fillnet(path, device="cpu"):
+    """A checkpoint of scripts/train_fill.py (a FillNet) or of scripts/train_fillgen.py (a FillGen: P1's net and the
+    colour net of keipilot/fillgen.py; it is called and answers like a FillNet)."""
     ck = torch.load(path, map_location=device, weights_only=False)
-    model = FillNet(**ck["config"]).to(device)
+    cfg = dict(ck["config"])
+    if cfg.pop("kind", None) == "gen":
+        from .fillgen import FillGen
+        model = FillGen(**cfg).to(device)
+    else:
+        model = FillNet(**cfg).to(device)
     model.load_state_dict(ck["model"])
     return model.eval()
 

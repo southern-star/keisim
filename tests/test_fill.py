@@ -100,3 +100,37 @@ def test_fillnet_first_guess():
         loss, parts = fill_loss(net.train(), batch)
         loss.backward()
         assert torch.isfinite(loss) and set(parts) == {"surface", "depth", "rgb", "grad"}
+
+
+def test_fillgen_keeps_the_shape_and_learns_only_the_colour():
+    """P2 (keipilot/fillgen.py): the depth and "a surface here" are P1's own; a fresh colour net answers P1's colour
+    plus the fixed noise; with r = t the mean flow's target is the plain velocity; only the colour net gets gradients."""
+    import torch
+    from keipilot import fillgen
+    from keipilot.fillnet import FillNet
+    torch.manual_seed(0)
+    shape = FillNet(loose=False)
+    torch.nn.init.normal_(shape.head.weight, std=0.05)
+    gen = fillgen.FillGen(shape, scale=0.2).eval()
+    rgb, dep = torch.rand(2, 3, CHASE.height, CHASE.width), torch.rand(2, 1, CHASE.height, CHASE.width)
+    dep[:, :, :, :100] = 0.0
+    with torch.no_grad():
+        want = shape(rgb, dep)
+        got = gen(rgb, dep)
+    assert torch.equal(got[1], want[1]) and torch.equal(got[2], want[2])
+    assert torch.allclose(got[0], want[0].clamp(0, 1) + 0.2 * gen.noise, atol=1e-6)
+    assert gen.config()["kind"] == "gen" and fillgen.FillGen(**{k: v for k, v in gen.config().items() if k != "kind"}).colour.width == gen.colour.width
+
+    t, r = fillgen.sample_times(4000, -2.0, 2.0, 0.75, "cpu")
+    assert torch.all(t >= r) and 0.70 < float((t > r).float().mean()) < 0.80
+    batch = {"in_rgb": rgb, "in_dep": dep, "loose_rgb": rgb, "loose_dep": dep, "gt_rgb": torch.rand_like(rgb), "gt_dep": dep.clamp(min=0.1)}
+    torch.nn.init.normal_(gen.colour.head.weight, std=0.05)
+    gen.train()
+    assert not shape.training
+    loss, parts = fillgen.meanflow_loss(gen, batch)
+    loss.backward()
+    assert torch.isfinite(loss) and all(p.grad is None for p in shape.parameters()) and gen.colour.head.weight.grad.abs().sum() > 0
+    # r = t everywhere: plain flow matching, the loss's error is u - (e - x); the same draws give the same number
+    torch.manual_seed(1)
+    _, fm = fillgen.meanflow_loss(gen, batch, ratio=0.0)
+    assert "mse_mf" not in fm and fm["mse"] == fm["mse_fm"]

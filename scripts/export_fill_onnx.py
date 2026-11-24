@@ -3,6 +3,9 @@
 
     python scripts/export_fill_onnx.py runs/reconfill_a/last.pt web/models/reconfill.onnx
     python scripts/export_fill_onnx.py OUT.onnx --random 16 32 64 128 [--no_loose] [--norm gn]   (random weights: timing)
+    python scripts/export_fill_onnx.py runs/reconfill_gen1/last.pt web/models/reconfill_gen.onnx   (P2: P1's net, the colour
+        net of keipilot/fillgen.py and its fixed noise image in one file; the same inputs and outputs)
+    python scripts/export_fill_onnx.py --same A.onnx B.onnx      (P2 keeps P1's shape: the two files' depths on eval samples)
 
 Inputs, all from ReconView's chase camera, float32:
   in_rgb    (1, 3, 160, 320)  the view without a fill, RGB 0..255 (the background where there is no surface)
@@ -43,13 +46,36 @@ class FillOnnx(nn.Module):
         return rgb[0].clamp(0.0, 1.0) * 255.0, depth[0, 0, ::2, ::2]
 
 
+def same_shape(a, b, data, every=9):
+    """P2 keeps P1's shape (docs/recon_fill.md 6.4): the depth outputs of two ONNX files on every 9th eval sample."""
+    import onnxruntime as ort
+    from keipilot.filldata import FillDataset
+    ds = FillDataset([data])
+    sa, sb = (ort.InferenceSession(p, providers=["CPUExecutionProvider"]) for p in (a, b))
+    worst, flips, rgb, n = 0.0, 0, 0.0, 0
+    for i in range(0, len(ds), every):
+        x = ds[i]
+        feeds = {"in_rgb": (x["in_rgb"][None] * 255.0).numpy().round(), "in_dep": (x["in_dep"][None] * 65535.0).numpy().round(),
+                 "loose_rgb": (x["loose_rgb"][None] * 255.0).numpy().round(), "loose_dep": (x["loose_dep"][None] * 65535.0).numpy().round()}
+        (ra, da), (rb, db) = (s.run(None, {k.name: feeds[k.name] for k in s.get_inputs()}) for s in (sa, sb))
+        worst, flips, rgb, n = max(worst, float(np.abs(da - db).max())), flips + int(((da > 0) != (db > 0)).sum()), rgb + float(np.abs(ra - rb).mean()), n + 1
+    print(f"{os.path.basename(a)} against {os.path.basename(b)} on {n} eval samples: depth differs by at most {worst:g} m, pixels whose surface differs: {flips}; "
+          f"colours {rgb / n:.1f} apart (0..255)")
+    if worst > 0 or flips:
+        sys.exit("the shapes differ")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("paths", nargs="+", help="CKPT DST, or DST with --random")
     ap.add_argument("--random", type=int, nargs="+", default=None, help="widths of a net with random weights")
     ap.add_argument("--no_loose", action="store_true")
     ap.add_argument("--norm", default="none")
+    ap.add_argument("--same", action="store_true", help="A.onnx B.onnx: do the two give the same depth (the same shape)? On the eval samples")
+    ap.add_argument("--data", default="data/recon_fill/eval")
     args = ap.parse_args()
+    if args.same:
+        return same_shape(args.paths[0], args.paths[1], args.data)
     args.dst = args.paths[-1]
     assert len(args.paths) == (1 if args.random else 2), "CKPT DST, or DST with --random"
     if args.random:

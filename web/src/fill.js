@@ -26,6 +26,9 @@ import { cameraRays, levelFrame, unproject } from './unproject.js';
 // alone with a wide edge ratio: surfaces the cameras see but the view's rule cuts)
 export const FILL = { every: 2, offset: [4, 600], tint: 0xff8ad8, loose: { ground: 'height', ratio: 2.0, scaled: false } };
 
+// depths within 10 % of each other, as a difference of 16 bit codes (65535 over ln(400 / 0.25))
+const FLICKER_CODES = Math.round(65535 * Math.log(1.1) / Math.log(1600));
+
 export function createFill({ world, origin, table, rule, params, label, rr, rscene, measCam, carFrame, meshTriangles, triangles, reconDepth,
   keyframes, observed, bare, session = null }) {
   const mode = params.get('fill');
@@ -252,6 +255,21 @@ export function createFill({ world, origin, table, rule, params, label, rr, rsce
       age: prev.seq ? { frames: cur.frame - prev.frame, metres: Math.hypot(cur.pose.x - prev.pose.x, cur.pose.y - prev.pose.y) } : null,
       holes: one(cur, 'holes', true, 'holes'), holesPrev: one(prev, 'holes', true, 'holesPrev'),
       all: one(cur, 'all', false, 'all'), allPrev: one(prev, 'all', false, 'allPrev') };
+    // flicker: this fill and the one before, each alone, from this frame's chase camera; where the view has a hole
+    // and the two fills have the same surface (depths within 10 %), how far apart their colours are
+    if (prev.seq) {
+      const alone = (s) => { layers({ slot: s, how: 'all', obs: false }); return { R: reconDepth(pose), C: colour(pose) }; };
+      const a = alone(cur), b = alone(prev);
+      let nf = 0, sum = 0, both = 0;
+      for (let i = 0, o = 0; i < RP.length; i++, o += 3) {
+        if (RP[i] !== 0 || a.R[i] === 0 || b.R[i] === 0) continue;
+        both++;
+        if (Math.abs(a.R[i] - b.R[i]) > FLICKER_CODES) continue;
+        nf++;
+        sum += (Math.abs(a.C[o] - b.C[o]) + Math.abs(a.C[o + 1] - b.C[o + 1]) + Math.abs(a.C[o + 2] - b.C[o + 2])) / 3;
+      }
+      out.flicker = { pixels: nf, both, sum };
+    }
     if (mode === 'model') {
       Object.assign(out, { prepMs, inferMs, skipped, fresh: cur.frame === frameNo });
       // the town's own fill of the same frame, from the same input
