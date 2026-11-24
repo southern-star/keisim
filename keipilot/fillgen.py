@@ -24,6 +24,7 @@ from .filldata import CHASE
 from .fillnet import CODE_MAX_R, FillNet, _block
 
 X_CLAMP = 4.0                     # the colour difference over the scale, clamped (training targets)
+T_MIN = 0.05                      # param "x": no training time below this (u = (z - f) / t)
 
 
 class ColourNet(nn.Module):
@@ -56,14 +57,18 @@ class ColourNet(nn.Module):
 
 
 class FillGen(nn.Module):
-    def __init__(self, shape, width=(16, 32, 64, 128), scale=0.15, seed=0):
+    def __init__(self, shape, width=(16, 32, 64, 128), scale=0.15, seed=0, param="u"):
         """shape: a FillNet or its configuration (P1's net; frozen). scale: the standard deviation of the town's colour
-        minus P1's at the holes (colours in 0..1)."""
+        minus P1's at the holes (colours in 0..1). param: what the colour net's output is: "u", the average velocity
+        itself (the paper's form; the one step is e - u, so the net has to reproduce the noise image exactly to take
+        it out), or "x": the net gives f and u = (z - f) / t (for r = t, f is the clean image; the one step from
+        t = 1 is f itself, and a fresh net answers P1's colour)."""
         super().__init__()
         self.shape = shape if isinstance(shape, FillNet) else FillNet(**shape)
         for p in self.shape.parameters():
             p.requires_grad_(False)
-        self.loose, self.scale, self.seed = self.shape.loose, float(scale), seed
+        assert param in ("u", "x")
+        self.loose, self.scale, self.seed, self.param = self.shape.loose, float(scale), seed, param
         self.colour = ColourNet((11 if self.loose else 6) + 5, width)
         g = torch.Generator().manual_seed(seed)
         self.register_buffer("noise", torch.randn(1, 3, CHASE.height, CHASE.width, generator=g))
@@ -86,16 +91,23 @@ class FillGen(nn.Module):
             cond = torch.cat([x, rgb, code, torch.sigmoid(surf)], 1)
         return cond, rgb, code, surf
 
+    def velocity(self, z, t, dt, cond):
+        """u(z, r, t | cond) with dt = t - r."""
+        out = self.colour(z, t, dt, cond)
+        return out if self.param == "u" else (z - out) / t
+
     def forward(self, in_rgb, in_dep, loose_rgb=None, loose_dep=None, noise=None):
         """As FillNet: (rgb, code, surface logit). One step from the fixed noise image (or the one given)."""
         cond, rgb, code, surf = self.condition(in_rgb, in_dep, loose_rgb, loose_dep)
         e = (self.noise if noise is None else noise).to(rgb.dtype).expand_as(rgb)
         one = torch.ones(rgb.shape[0], 1, 1, 1, dtype=rgb.dtype, device=rgb.device)
-        x = e - self.colour(e, one, one, cond)
+        out = self.colour(e, one, one, cond)
+        x = e - out if self.param == "u" else out           # e - u(e, 0, 1); with param "x" that is f itself
         return rgb + self.scale * x, code, surf
 
     def config(self):
-        return {"kind": "gen", "shape": self.shape.config(), "width": list(self.colour.width), "scale": self.scale, "seed": self.seed}
+        return {"kind": "gen", "shape": self.shape.config(), "width": list(self.colour.width), "scale": self.scale, "seed": self.seed,
+                "param": self.param}
 
 
 def sample_times(n, mu, sigma, ratio, device):
@@ -119,10 +131,12 @@ def meanflow_loss(gen, batch, mu=-2.0, sigma=2.0, ratio=0.75, p=0.75, w_seen=0.5
     x = ((batch["gt_rgb"] - rgb1) / gen.scale).clamp(-X_CLAMP, X_CLAMP) * target
     n = x.shape[0]
     t, r = sample_times(n, mu, sigma, ratio, x.device)
+    if gen.param == "x":
+        t, r = t.clamp(min=T_MIN), r.clamp(min=T_MIN)
     e = torch.randn_like(x)
     z, v = (1.0 - t) * x + t * e, e - x
     one = torch.ones_like(t)
-    u, dudt = torch.func.jvp(lambda z_, t_, d_: gen.colour(z_, t_, d_, cond), (z, t, t - r), (v, one, one))
+    u, dudt = torch.func.jvp(lambda z_, t_, d_: gen.velocity(z_, t_, d_, cond), (z, t, t - r), (v, one, one))
     tgt = (v - (t - r) * dudt.float()).detach()
     err = ((u.float() - tgt) ** 2).mean(1, keepdim=True)
     L = (err * w).flatten(1).sum(1) / w.flatten(1).sum(1).clamp(min=1.0)

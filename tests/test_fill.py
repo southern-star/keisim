@@ -134,3 +134,12 @@ def test_fillgen_keeps_the_shape_and_learns_only_the_colour():
     torch.manual_seed(1)
     _, fm = fillgen.meanflow_loss(gen, batch, ratio=0.0)
     assert "mse_mf" not in fm and fm["mse"] == fm["mse_fm"]
+    # param "x": a fresh net answers P1's colour itself; the velocity is (z - f) / t
+    gx = fillgen.FillGen(shape, scale=0.2, param="x").eval()
+    with torch.no_grad():
+        assert torch.equal(gx(rgb, dep)[0], want[0].clamp(0, 1))
+        z, t = torch.randn(2, 3, CHASE.height, CHASE.width), torch.full((2, 1, 1, 1), 0.5)
+        cond = gx.condition(rgb, dep)[0]
+        assert torch.allclose(gx.velocity(z, t, t, cond), z / 0.5)
+    loss, _ = fillgen.meanflow_loss(gx.train(), batch)
+    assert torch.isfinite(loss)

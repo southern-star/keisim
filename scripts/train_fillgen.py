@@ -41,6 +41,7 @@ def main(argv=None):
     ap.add_argument("--sigma", type=float, default=2.0)
     ap.add_argument("--ratio", type=float, default=0.75, help="the share of samples with r != t")
     ap.add_argument("--p", type=float, default=0.75, help="the adaptive weight's power")
+    ap.add_argument("--param", default="u", choices=("u", "x"), help="the colour net's output: the average velocity, or f with u = (z - f) / t")
     ap.add_argument("--ema", type=float, default=0.999)
     ap.add_argument("--eval_every", type=int, default=5)
     ap.add_argument("--workers", type=int, default=6)
@@ -55,7 +56,7 @@ def main(argv=None):
     val = FillDataset(args.val) if args.val else None
     loader = DataLoader(ds, batch_size=args.bs, shuffle=True, num_workers=args.workers, drop_last=True, pin_memory=True,
                         persistent_workers=args.workers > 0, worker_init_fn=lambda i: np.random.seed(args.seed * 1000 + i))
-    gen = FillGen(load_fillnet(args.shape, device), width=args.width).to(device).to(memory_format=torch.channels_last)
+    gen = FillGen(load_fillnet(args.shape, device), width=args.width, param=args.param).to(device).to(memory_format=torch.channels_last)
     gen.scale = colour_scale(gen, loader, device)
     gen.train()
     params = list(gen.colour.parameters())
