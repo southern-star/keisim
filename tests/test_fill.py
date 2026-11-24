@@ -228,3 +228,23 @@ def test_fillgan_with_the_fill_before():
     lg, _ = fillgen.gen_loss(disc, cond, fake, comp, batch["gt_rgb"], wgt)
     lg.backward()
     assert gen.colour.enc[0][0].weight.grad[:, 11:].abs().sum() > 0
+
+
+def test_fillgan_condition_in_two_parts_is_the_same_net():
+    """The ONNX export of a net with the fill before gives the colour net its condition in two parts (WebGPU's limit
+    of buffers per shader): the same answer as with the condition in one."""
+    import torch
+    from keipilot import fillgen
+    from keipilot.fillnet import FillNet
+    torch.manual_seed(0)
+    shape = FillNet(loose=False)
+    gen = fillgen.FillGen(shape, scale=0.2, param="g", prev=True).eval()
+    for p in gen.colour.parameters():
+        torch.nn.init.normal_(p, std=0.05)
+    rgb, dep = torch.rand(1, 3, CHASE.height, CHASE.width), torch.rand(1, 1, CHASE.height, CHASE.width)
+    prgb, pdep = torch.rand_like(rgb), torch.rand_like(dep) * (torch.rand_like(dep) > 0.3)
+    with torch.no_grad():
+        one, one0 = gen(rgb, dep, prev_rgb=prgb, prev_dep=pdep)[0], gen(rgb, dep)[0]
+        gen.split = True
+        two, two0 = gen(rgb, dep, prev_rgb=prgb, prev_dep=pdep)[0], gen(rgb, dep)[0]
+    assert torch.allclose(one, two, atol=1e-5) and torch.allclose(one0, two0, atol=1e-5) and not torch.allclose(one, one0, atol=1e-3)

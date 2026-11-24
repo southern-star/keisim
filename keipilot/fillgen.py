@@ -51,11 +51,19 @@ class ColourNet(nn.Module):
 
     def forward(self, z, t, dt, cond):
         """z (B, 3, H, W); t, dt (B, 1, 1, 1): the time and t - r; cond (B, C, H, W)."""
-        hw = cond.shape[2:]
-        x = torch.cat([z, t.expand(-1, 1, *hw), dt.expand(-1, 1, *hw), cond], 1) if self.noise else cond
-        skips = []
-        for i, enc in enumerate(self.enc):
-            x = enc(x if i == 0 else F.max_pool2d(x, 2))
+        if isinstance(cond, tuple):
+            # the condition in two parts (FillGen.split, for the browser): the first convolution as the sum of two,
+            # which is the same convolution of the two parts joined
+            a, b = cond
+            conv, k = self.enc[0][0], cond[1].shape[1]
+            x = F.conv2d(a, conv.weight[:, :-k], conv.bias, padding=1) + F.conv2d(b, conv.weight[:, -k:], None, padding=1)
+            x = self.enc[0][1:](x)
+        else:
+            hw = cond.shape[2:]
+            x = self.enc[0](torch.cat([z, t.expand(-1, 1, *hw), dt.expand(-1, 1, *hw), cond], 1) if self.noise else cond)
+        skips = [x]
+        for enc in self.enc[1:]:
+            x = enc(F.max_pool2d(x, 2))
             skips.append(x)
         x = self.wide(x)
         for i in range(len(self.width) - 2, -1, -1):
@@ -78,6 +86,9 @@ class FillGen(nn.Module):
         assert param in ("u", "x", "g")
         self.loose, self.scale, self.seed, self.param, self.prev = self.shape.loose, float(scale), seed, param, prev
         self.ncond = (11 if self.loose else 6) + 5 + (5 if prev else 0)
+        # split (set for the ONNX export of a net with prev): the condition goes to the colour net in two parts. Joined
+        # in one, onnxruntime merges the joins into one Concat of 10 inputs, and WebGPU allows a shader 8 buffers
+        self.split = False
         self.colour = ColourNet(self.ncond, width, noise=param != "g")
         g = torch.Generator().manual_seed(seed)
         self.register_buffer("noise", torch.randn(1, 3, CHASE.height, CHASE.width, generator=g))
@@ -105,7 +116,10 @@ class FillGen(nn.Module):
                 else:
                     v = (prev_dep > 0).to(rgb.dtype)
                     cond += [prev_rgb * v, prev_dep, v]
-            cond = torch.cat(cond, 1)
+            if self.prev and self.split:
+                cond = (torch.cat(cond[:4], 1), cond[4] if len(cond) == 5 else torch.cat(cond[4:], 1))
+            else:
+                cond = torch.cat(cond, 1)
         return cond, rgb, code, surf
 
     def velocity(self, z, t, dt, cond):

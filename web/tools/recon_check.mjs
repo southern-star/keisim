@@ -89,7 +89,12 @@ try {
     if (/\/(recon|depth|unproject|fill)\.js|OrbitControls/.test(r.url())) loaded.push(r.url().split('/').pop());
     if (args.fonts === 'block') { if (/fonts\.(googleapis|gstatic)\.com/.test(r.url())) r.abort(); else r.continue(); }
   });
-  page.on('console', (m) => { if (m.type() === 'error') console.log(`[error] ${m.text().slice(0, 300)}`); });
+  page.on('console', (m) => {
+    if (m.type() !== 'error') return;
+    console.log(`[error] ${m.text().slice(0, 300)}`);
+    // a model's graph the GPU refuses computes nothing, without failing the page
+    if (m.text().includes('WebGPU validation error') && !failed) { console.log('FAIL: a WebGPU validation error'); failed = true; }
+  });
   page.on('pageerror', (e) => { console.log(`[pageerror] ${e.message}`); failed = true; });
   const q = new URLSearchParams({ pilot: 'mc', town, ...(off ? {} : { recon: args.recon || 'oracle' }), ...(args.ep ? { ep: args.ep } : {}), ...(args.tdir ? { tdir: args.tdir } : {}),
     ...(args.traffic ? { traffic: args.traffic } : {}), ...(args.cars ? { cars: args.cars } : {}),

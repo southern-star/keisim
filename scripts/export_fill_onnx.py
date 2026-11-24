@@ -37,6 +37,8 @@ class FillOnnx(nn.Module):
     def __init__(self, net):
         super().__init__()
         self.net = net
+        if getattr(net, "prev", False):
+            net.split = True                                # no Concat of more than 7 inputs (WebGPU: 8 buffers a shader)
         self.names = ["in_rgb", "in_dep"] + (["loose_rgb", "loose_dep"] if net.loose else []) + (["prev_rgb", "prev_dep"] if getattr(net, "prev", False) else [])
 
     def forward(self, *args):

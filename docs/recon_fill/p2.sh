@@ -21,6 +21,8 @@ STEPS=${*:-base}
 RUN=${RUN:-1}
 GEN=models/reconfill_gen.onnx
 [[ $RUN == p* ]] && GEN=models/reconfill_genp.onnx
+B=p2                                    # the browser runs' directories: p2, p2_same, ...; P2c's: p2c, p2c_same, ...
+[[ $RUN == p* ]] && B=p2c
 O=runs/reconfill_gen$RUN
 TOWNS="1000 1015-98782ab7 osm_sapporo"
 run() { (cd web && node tools/recon_check.mjs "$@" 2>&1 | grep -v '^\[warn\]\|^\[error\] Failed to load resource\|onnxruntime'); }
@@ -84,56 +86,56 @@ fi
 
 # 2. the page with the generated colours: the measurement (the shape must be P1's), the flicker, the pictures
 if [[ " $STEPS " == *" fidelity "* ]]; then
-  mkdir -p $D/p2
+  mkdir -p $D/$B
   for town in $TOWNS; do
-    run --town $town --sec 60 --every 2 --recon model --fill model --fillmodel $GEN --out ../$D/p2 --shotdir ../runs/recon_fill/p2/shots --shots all > $D/p2/$town.log
-    echo "fidelity $town: $(grep '^digest' $D/p2/$town.log) $(grep -h '^  flicker' $D/p2/$town.log | sed 's/.*colours \([0-9.]*\) apart.*/flicker \1/')"
+    run --town $town --sec 60 --every 2 --recon model --fill model --fillmodel $GEN --out ../$D/$B --shotdir ../runs/recon_fill/$B/shots --shots all > $D/$B/$town.log
+    echo "fidelity $town: $(grep '^digest' $D/$B/$town.log) $(grep -h '^  flicker' $D/$B/$town.log | sed 's/.*colours \([0-9.]*\) apart.*/flicker \1/')"
   done
 fi
 
 # 3. nothing changes without &fill (as docs/recon_fill/p1.sh)
 if [[ " $STEPS " == *" same "* ]]; then
-  mkdir -p $D/p2_same
+  mkdir -p $D/${B}_same
   for i in ${SAME_RUNS:-1 2 3 4 5 6}; do
-    run --town 1000 --sec 30 --every 2 --recon model --out ../$D/p2_same --name here_$i > $D/p2_same/here_$i.log
-    echo "here $i: $(grep '^digest' $D/p2_same/here_$i.log)"
+    run --town 1000 --sec 30 --every 2 --recon model --out ../$D/${B}_same --name here_$i > $D/${B}_same/here_$i.log
+    echo "here $i: $(grep '^digest' $D/${B}_same/here_$i.log)"
     if [ -n "$MAIN" ]; then
-      (cd "$MAIN/web" && node tools/recon_check.mjs --town 1000 --sec 30 --every 2 --recon model --out "$OLDPWD/$D/p2_same" --name main_$i 2>&1) | grep -v '^\[warn\]\|^\[error\] Failed to load resource' > $D/p2_same/main_$i.log
-      echo "main $i: $(grep '^digest' $D/p2_same/main_$i.log)"
+      (cd "$MAIN/web" && node tools/recon_check.mjs --town 1000 --sec 30 --every 2 --recon model --out "$OLDPWD/$D/${B}_same" --name main_$i 2>&1) | grep -v '^\[warn\]\|^\[error\] Failed to load resource' > $D/${B}_same/main_$i.log
+      echo "main $i: $(grep '^digest' $D/${B}_same/main_$i.log)"
     fi
   done
 fi
 
 # 4. the drive with and without the fill, as a visitor's page draws it
 if [[ " $STEPS " == *" drive "* ]]; then
-  mkdir -p $D/p2_drive
+  mkdir -p $D/${B}_drive
   for town in 1000 osm_sapporo; do
     for i in ${DRIVE_RUNS:-1 2 3 4}; do
-      run --town $town --sec 60 --every 1 --recon off --model models/keipilot_mc_depth.onnx --out ../$D/p2_drive --name ${town}_off_$i > $D/p2_drive/${town}_off_$i.log
-      run --town $town --sec 60 --every 1 --recon model --fill model --fillmodel $GEN --measure 0 --out ../$D/p2_drive --name ${town}_fillg_$i > $D/p2_drive/${town}_fillg_$i.log
-      echo "drive $town $i: $(grep -h '^digest' $D/p2_drive/${town}_{off,fillg}_$i.log | awk '{print $4}' | tr '\n' ' ')"
+      run --town $town --sec 60 --every 1 --recon off --model models/keipilot_mc_depth.onnx --out ../$D/${B}_drive --name ${town}_off_$i > $D/${B}_drive/${town}_off_$i.log
+      run --town $town --sec 60 --every 1 --recon model --fill model --fillmodel $GEN --measure 0 --out ../$D/${B}_drive --name ${town}_fillg_$i > $D/${B}_drive/${town}_fillg_$i.log
+      echo "drive $town $i: $(grep -h '^digest' $D/${B}_drive/${town}_{off,fillg}_$i.log | awk '{print $4}' | tr '\n' ' ')"
     done
   done
 fi
 
 # 5. the page's speed in real time: no fill, P1's fill, the generated colours, five times each in turns
 if [[ " $STEPS " == *" speed "* ]]; then
-  mkdir -p $D/p2_speed
+  mkdir -p $D/${B}_speed
   for i in 1 2 3 4 5; do
     for town in 1000 osm_sapporo; do
-      run --town $town --realtime 30 --sec 2 --every 2 --recon model --measure 0 > $D/p2_speed/${town}_accum_$i.log
-      run --town $town --realtime 30 --sec 2 --every 2 --recon model --fill model --measure 0 > $D/p2_speed/${town}_fillm_$i.log
-      run --town $town --realtime 30 --sec 2 --every 2 --recon model --fill model --fillmodel $GEN --measure 0 > $D/p2_speed/${town}_fillg_$i.log
+      run --town $town --realtime 30 --sec 2 --every 2 --recon model --measure 0 > $D/${B}_speed/${town}_accum_$i.log
+      run --town $town --realtime 30 --sec 2 --every 2 --recon model --fill model --measure 0 > $D/${B}_speed/${town}_fillm_$i.log
+      run --town $town --realtime 30 --sec 2 --every 2 --recon model --fill model --fillmodel $GEN --measure 0 > $D/${B}_speed/${town}_fillg_$i.log
     done
-    grep -h "^real time" $D/p2_speed/*_$i.log | cut -c1-200
+    grep -h "^real time" $D/${B}_speed/*_$i.log | cut -c1-200
   done
 fi
 
 # 6. the tables of the browser's gate
 if [[ " $STEPS " == *" tables "* ]]; then
-  $PY tools/recon_table.py $D/p2
-  $PY tools/recon_g3.py shape $D/p2 $D/p1 $D/p2_base_p1
-  $PY tools/recon_g3.py same $D/p2_same
-  $PY tools/recon_g3.py drive $D/p2_drive
-  $PY tools/recon_g3.py speed $D/p2_speed
+  $PY tools/recon_table.py $D/$B
+  $PY tools/recon_g3.py shape $D/$B $D/p1 $D/p2_base_p1
+  $PY tools/recon_g3.py same $D/${B}_same
+  $PY tools/recon_g3.py drive $D/${B}_drive
+  $PY tools/recon_g3.py speed $D/${B}_speed
 fi
