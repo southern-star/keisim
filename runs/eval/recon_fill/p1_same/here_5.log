@@ -1,0 +1,37 @@
+town 1000: ready in 11.1 s, backend webgpu, recon model
+   t     s  km/h   coverage    seen  (seen share)   error   wrong = through + phantom    0-10 m  10-30 m  30-80 m (coverage)   triangles wide / narrow
+   2    26    17    60.4 %  90.2 %  ( 41.4 %)  4.88 %  35.9 %  35.1 %   0.8 %        40.7 %   84.4 %   51.5 %              18789 / 16548
+   4    40    33    61.6 %  86.2 %  ( 55.2 %)  2.81 %  18.3 %  16.7 %   1.6 %        26.7 %   80.3 %   67.8 %              19595 / 17277
+   6    60    36    50.7 %  83.1 %  ( 51.8 %)  1.92 %  13.8 %  12.0 %   1.8 %         8.2 %   68.0 %   67.7 %              19704 / 14907
+   8    74    12    49.0 %  80.6 %  ( 32.1 %)  9.02 %  45.7 %  45.3 %   0.4 %        35.8 %   78.1 %   52.6 %              17007 / 15447
+  10    76     0    49.5 %  78.6 %  ( 52.2 %)  1.31 %  17.4 %  15.6 %   1.8 %        16.6 %   76.6 %   51.3 %              16403 / 15473
+  12    76     0    50.5 %  79.6 %  ( 52.8 %)  1.38 %  17.0 %  15.3 %   1.7 %        16.5 %   77.5 %   55.3 %              16422 / 15536
+  14    76     0    50.3 %  79.3 %  ( 52.8 %)  1.32 %  17.4 %  15.6 %   1.8 %        16.5 %   77.3 %   54.5 %              16384 / 15527
+  16    76     0    50.3 %  79.3 %  ( 52.8 %)  1.31 %  17.3 %  15.4 %   1.8 %        16.6 %   77.2 %   54.6 %              16386 / 15493
+  18    76     0    50.2 %  79.2 %  ( 52.8 %)  1.30 %  17.2 %  15.5 %   1.7 %        16.4 %   77.1 %   54.7 %              16382 / 15529
+  20    76     0    50.3 %  79.5 %  ( 52.8 %)  1.32 %  17.1 %  15.3 %   1.8 %        16.4 %   77.4 %   54.9 %              16399 / 15559
+  22    76     0    50.3 %  79.3 %  ( 52.8 %)  1.31 %  17.4 %  15.6 %   1.8 %        16.8 %   77.2 %   54.6 %              16385 / 15520
+  24    76     3    50.0 %  79.8 %  ( 52.9 %)  1.20 %  15.7 %  14.0 %   1.7 %        15.4 %   77.6 %   53.4 %              16374 / 15409
+  26    83    20    54.6 %  83.4 %  ( 60.5 %)  1.18 %   9.3 %   8.8 %   0.5 %         9.1 %   79.3 %   69.0 %              15502 / 15508
+  28    93    14    57.5 %  83.3 %  ( 67.4 %)  1.18 %   4.7 %   3.8 %   0.9 %         0.8 %   80.7 %   68.4 %              16223 / 16225
+  30   101    20    59.2 %  86.6 %  ( 66.2 %)  1.32 %   4.2 %   2.2 %   1.9 %         1.6 %   82.4 %   56.4 %              16624 / 17324
+all 15 frames: coverage  53.0 %, seen  82.0 % (seen share  52.9 %), error (median of the frames) 1.32 %, wrong  18.0 % = through  16.6 % + phantom   1.4 %; drawn right:  43.7 % of all,  78.8 % of the seen
+the same frames with the town's depth (oracle): 15 frames: coverage  57.4 %, seen  90.9 % (seen share  52.9 %), error (median of the frames) 0.08 %, wrong  15.3 % = through  15.1 % + phantom   0.2 %; drawn right:  48.6 % of all,  89.4 % of the seen
+the same frames with the keyframes (accumulation): 15 frames: coverage  85.6 %, seen  83.6 % (seen share  52.9 %), error (median of the frames) 0.75 %, wrong   9.3 % = through   6.9 % + phantom   2.5 %; drawn right:  78.2 % of all,  79.6 % of the seen
+  the keyframes add 227547 pixels where the current frame draws nothing: right  95.4 %, through   2.6 %, phantom   2.0 %; clearly in front of the current frame's surface at 44284 pixels ( 12.0 % of its pixels; right there  72.2 %)
+  keyframes drawn as all      15 frames: coverage  87.3 %, seen  84.8 % (seen share  52.9 %), error (median of the frames) 0.93 %, wrong   9.7 % = through   6.6 % + phantom   3.1 %; drawn right:  79.6 % of all,  80.5 % of the seen
+  keyframes drawn as noveg    15 frames: coverage  83.4 %, seen  84.5 % (seen share  52.9 %), error (median of the frames) 0.85 %, wrong  12.7 % = through  10.5 % + phantom   2.2 %; drawn right:  73.4 % of all,  80.7 % of the seen
+  keyframes drawn as nobuild  15 frames: coverage  85.6 %, seen  83.6 % (seen share  52.9 %), error (median of the frames) 0.90 %, wrong   9.8 % = through   6.8 % + phantom   3.0 %; drawn right:  78.0 % of all,  79.4 % of the seen
+  keyframes drawn as flat     15 frames: coverage  81.6 %, seen  83.3 % (seen share  52.9 %), error (median of the frames) 0.81 %, wrong  12.9 % = through  10.8 % + phantom   2.1 %; drawn right:  71.7 % of all,  79.6 % of the seen
+  keyframes drawn as ground   15 frames: coverage  81.0 %, seen  82.7 % (seen share  52.9 %), error (median of the frames) 0.78 %, wrong  12.2 % = through  11.3 % + phantom   1.0 %; drawn right:  71.3 % of all,  79.6 % of the seen
+  keyframes drawn as all10    15 frames: coverage  85.6 %, seen  83.6 % (seen share  52.9 %), error (median of the frames) 0.75 %, wrong   9.3 % = through   6.9 % + phantom   2.5 %; drawn right:  78.2 % of all,  79.6 % of the seen
+  keyframes drawn as flat10   15 frames: coverage  81.1 %, seen  82.9 % (seen share  52.9 %), error (median of the frames) 0.68 %, wrong  12.6 % = through  11.0 % + phantom   1.6 %; drawn right:  71.4 % of all,  79.4 % of the seen
+  keyframes made 36, kept vertices 347632, of them inside a car's or rider's box 0 (  0.0 %), keyframes with 10 or more of those: 0
+  rule design     coverage  54.1 %, seen  84.0 %, wrong  18.1 % = through  16.4 % + phantom   1.7 %; drawn right  44.6 % /  80.5 %
+  rule class      coverage  51.8 %, seen  80.0 %, wrong  18.2 % = through  16.7 % + phantom   1.5 %; drawn right  42.6 % /  76.9 %
+  rule both       coverage  51.3 %, seen  79.2 %, wrong  18.3 % = through  16.8 % + phantom   1.5 %; drawn right  42.2 % /  76.1 %
+  rule height     coverage  53.0 %, seen  82.0 %, wrong  18.0 % = through  16.6 % + phantom   1.4 %; drawn right  43.7 % /  78.8 %
+  rule heightflat coverage  54.9 %, seen  85.3 %, wrong  18.0 % = through  16.3 % + phantom   1.7 %; drawn right  45.3 % /  81.8 %
+  rule height110  coverage  49.2 %, seen  76.8 %, wrong  17.3 % = through  16.1 % + phantom   1.2 %; drawn right  40.9 % /  74.1 %
+  rule height125  coverage  57.4 %, seen  88.2 %, wrong  18.4 % = through  16.4 % + phantom   2.0 %; drawn right  47.2 % /  84.5 %
+digest 451547e425f91b0f  drive 6d348efab8673b93

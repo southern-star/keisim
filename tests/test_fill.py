@@ -75,3 +75,28 @@ def test_fill_dump(tmp_path):
     assert not r["bad"] and not any(r["mismatch"].values()), r
     assert all(b["n"] > 100 and abs(b["median"]) < 0.005 for b in r["road_z"][:2]), r["road_z"]
     assert 0.02 < r["holes"] / r["omega"] < 0.6                            # the view has holes, and not only holes
+
+
+def test_fillnet_first_guess():
+    """Before training the net answers its first guess: the view's own colour and depth where it has a surface, the
+    flat ground's depth where it has none; with and without the loose rule's picture."""
+    import torch
+    from keipilot.fillnet import CODE_MAX_R, FillNet, fill_loss
+    torch.manual_seed(0)
+    rgb, dep = torch.rand(2, 3, CHASE.height, CHASE.width), torch.rand(2, 1, CHASE.height, CHASE.width)
+    dep[:, :, :, :100] = 0.0                                 # a hole: the left of the picture
+    for loose in (True, False):
+        net = FillNet(loose=loose).eval()
+        with torch.no_grad():
+            out_rgb, code, surf = net(rgb, dep, rgb, dep)
+        ground = net.ground.expand_as(dep)
+        assert torch.equal(out_rgb, rgb * (dep > 0))
+        assert torch.equal(code[dep > 0], dep[dep > 0])
+        hole = (dep == 0) & (ground > 0)
+        assert torch.equal(code[hole], ground[hole]) and hole.any()
+        assert torch.all(code[(dep == 0) & (ground == 0)] == CODE_MAX_R)
+        assert torch.all(surf == 2.0)
+        batch = {"in_rgb": rgb, "in_dep": dep, "loose_rgb": rgb, "loose_dep": dep, "gt_rgb": rgb, "gt_dep": dep.clamp(min=0.1)}
+        loss, parts = fill_loss(net.train(), batch)
+        loss.backward()
+        assert torch.isfinite(loss) and set(parts) == {"surface", "depth", "rgb", "grad"}

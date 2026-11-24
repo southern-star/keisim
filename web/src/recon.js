@@ -19,8 +19,8 @@
 // buildings, the ground and poles only, the ground only) choose something else.
 // &layout=split: the main view moves to the same chase camera and the two stand side by side, the town on the left
 // and what the model makes of it on the right (src/pilot.js places the camera and shows the car's body).
-// &fill=oracle (src/fill.js, loaded only then; docs/recon_fill.md): what the view leaves dark is filled in from a
-// third image, taken from the chase camera.
+// &fill=oracle|model (src/fill.js, loaded only then; docs/recon_fill.md): what the view leaves dark is filled in from a
+// third image from the chase camera: the town's own, or a small model's.
 // It has its own canvas and its own WebGLRenderer: the main renderer's GL state, which the model frames are read back
 // from, is not touched. Nothing here is loaded without ?recon.
 import * as THREE from 'three';
@@ -67,7 +67,7 @@ export const GROUND_H = [-0.3, 0.35];      // heights [m] a ground vertex may ha
 /** The angle between neighbouring pixels at the image centre [rad]. */
 const pixelAngle = (cam) => (cam.projection === 'cylindrical' ? cam.fov * DEG / cam.width : 2 * Math.tan(cam.fov * DEG / 2) / cam.width);
 
-export function createRecon({ ctx, scene, renderer, rig, views, T, mode, split = false, renderMain, params, createFill = null }) {
+export function createRecon({ ctx, scene, renderer, rig, views, T, mode, split = false, renderMain, params, createFill = null, fillSession = null }) {
   // The triangle rules. ground: what counts as ground for the triangles that are kept whatever their depths ('class':
   // the model's class, 'height': within GROUND_H of the flat ground, 'both'); ratio: the wide camera's edge ratio;
   // scaled: a camera with finer pixels gets a smaller ratio (the same steepest surface that is still drawn).
@@ -110,10 +110,12 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, split =
   /** With the model frame, in its scene state (src/pilot.js capture): each camera's depth image (uint16 codes,
    *  320x160, top row first) for the car at (x, y, yaw); armed (measure): also the town from the chase camera.
    *  recon=model draws nothing here unless armed. boxes: the cars and riders of this moment ([[x, y, yaw, L, W, H],
-   *  ...]; they come back with the shot, for the keyframes' ghost count). fillTurn (src/fill.js): the town from the
-   *  chase camera is drawn for the fill too (recon=model: only that, unless armed). */
-  function capture(x, y, yaw, boxes = null, fillTurn = false) {
-    if (mode === 'model' && !armed && !fillTurn) return { dep: null, town: null, ms: 0, boxes, measure: false, fillTurn };
+   *  ...]; they come back with the shot, for the keyframes' ghost count). turn (src/fill.js turn()): a fill is made
+   *  from this frame; turn.truth: from the town itself, which is then drawn from the chase camera too (recon=model:
+   *  only that, unless armed). */
+  function capture(x, y, yaw, boxes = null, turn = null) {
+    const fillTurn = !!turn && turn.make, truth = !!turn && turn.truth;
+    if (mode === 'model' && !armed && !truth) return { dep: null, town: null, ms: 0, boxes, measure: false, fillTurn, truth };
     const t0 = performance.now(), measure = armed;
     depthPass.begin();
     const dep = mode === 'model' && !armed ? null : caps.map((c) => {
@@ -126,14 +128,14 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, split =
       return c.stitch ? c.stitch(c.atlas, new Uint16Array(c.cam.width * c.cam.height)) : c.atlas.slice();
     });
     let town = null;
-    if (armed || fillTurn) {
+    if (armed || truth) {
       aim(shotCam, CHASE, x, y, yaw, CHASE.width, CHASE.height);
       depthPass.draw(shotCam, gRT, CHASE.width, CHASE.height, gRGBA, gFace);
       town = flip(gFace, CHASE.width, CHASE.height, new Uint16Array(gFace.length));
       armed = false;
     }
     depthPass.end();
-    return { dep, town, ms: performance.now() - t0, boxes, measure, fillTurn };
+    return { dep, town, ms: performance.now() - t0, boxes, measure, fillTurn, truth };
   }
 
   // ---------------------------------------------------------------- the view
@@ -405,7 +407,7 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, split =
   /** A model frame: the pose it was drawn at ({x, y, yaw}), the shot of capture() (the town's depth codes; recon=model:
    *  only when a measurement was armed), each camera's input image (RGB, 3 bytes per pixel, top row first), the
    *  model's segmentation of it (K x 40 x 80 class ids) and, recon=model, its depth (K x 80 x 160 metres, 0: no
-   *  surface). */
+   *  surface). Returns nothing, or (a measurement with ?fill=model) a promise: the measurement waits for the fill. */
   function frame(pose, shot, rgbs, seg, depth = null) {
     const t0 = performance.now();
     if (mode === 'model' && !depth) return;
@@ -425,10 +427,16 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, split =
     place(pose, own(last));
     stats = triangles(rule);
     frames++;
-    if (fill && shot.fillTurn) fill.make(pose, shot);         // from the view as it is before this frame's keyframe
-    if (shot.measure) measured = measure(pose, shot);         // against the keyframes of before this frame
-    if (accumOn) keyframe(pose, shot.boxes);
-    if (!shot.measure) buildMs = performance.now() - t0;
+    // the fill from the view as it is before this frame's keyframe; its own model answers later
+    const filling = fill && shot.fillTurn ? fill.make(pose, shot) : null;
+    const rest = () => {
+      if (shot.measure) measured = measure(pose, shot);       // against the keyframes of before this frame
+      if (accumOn) keyframe(pose, shot.boxes);
+      if (!shot.measure) buildMs = performance.now() - t0;
+    };
+    if (filling && shot.measure) return filling.then(rest);
+    rest();
+    return undefined;
   }
 
   function reset() {
@@ -574,7 +582,7 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, split =
   let lastMap = null, oracleMap = null, currentMap = null;
 
   // ---------------------------------------------------------------- the fill (?fill; src/fill.js)
-  const fill = createFill ? createFill({ world, origin, table, rule, params, label, rr, rscene, measCam, carFrame, BG,
+  const fill = createFill ? createFill({ world, origin, table, rule, params, label, rr, rscene, measCam, carFrame, session: fillSession,
     meshTriangles, triangles, reconDepth, keyframes,
     /** Show or hide what the cameras saw: the current frame's meshes and the keyframes. */
     observed: (current, kf = current) => { for (const m of meshes) m.mesh.visible = current; kfGroup.visible = kf && accumOn; },
