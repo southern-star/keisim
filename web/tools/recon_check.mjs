@@ -23,7 +23,8 @@
 //                              same frame with this frame's fill and with the one before it, the holes only and all of the
 //                              fill alone; the pictures: _fill_holes.png, _fill_all.png, _fill_holesTint.png, _fill_image.png
 //                              (the fill's own image) and the maps _fill_<name>Map.png; --fill model: the fill of
-//                              models/reconfill.onnx, and under fill.oracle the town's own fill of the same frame)
+//                              models/reconfill_gen.onnx (the page's default), and under fill.oracle the town's own fill
+//                              of the same frame)
 //                              [--fillmodel models/x.onnx] [--fillworker own]   (&fillmodel=, &fillworker=: another fill
 //                              model; the fill model in a worker of its own, not in the driving model's)
 //                              [--measure 0]   (no measurements: the page draws what a visitor's draws; the digests only)

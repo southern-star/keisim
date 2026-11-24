@@ -20,6 +20,7 @@ PYONNX=${PYONNX:-uv run --offline --with onnx --with onnxruntime python}
 STEPS=${*:-base}
 RUN=${RUN:-1}
 GEN=models/reconfill_gen.onnx
+P1=models/reconfill.onnx               # the regression alone (the page's default is $GEN since docs/recon_fill.md 6.19)
 [[ $RUN == p* ]] && GEN=models/reconfill_genp.onnx
 B=p2                                    # the browser runs' directories: p2, p2_same, ...; P2c's: p2c, p2c_same, ...
 [[ $RUN == p* ]] && B=p2c
@@ -31,7 +32,7 @@ run() { (cd web && node tools/recon_check.mjs "$@" 2>&1 | grep -v '^\[warn\]\|^\
 if [[ " $STEPS " == *" base "* ]]; then
   mkdir -p $D/p2_base_p1 $D/p2_base_town
   for town in $TOWNS; do
-    run --town $town --sec 60 --every 2 --recon model --fill model --out ../$D/p2_base_p1 > $D/p2_base_p1/$town.log
+    run --town $town --sec 60 --every 2 --recon model --fill model --fillmodel $P1 --out ../$D/p2_base_p1 > $D/p2_base_p1/$town.log
     run --town $town --sec 60 --every 2 --recon model --fill oracle --out ../$D/p2_base_town > $D/p2_base_town/$town.log
     echo "base $town: $(grep -h '^  flicker' $D/p2_base_p1/$town.log $D/p2_base_town/$town.log | sed 's/.*colours \([0-9.]*\) apart.*/\1/' | tr '\n' ' ')"
   done
@@ -41,7 +42,7 @@ fi
 if [[ " $STEPS " == *" basec "* ]]; then
   mkdir -p $D/p2c_base_p1 $D/p2c_base_g2
   for town in $TOWNS; do
-    run --town $town --sec 60 --every 2 --recon model --fill model --out ../$D/p2c_base_p1 > $D/p2c_base_p1/$town.log
+    run --town $town --sec 60 --every 2 --recon model --fill model --fillmodel $P1 --out ../$D/p2c_base_p1 > $D/p2c_base_p1/$town.log
     run --town $town --sec 60 --every 2 --recon model --fill model --fillmodel models/reconfill_gen.onnx --out ../$D/p2c_base_g2 > $D/p2c_base_g2/$town.log
     echo "basec $town: $(grep -h '^  colour\|^digest' $D/p2c_base_p1/$town.log $D/p2c_base_g2/$town.log | sed 's/.*surface: //' | tr '\n' ' ')"
   done
@@ -124,7 +125,7 @@ if [[ " $STEPS " == *" speed "* ]]; then
   for i in 1 2 3 4 5; do
     for town in 1000 osm_sapporo; do
       run --town $town --realtime 30 --sec 2 --every 2 --recon model --measure 0 > $D/${B}_speed/${town}_accum_$i.log
-      run --town $town --realtime 30 --sec 2 --every 2 --recon model --fill model --measure 0 > $D/${B}_speed/${town}_fillm_$i.log
+      run --town $town --realtime 30 --sec 2 --every 2 --recon model --fill model --fillmodel $P1 --measure 0 > $D/${B}_speed/${town}_fillm_$i.log
       run --town $town --realtime 30 --sec 2 --every 2 --recon model --fill model --fillmodel $GEN --measure 0 > $D/${B}_speed/${town}_fillg_$i.log
     done
     grep -h "^real time" $D/${B}_speed/*_$i.log | cut -c1-200
