@@ -2,7 +2,9 @@
 # ReconFill P2 (docs/recon_fill.md 6): the fill's colours by one-step generation. Needs P1's model
 # (runs/reconfill_b/last.pt, web/models/reconfill.onnx: docs/recon_fill/p1.sh), its data, a GPU, headless Chrome.
 #   bash docs/recon_fill/p2.sh base              the flicker of P1's fill and of the town's own fill (before training)
-#   RUN=1 bash docs/recon_fill/p2.sh train       a colour net (RUN=1, 2, 3: the settings of 6.2), its offline numbers
+#   RUN=1 bash docs/recon_fill/p2.sh train       a colour net (RUN=1, 2, 3: the settings of 6.2; 2x: run 1's with the
+#                                                net's output as the clean picture, 6.8), its offline numbers
+#   RUN=2x EPOCHS=20 bash docs/recon_fill/p2.sh train
 #   RUN=1 bash docs/recon_fill/p2.sh export fidelity same drive speed     that model in the browser (gate G-P2b)
 #   MAIN=/path/to/a/checkout/of/main ... same    (its web/ needs node_modules, models and .towns)
 set -o pipefail
@@ -31,6 +33,7 @@ if [[ " $STEPS " == *" train "* ]]; then
   case $RUN in
     1) SET="--mu -2.0 --sigma 2.0 --ratio 0.75 --p 0.75" ;;
     2) SET="--mu -0.4 --sigma 1.0 --ratio 0.25 --p 1.0" ;;
+    2x) SET="--mu -2.0 --sigma 2.0 --ratio 0.75 --p 0.75 --param x" ;;
     3) SET="${SET3:?the better of runs 1 and 2: SET3='--mu .. --sigma .. --ratio .. --p ..'} --width 32 64 128 256" ;;
   esac
   O=runs/reconfill_gen$RUN
@@ -38,6 +41,7 @@ if [[ " $STEPS " == *" train "* ]]; then
   cp $O/log.json $D/p2_train_$RUN.json
   $PY tools/fill_eval.py runs/reconfill_b/last.pt $O/last.pt --names "P1（回帰）" "P2（色を生成、$RUN 本目）" --data data/recon_fill/eval \
     --out $D/p2_offline_$RUN.json --sheet docs/recon_fill/p2_offline_$RUN.jpg --frames ${SHEET_FRAMES:-60 300 520 700}
+  $PY tools/fill_gen_diag.py $O/last.pt --out $D/p2_diag_$RUN.json --sheet docs/recon_fill/p2_diag_$RUN.jpg
 fi
 
 if [[ " $STEPS " == *" export "* ]]; then
