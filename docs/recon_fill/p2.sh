@@ -8,6 +8,7 @@
 #   RUN=g1 bash docs/recon_fill/p2.sh train      the other way (6.10): L1 and a patch discriminator (g1, g2, g3)
 #   bash docs/recon_fill/p2.sh lines             the "lines" measure of the models so far (before the gate got it)
 #   RUN=1 bash docs/recon_fill/p2.sh export fidelity same drive speed     that model in the browser (gate G-P2b)
+#   bash docs/recon_fill/p2.sh tables            the tables of the browser's runs
 #   MAIN=/path/to/a/checkout/of/main ... same    (its web/ needs node_modules, models and .towns)
 set -o pipefail
 cd "$(dirname "$0")/../.." || exit 1
@@ -109,4 +110,13 @@ if [[ " $STEPS " == *" speed "* ]]; then
     done
     grep -h "^real time" $D/p2_speed/*_$i.log | cut -c1-200
   done
+fi
+
+# 6. the tables of the browser's gate
+if [[ " $STEPS " == *" tables "* ]]; then
+  $PY tools/recon_table.py $D/p2
+  $PY tools/recon_g3.py shape $D/p2 $D/p1 $D/p2_base_p1
+  $PY tools/recon_g3.py same $D/p2_same
+  $PY tools/recon_g3.py drive $D/p2_drive
+  $PY tools/recon_g3.py speed $D/p2_speed
 fi
