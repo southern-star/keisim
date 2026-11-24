@@ -19,6 +19,8 @@
 // buildings, the ground and poles only, the ground only) choose something else.
 // &layout=split: the main view moves to the same chase camera and the two stand side by side, the town on the left
 // and what the model makes of it on the right (src/pilot.js places the camera and shows the car's body).
+// &fill=oracle (src/fill.js, loaded only then; docs/recon_fill.md): what the view leaves dark is filled in from a
+// third image, taken from the chase camera.
 // It has its own canvas and its own WebGLRenderer: the main renderer's GL state, which the model frames are read back
 // from, is not touched. Nothing here is loaded without ?recon.
 import * as THREE from 'three';
@@ -56,16 +58,16 @@ export const ACCUM_KEEP = { all: [1, 2, 3, 4, 5, 6, 7], noveg: [1, 2, 3, 4, 5, 7
 export const ACCUM_VARIANTS = { all: { keep: 'all', far: 14 }, noveg: { keep: 'noveg', far: 14 }, nobuild: { keep: 'nobuild', far: 14 },
   flat: { keep: 'flat', far: 14 }, ground: { keep: 'ground', far: 14 }, all10: { keep: 'all', far: 10 }, flat10: { keep: 'flat', far: 10 } };
 const NARROW_MARGIN = 4;            // wide triangles inside the narrow camera's image, this many pixels from its edge, go
-const STEP = 2;                     // the depth image's resolution: every other pixel, as the shards keep it
+export const STEP = 2;              // the depth image's resolution: every other pixel, as the shards keep it
 const EGO = { L: 4.5, W: 1.85, H: 1.5 };
 // measure(): what a pixel of the chase camera's image is, and its colour in snapshot().map
-const MAP = { none: 0, good: 1, through: 2, phantom: 3, missed: 4, unseen: 5 };
+export const MAP = { none: 0, good: 1, through: 2, phantom: 3, missed: 4, unseen: 5 };
 const MAP_RGB = [[18, 19, 28], [90, 200, 120], [255, 170, 40], [255, 50, 60], [60, 110, 255], [70, 72, 86]];
-const GROUND_H = [-0.3, 0.35];      // heights [m] a ground vertex may have (KeiSim is flat; the sidewalk is 0.15 m up)
+export const GROUND_H = [-0.3, 0.35];      // heights [m] a ground vertex may have (KeiSim is flat; the sidewalk is 0.15 m up)
 /** The angle between neighbouring pixels at the image centre [rad]. */
 const pixelAngle = (cam) => (cam.projection === 'cylindrical' ? cam.fov * DEG / cam.width : 2 * Math.tan(cam.fov * DEG / 2) / cam.width);
 
-export function createRecon({ ctx, scene, renderer, rig, views, T, mode, split = false, renderMain, params }) {
+export function createRecon({ ctx, scene, renderer, rig, views, T, mode, split = false, renderMain, params, createFill = null }) {
   // The triangle rules. ground: what counts as ground for the triangles that are kept whatever their depths ('class':
   // the model's class, 'height': within GROUND_H of the flat ground, 'both'); ratio: the wide camera's edge ratio;
   // scaled: a camera with finer pixels gets a smaller ratio (the same steepest surface that is still drawn).
@@ -108,12 +110,13 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, split =
   /** With the model frame, in its scene state (src/pilot.js capture): each camera's depth image (uint16 codes,
    *  320x160, top row first) for the car at (x, y, yaw); armed (measure): also the town from the chase camera.
    *  recon=model draws nothing here unless armed. boxes: the cars and riders of this moment ([[x, y, yaw, L, W, H],
-   *  ...]; they come back with the shot, for the keyframes' ghost count). */
-  function capture(x, y, yaw, boxes = null) {
-    if (mode === 'model' && !armed) return { dep: null, town: null, ms: 0, boxes };
-    const t0 = performance.now();
+   *  ...]; they come back with the shot, for the keyframes' ghost count). fillTurn (src/fill.js): the town from the
+   *  chase camera is drawn for the fill too (recon=model: only that, unless armed). */
+  function capture(x, y, yaw, boxes = null, fillTurn = false) {
+    if (mode === 'model' && !armed && !fillTurn) return { dep: null, town: null, ms: 0, boxes, measure: false, fillTurn };
+    const t0 = performance.now(), measure = armed;
     depthPass.begin();
-    const dep = caps.map((c) => {
+    const dep = mode === 'model' && !armed ? null : caps.map((c) => {
       const aw = c.shots.length * c.w;
       c.shots.forEach((s, j) => {
         aim(shotCam, s, x, y, yaw, c.w, c.h);
@@ -123,14 +126,14 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, split =
       return c.stitch ? c.stitch(c.atlas, new Uint16Array(c.cam.width * c.cam.height)) : c.atlas.slice();
     });
     let town = null;
-    if (armed) {
+    if (armed || fillTurn) {
       aim(shotCam, CHASE, x, y, yaw, CHASE.width, CHASE.height);
       depthPass.draw(shotCam, gRT, CHASE.width, CHASE.height, gRGBA, gFace);
       town = flip(gFace, CHASE.width, CHASE.height, new Uint16Array(gFace.length));
       armed = false;
     }
     depthPass.end();
-    return { dep, town, ms: performance.now() - t0, boxes };
+    return { dep, town, ms: performance.now() - t0, boxes, measure, fillTurn };
   }
 
   // ---------------------------------------------------------------- the view
@@ -344,37 +347,37 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, split =
   const keyframes = () => ring.filter((sl) => sl.seq > 0).length;
 
   let frames = 0, last = null, stats = null, buildMs = 0;
-  /** The triangles of every mesh by a rule; returns the counts per camera. */
-  function triangles(ru) {
-    return meshes.map((m) => {
-      const { cam, w, h, n } = m, idx = m.index.array;
-      const st = { camera: cam.name, vertices: n, valid: 0, triangles: 0, noSurface: 0, edge: 0, overlap: 0 };
-      for (let v = 0; v < n; v++) st.valid += m.ok[v];
-      const ratio = ru.scaled ? 1 + (ru.ratio - 1) * pixelAngle(cam) / wideAngle : ru.ratio;
-      const gc = ru.ground !== 'height', gh = ru.ground !== 'class';
-      const ground = (v) => (!gc || m.gClass[v]) && (!gh || m.gHeight[v]);
-      let c = 0;
-      const tri = (a, b, d) => {
-        if (!(m.ok[a] && m.ok[b] && m.ok[d])) { st.noSurface++; return; }
-        if (m.inOther[a] && m.inOther[b] && m.inOther[d]) { st.overlap++; return; }
-        if (!(ground(a) && ground(b) && ground(d))) {
-          const lo = Math.min(m.r[a], m.r[b], m.r[d]), hi = Math.max(m.r[a], m.r[b], m.r[d]);
-          if (hi > ratio * lo) { st.edge++; return; }
-        }
-        idx[c++] = a; idx[c++] = b; idx[c++] = d;
-      };
-      for (let i = 0; i + 1 < h; i++) {
-        for (let j = 0; j + 1 < w; j++) {
-          const a = i * w + j;
-          tri(a, a + w, a + 1); tri(a + 1, a + w, a + w + 1);
-        }
+  /** The triangles of a mesh by a rule; returns its counts. */
+  function meshTriangles(m, ru) {
+    const { cam, w, h, n } = m, idx = m.index.array;
+    const st = { camera: cam.name, vertices: n, valid: 0, triangles: 0, noSurface: 0, edge: 0, overlap: 0 };
+    for (let v = 0; v < n; v++) st.valid += m.ok[v];
+    const ratio = ru.scaled ? 1 + (ru.ratio - 1) * pixelAngle(cam) / wideAngle : ru.ratio;
+    const gc = ru.ground !== 'height', gh = ru.ground !== 'class';
+    const ground = (v) => (!gc || m.gClass[v]) && (!gh || m.gHeight[v]);
+    let c = 0;
+    const tri = (a, b, d) => {
+      if (!(m.ok[a] && m.ok[b] && m.ok[d])) { st.noSurface++; return; }
+      if (m.inOther[a] && m.inOther[b] && m.inOther[d]) { st.overlap++; return; }
+      if (!(ground(a) && ground(b) && ground(d))) {
+        const lo = Math.min(m.r[a], m.r[b], m.r[d]), hi = Math.max(m.r[a], m.r[b], m.r[d]);
+        if (hi > ratio * lo) { st.edge++; return; }
       }
-      st.triangles = c / 3;
-      m.geo.setDrawRange(0, c);
-      m.index.needsUpdate = true;
-      return st;
-    });
+      idx[c++] = a; idx[c++] = b; idx[c++] = d;
+    };
+    for (let i = 0; i + 1 < h; i++) {
+      for (let j = 0; j + 1 < w; j++) {
+        const a = i * w + j;
+        tri(a, a + w, a + 1); tri(a + 1, a + w, a + w + 1);
+      }
+    }
+    st.triangles = c / 3;
+    m.geo.setDrawRange(0, c);
+    m.index.needsUpdate = true;
+    return st;
   }
+  /** The triangles of every camera's mesh by a rule; returns the counts per camera. */
+  const triangles = (ru) => meshes.map((m) => meshTriangles(m, ru));
 
   /** The vertices of every mesh from a frame's depth: its distances [m] (src.depth: the model's K x h x w metres;
    *  src.dep: each camera's depth codes at 320x160), placed from the frame's pose. */
@@ -422,9 +425,10 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, split =
     place(pose, own(last));
     stats = triangles(rule);
     frames++;
-    if (shot.town) measured = measure(pose, shot);            // against the keyframes of before this frame
+    if (fill && shot.fillTurn) fill.make(pose, shot);         // from the view as it is before this frame's keyframe
+    if (shot.measure) measured = measure(pose, shot);         // against the keyframes of before this frame
     if (accumOn) keyframe(pose, shot.boxes);
-    if (!shot.town) buildMs = performance.now() - t0;
+    if (!shot.measure) buildMs = performance.now() - t0;
   }
 
   function reset() {
@@ -432,6 +436,7 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, split =
     dropKeyframes();
     bandMesh.visible = false;
     last = null; stats = null;
+    if (fill) fill.reset();
   }
 
   // ---------------------------------------------------------------- fidelity (docs/recon_view.md 6.4)
@@ -526,6 +531,7 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, split =
       RA = reconDepth(pose);
       return { ...score(RA, map), triangles: st.map((c) => c.triangles) };
     };
+    if (fill) fill.layers('none');                            // the view without the fill
     kfGroup.visible = false;                                  // first the current frame alone
     const all = () => Object.fromEntries(Object.entries(VARIANTS).map(([name, ru]) => [name, one(ru)]));
     let oracle = null;
@@ -541,11 +547,11 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, split =
     const m = one(rule, currentMap);                           // last: the meshes are the view's again
     lastMap = currentMap;
     // then with the keyframes: what they add where the current frame draws nothing, and how much of that is right
-    let accum = null;
+    let accum = null, RP = RA;
     kfGroup.visible = accumOn;
     if (accumOn) {
       lastMap = new Uint8Array(n);
-      const RP = reconDepth(pose);
+      RP = reconDepth(pose);
       accum = { ...score(RP, lastMap), keyframes: keyframes(), added: 0, addedGood: 0, addedThrough: 0, addedPhantom: 0, before: 0, beforeGood: 0, ...acc };
       for (let i = 0; i < n; i++) {
         if (RA[i] === 0 && RP[i] > 0) {
@@ -561,9 +567,19 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, split =
       for (const [name, v] of Object.entries(ACCUM_VARIANTS)) { show(v); accum.variants[name] = score(reconDepth(pose)); }
       show(kfView);
     }
-    return { ...m, pose: { ...pose }, stats, rule: { ...rule }, variants, ...(oracle ? { oracle } : {}), ...(accum ? { accum } : {}) };
+    // then with the fill: the same frame with what the fill adds to it (src/fill.js)
+    const filled = fill ? fill.measure(pose, RP, score) : null;
+    return { ...m, pose: { ...pose }, stats, rule: { ...rule }, variants, ...(oracle ? { oracle } : {}), ...(accum ? { accum } : {}), ...(filled ? { fill: filled } : {}) };
   }
   let lastMap = null, oracleMap = null, currentMap = null;
+
+  // ---------------------------------------------------------------- the fill (?fill; src/fill.js)
+  const fill = createFill ? createFill({ world, origin, table, rule, params, label, rr, rscene, measCam, carFrame, BG,
+    meshTriangles, triangles, reconDepth, keyframes,
+    /** Show or hide what the cameras saw: the current frame's meshes and the keyframes. */
+    observed: (current, kf = current) => { for (const m of meshes) m.mesh.visible = current; kfGroup.visible = kf && accumOn; },
+    /** Draw fn() without the car's box and the plan's band. */
+    bare: (fn) => { const eg = ego.visible, bd = bandMesh.visible; ego.visible = false; bandMesh.visible = false; try { return fn(); } finally { ego.visible = eg; bandMesh.visible = bd; } } }) : null;
 
   // ---------------------------------------------------------------- every frame of the main view
   const size = new THREE.Vector2();
@@ -604,6 +620,7 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, split =
     carFrame(car.x, car.y, car.yaw);
     rr.setPixelRatio(1); rr.setSize(w, h, false);
     const out = { recon: null, town: null, map: null, oracle: null, oracleMap: null, current: null, currentMap: null };
+    if (fill) fill.layers('none');                            // these pictures are the view without the fill
     kfGroup.visible = false;
     if (accumOn) { rr.render(rscene, measCam); out.current = canvas.toDataURL('image/png'); }   // the current frame alone
     if (mode === 'model' && last && last.dep) {               // the same frame with the town's own depth
@@ -631,6 +648,7 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, split =
     if (lastMap) out.map = mapPng(lastMap);
     if (accumOn && currentMap) out.currentMap = mapPng(currentMap);
     if (out.oracle && oracleMap) out.oracleMap = mapPng(oracleMap);
+    if (fill) out.fill = fill.snapshot(() => { rr.render(rscene, measCam); return canvas.toDataURL('image/png'); }, mapPng);
     size.set(0, 0);                                           // layout() sets the view's own size again
     if (renderMain) {
       aim(shotCam, CHASE, car.x, car.y, car.yaw, CHASE.width, CHASE.height);
@@ -643,10 +661,11 @@ export function createRecon({ ctx, scene, renderer, rig, views, T, mode, split =
   /** split: the main view's camera at the chase camera of the car (src/pilot.js, after the model frame is drawn). */
   const mainCamera = (cam, car) => aim(cam, CHASE, car.x, car.y, car.yaw, CHASE.width, CHASE.height);
 
-  return { mode, split, capture, frame, band, render, reset, snapshot, rule, mainCamera,
+  return { mode, split, capture, frame, band, render, reset, snapshot, rule, mainCamera, fill,
+    fillTurn: () => !!fill && fill.turn(armed),                // src/pilot.js: this model frame gets the chase camera's image too
     arm: () => { armed = true; measured = null; },            // measure at the next model frame
     measured: () => measured,
     viewCamera: () => viewCam.position.toArray(),              // in the car's frame (tests)
     state: () => ({ mode, split, frames, buildMs, stats, pose: last ? last.pose : null,
-      accum: accumOn ? { keyframes: keyframes(), ...kfView, ...acc } : null }) };
+      accum: accumOn ? { keyframes: keyframes(), ...kfView, ...acc } : null, ...(fill ? { fill: fill.state() } : {}) }) };
 }

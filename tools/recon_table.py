@@ -3,6 +3,7 @@
     python tools/recon_table.py runs/eval/recon/g1 [--repeat runs/eval/recon/g1_repeat]
     python tools/recon_table.py runs/eval/recon/g3          (?recon=model: the model's depth next to the oracle's)
     python tools/recon_table.py runs/eval/recon/g4          (with keyframes: also the current frame alone against with them)
+    python tools/recon_table.py runs/eval/recon_fill/p0     (--fill: also the same frames with the fill, docs/recon_fill.md)
 
 Prints Markdown: the fidelity per town (the view's triangle rule), by distance, by rule, the triangles, and with
 --repeat how far a second run of the same arguments is from the first."""
@@ -137,6 +138,52 @@ def accum_tables(runs):
     print(f"| **合計** | {tot[0]:,.0f} | {pc(tot[1], tot[0])} | {pc(tot[2], tot[0])} | {pc(tot[3], tot[0])} | {tot[4]:,.0f}（{pc(tot[9], tot[4])}） | {tot[5]:.0f} | {tot[6]:,.0f} | {tot[7]:,.0f}（{pc(tot[7], tot[6])}） | {tot[8]:.0f} |")
 
 
+FILLS = {"holes": "穴・できたて", "holesPrev": "穴・1 回前", "all": "全部・できたて", "allPrev": "全部・1 回前"}
+
+
+def fill_tables(runs):
+    """&fill=: every frame also measured with the fill (rows[i]["fill"]): this frame's and the one before, the holes
+    only (with what the cameras saw) and all of the fill alone."""
+    every = [r for run in runs.values() for r in run["rows"] if "fill" in r]
+    f0 = every[0]["fill"]
+    base = (lambda r: r["accum"]) if "accum" in every[0] else (lambda r: r)
+    name = {"oracle": "正解（街そのもの）", "model": "補完のモデル"}.get(f0["mode"], f0["mode"])
+    print(f"\n補完（{name}）。同じフレームを、補完なし（A、A+）と、補完を足したもので測った値。補完は運転モデルの呼び出し {f0['every']} 回に 1 回\n")
+    print(HEAD.format("町、描くもの"))
+    pick = lambda rows, k: [r["fill"][k] for r in rows if r["fill"].get(k)]
+    for town, run in list(runs.items()) + [("**合計**", {"rows": every})]:
+        rows = [r for r in run["rows"] if "fill" in r]
+        ja = TOWNS.get(town, town)
+        if "accum" in rows[0]:
+            print(line(f"{ja}、A", rows))
+        print(line(f"{ja}、A+" if "accum" in rows[0] else f"{ja}、A", rows, base))
+        for k, label in FILLS.items():
+            if pick(rows, k):
+                print(line(f"{ja}、{label}", pick(rows, k)))
+
+    print("\n| 追跡カメラからの距離 | 画素 | 被覆率（全体）: 補完なし / 穴・できたて / 穴・1 回前 / 全部・できたて |\n|---|---:|---|")
+    lo = 0
+    for i in range(3):
+        cols = [[base(r)["bands"][i] for r in every]] + [[x["bands"][i] for x in pick(every, k)] for k in ("holes", "holesPrev", "all")]
+        s = lambda b, k: sum(x[k] for x in b)
+        print(f"| {lo}〜{cols[0][0]['far']} m | {s(cols[0], 'omega'):,} | " + " / ".join(pc(s(b, "covered"), s(b, "omega")) for b in cols) + " |")
+        lo = cols[0][0]["far"]
+
+    print("\n| 町 | 描くもの | 補完が足した画素（補完なしでは何もない所） | うち正しい | うち透け | うち実在しない面 |\n|---|---|---:|---:|---:|---:|")
+    for town, run in list(runs.items()) + [("**合計**", {"rows": every})]:
+        rows = [r for r in run["rows"] if "fill" in r]
+        for k, label in FILLS.items():
+            a = lambda key: sum(x[key] for x in pick(rows, k))
+            if pick(rows, k):
+                print(f"| {TOWNS.get(town, town)} | {label} | {a('added'):,} | {pc(a('addedGood'), a('added'))} | {pc(a('addedThrough'), a('added'))} | {pc(a('addedPhantom'), a('added'))} |")
+
+    m = lambda get: np.mean([get(r["fill"]) for r in every])
+    aged = [r["fill"]["age"] for r in every if r["fill"].get("age")]
+    print(f"\n補完のメッシュ（{len(every)} フレームの平均）: 有効な頂点 {m(lambda f: f['stats']['valid']):,.0f} / {f0['stats']['vertices']:,}、三角形 {m(lambda f: f['stats']['triangles']):,.0f}、"
+          f"縁で捨てた三角形 {m(lambda f: f['stats']['edge']):,.0f}、穴にかかるマス {m(lambda f: f['stats']['holeCells']):,.0f}、作る時間 {m(lambda f: f['ms']):.1f} ms。"
+          + (f"「1 回前」の補完は、平均でモデルのフレーム {np.mean([a['frames'] for a in aged]):.1f} 回前、{np.mean([a['metres'] for a in aged]):.2f} m 手前のもの。" if aged else ""))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("dir")
@@ -144,10 +191,13 @@ def main():
     args = ap.parse_args()
     runs = load(args.dir)
     has_accum = any("accum" in r for run in runs.values() for r in run["rows"])
+    has_fill = any("fill" in r for run in runs.values() for r in run["rows"])
     if any("oracle" in r for run in runs.values() for r in run["rows"]):
         model_tables(runs)
         if has_accum:
             accum_tables(runs)
+        if has_fill:
+            fill_tables(runs)
         return
     every = [r for run in runs.values() for r in run["rows"]]
     rule = next(r["rule"] for r in every if "rule" in r)
@@ -180,6 +230,8 @@ def main():
 
     if has_accum:
         accum_tables(runs)
+    if has_fill:
+        fill_tables(runs)
     if args.repeat:
         rep = load(args.repeat)
         print("\n| 町 | 1 回目の要約値 | 2 回目の要約値 | 車の位置の差（最大） | 被覆率（全体）の差（最大のフレーム） | 合計の被覆率 1 回目 / 2 回目 |\n|---|---|---|---:|---:|---|")

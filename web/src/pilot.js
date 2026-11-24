@@ -22,6 +22,8 @@
 // ?recon=oracle (multi-camera only; src/recon.js, loaded only then): a second view at the lower left, the town put
 // together in 3D from the model's two input images and their depth, drawn from behind and above the car (ReconView).
 // ?recon=model: the same from the model's own depth output (then the default model is models/keipilot_mc_depth.onnx).
+// &fill=oracle (with ?recon; src/fill.js, loaded only then; docs/recon_fill.md): what that view leaves dark is filled in
+// from the town itself, drawn from the view's camera with the model frame (development and measurements).
 // &layout=split: the main view from the same camera behind the car, with the car's body, beside the reconstruction;
 // the model's frames are drawn as before (the body is hidden and the camera back in the car while they are drawn).
 // Keys: ← ↑ → turn at the next junction, Space pause, R back to the start, T other cars (or the buttons).
@@ -549,7 +551,28 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     reconMode = null;
   }
   const split = !!reconMode && !!rig && params.get('layout') === 'split';
-  const recon = reconMode && rig ? (await import('./recon.js')).createRecon({ ctx, scene, renderer, rig, views, T, mode: reconMode, split, renderMain, params }) : null;
+  // ReconFill (&fill=oracle): the view's holes filled in from a third image, the town from the view's chase camera
+  let createFill = null;
+  if (params.has('fill')) {
+    if (reconMode && rig && params.get('fill') === 'oracle') createFill = (await import('./fill.js')).createFill;
+    else console.warn('[pilot] ?fill=oracle needs ?pilot=mc and ?recon');
+  }
+  const recon = reconMode && rig ? (await import('./recon.js')).createRecon({ ctx, scene, renderer, rig, views, T, mode: reconMode, split, renderMain, params, createFill }) : null;
+  // the fill's colours: one more shot with the model frame, by the model frames' pipeline (as a cylinder's face:
+  // without the vignette and the light leak, which belong to a camera's own image)
+  const chase = recon && recon.fill ? (() => {
+    const cam = recon.fill.camera, pipe = modelPipeline();
+    pipe.setSize(cam.width, cam.height, 1);
+    pipe.compMat.uniforms.uExposure.value = modelPipe.compMat.uniforms.uExposure.value;
+    pipe.compMat.uniforms.uVignette.value = 0;
+    return { cam, w: cam.width, h: cam.height, face: true, pipe, reader: pixelReader(cam.width, cam.height, 1) };
+  })() : null;
+  /** The chase camera's shot as RGB, top row first. */
+  function chaseRgb() {
+    const { w, h } = chase, rgba = chase.reader.bufs[0], out = new Uint8Array(3 * w * h);
+    for (let y = 0, o = 0; y < h; y++) for (let x = 0, i = (h - 1 - y) * w * 4; x < w; x++, i += 4, o += 3) { out[o] = rgba[i]; out[o + 1] = rgba[i + 1]; out[o + 2] = rgba[i + 2]; }
+    return out;
+  }
   // split: the car's own body for the main view (a detailed car of src/world/actors.js), never in a model frame
   let body = null;
   if (split && ctx.services.actors && ctx.services.actors.detail) {
@@ -641,10 +664,17 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
       modelPipe.render(scene, camera, sunDir, t);
       single.read(0, sync);
     }
+    // a fill's turn (&fill): the town from the view's chase camera too, in the same scene state
+    const fillTurn = chase ? recon.fillTurn() : false;
+    if (fillTurn) {
+      shoot(chase, chase.cam, 0, false, t, pr, sync);
+      if (ctx.wires && mainSize) { const m = mainSize(); ctx.wires.setResolution(m.x, m.y); }
+      placeCamera();
+    }
     // the same shots' depth, in the same scene state; and where the cars and riders are now (its keyframes' ghost count)
     const shot = recon ? recon.capture(car.x, car.y, car.yaw, trafficOn ? [
       ...traffic.drawList(car.x, car.y, 40).map((v) => [v[1], v[2], v[3], v[4], v[5], v[6]]),
-      ...traffic.bikeList(car.x, car.y, 40).map((b) => [b[1], b[2], b[3], 1.8, 0.6, b[5]])] : []) : null;
+      ...traffic.bikeList(car.x, car.y, 40).map((b) => [b[1], b[2], b[3], 1.8, 0.6, b[5]])] : [], fillTurn) : null;
     if (actors && actors.view) actors.view('main');
     renderer.setViewport(vp);
     const at = { pose: { x: car.x, y: car.y, yaw: car.yaw }, v: car.v, inp: nav.inputs(), stand: standM, t, g: gen, t1: performance.now(), shot };
@@ -663,6 +693,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
     pending = null;
     gl.deleteSync(at.fence);
     (rig ? views.map((v) => v.reader) : [single]).forEach((r) => r.fetch());
+    if (at.shot && at.shot.fillTurn) chase.reader.fetch();
     readMs = performance.now() - at.t1;
     if (at.g === gen) finish(at);                           // not after a reset
     else flightT = null;
@@ -670,6 +701,7 @@ export async function installPilot({ ctx, scene, renderer, camera, sunDir, model
 
   function finish(at) {
     const t0 = performance.now();
+    if (at.shot && at.shot.fillTurn) at.shot.fillRgb = chaseRgb();
     if (rig) stitchRig();
     else {
       const rgba = single.bufs[0];
