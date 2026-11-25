@@ -1,0 +1,305 @@
+{
+  "status": "PASS",
+  "selection": "b66495b3f7e000f947eaaaaeddcba2556d36c441ccf99b1a4088a157f0a9ec42",
+  "strength": 1.0,
+  "source": {
+    "40": {
+      "sha256": "eaf9d699032f33eff0c1dab13407ca1d5a7018dd51ae8024f720afdcd6c19b84",
+      "town": 40,
+      "seed": 8440,
+      "count": 320,
+      "start": 0,
+      "size": [
+        384,
+        192
+      ],
+      "capture": "961486773b7b541115b2e361f6b6bf8f8cff2b962a08c96f75ab90ffea6b498e",
+      "action_tape": "c29b8c866f4986ae83dd8781067f0c1dd4c5b4101344fcf9ddcce3f02654a945"
+    },
+    "41": {
+      "sha256": "e496c6ae3e51515ba22e01af7d42fdb008e5e6e4f1a37a3bcab5ccab02a5aa07",
+      "town": 41,
+      "seed": 8441,
+      "count": 320,
+      "start": 0,
+      "size": [
+        384,
+        192
+      ],
+      "capture": "961486773b7b541115b2e361f6b6bf8f8cff2b962a08c96f75ab90ffea6b498e",
+      "action_tape": "60ebc1ec701169be6e2a26d748397d904a7cb73a773a46cf5ab3df0729679689"
+    }
+  },
+  "baseline": "256x128 stabilized output, bicubic to 384x192",
+  "methods": {
+    "40": {
+      "chase": {
+        "counts": {
+          "rgb_mae": 23592960,
+          "vehicle_contrast": 5766,
+          "vehicle_gradient_mae": 5766,
+          "white_line_contrast": 82831,
+          "white_line_gradient_mae": 82831,
+          "static_flicker": 19720120,
+          "building_flicker": 7082311,
+          "vegetation_flicker": 2421466
+        },
+        "methods": {
+          "current": {
+            "rgb_mae": 0.10934287625573044,
+            "vehicle_contrast": 0.15393424022531013,
+            "vehicle_gradient_mae": 0.15619373972349904,
+            "white_line_contrast": 0.3879985530341875,
+            "white_line_gradient_mae": 0.14350250547781715,
+            "static_flicker": 0.03930003214802034,
+            "building_flicker": 0.04259447636351373,
+            "vegetation_flicker": 0.057961000168981903
+          },
+          "native384": {
+            "rgb_mae": 0.10413951400506558,
+            "vehicle_contrast": 0.3508009463178176,
+            "vehicle_gradient_mae": 0.13144668645950905,
+            "white_line_contrast": 0.7096994573116996,
+            "white_line_gradient_mae": 0.08526348976407559,
+            "static_flicker": 0.036802230093069946,
+            "building_flicker": 0.041293694580029815,
+            "vegetation_flicker": 0.05451258286744638
+          },
+          "down256_up384": {
+            "rgb_mae": 0.10428518773224603,
+            "vehicle_contrast": 0.2915127075857655,
+            "vehicle_gradient_mae": 0.13229864981322223,
+            "white_line_contrast": 0.4886791793367756,
+            "white_line_gradient_mae": 0.11986952228770906,
+            "static_flicker": 0.03631580155902913,
+            "building_flicker": 0.040619955415046295,
+            "vegetation_flicker": 0.05357922886376327
+          }
+        }
+      },
+      "sweep": {
+        "counts": {
+          "rgb_mae": 23592960,
+          "vehicle_contrast": 4809,
+          "vehicle_gradient_mae": 4809,
+          "white_line_contrast": 85638,
+          "white_line_gradient_mae": 85638,
+          "static_flicker": 18693696,
+          "building_flicker": 6384409,
+          "vegetation_flicker": 3230640
+        },
+        "methods": {
+          "current": {
+            "rgb_mae": 0.12936918857714796,
+            "vehicle_contrast": 0.0840516965791665,
+            "vehicle_gradient_mae": 0.17557059210138526,
+            "white_line_contrast": 0.3933947017618304,
+            "white_line_gradient_mae": 0.14624589956385717,
+            "static_flicker": 0.055975291793909684,
+            "building_flicker": 0.05017256060170608,
+            "vegetation_flicker": 0.10359171742054851
+          },
+          "native384": {
+            "rgb_mae": 0.12402828013762543,
+            "vehicle_contrast": 0.24075765186752157,
+            "vehicle_gradient_mae": 0.15228581893111065,
+            "white_line_contrast": 0.7168264071027619,
+            "white_line_gradient_mae": 0.08938663624156808,
+            "static_flicker": 0.053238562358168276,
+            "building_flicker": 0.04858324869064833,
+            "vegetation_flicker": 0.09947309464318764
+          },
+          "down256_up384": {
+            "rgb_mae": 0.12411084624749473,
+            "vehicle_contrast": 0.19999885872142673,
+            "vehicle_gradient_mae": 0.1544506055580307,
+            "white_line_contrast": 0.48366079278200197,
+            "white_line_gradient_mae": 0.12532532776021724,
+            "static_flicker": 0.05268701239007762,
+            "building_flicker": 0.04794621271090851,
+            "vegetation_flicker": 0.09850044938737539
+          }
+        }
+      }
+    },
+    "41": {
+      "chase": {
+        "counts": {
+          "rgb_mae": 23592960,
+          "vehicle_contrast": 4513,
+          "vehicle_gradient_mae": 4513,
+          "white_line_contrast": 76276,
+          "white_line_gradient_mae": 76276,
+          "static_flicker": 19975623,
+          "building_flicker": 6407165,
+          "vegetation_flicker": 3017229
+        },
+        "methods": {
+          "current": {
+            "rgb_mae": 0.10744278340037956,
+            "vehicle_contrast": 0.22780970190133645,
+            "vehicle_gradient_mae": 0.12453261759665668,
+            "white_line_contrast": 0.3565371598802257,
+            "white_line_gradient_mae": 0.15967180590065894,
+            "static_flicker": 0.03521076702273582,
+            "building_flicker": 0.03781912449147986,
+            "vegetation_flicker": 0.05567474940726481
+          },
+          "native384": {
+            "rgb_mae": 0.10232128140430055,
+            "vehicle_contrast": 0.4036278090147203,
+            "vehicle_gradient_mae": 0.11244871697572047,
+            "white_line_contrast": 0.6817417968210113,
+            "white_line_gradient_mae": 0.09612081286473792,
+            "static_flicker": 0.032756773026766765,
+            "building_flicker": 0.03672721973742271,
+            "vegetation_flicker": 0.050949791158451295
+          },
+          "down256_up384": {
+            "rgb_mae": 0.1024355839702881,
+            "vehicle_contrast": 0.31776007257694633,
+            "vehicle_gradient_mae": 0.11057004925606213,
+            "white_line_contrast": 0.47128357738066673,
+            "white_line_gradient_mae": 0.1310642777946533,
+            "static_flicker": 0.032245500109644804,
+            "building_flicker": 0.03601710049125841,
+            "vegetation_flicker": 0.05007880325640251
+          }
+        }
+      },
+      "sweep": {
+        "counts": {
+          "rgb_mae": 23592960,
+          "vehicle_contrast": 4545,
+          "vehicle_gradient_mae": 4545,
+          "white_line_contrast": 73384,
+          "white_line_gradient_mae": 73384,
+          "static_flicker": 18554754,
+          "building_flicker": 5814953,
+          "vegetation_flicker": 3929584
+        },
+        "methods": {
+          "current": {
+            "rgb_mae": 0.132560509146728,
+            "vehicle_contrast": 0.12260944990978478,
+            "vehicle_gradient_mae": 0.15003458978789255,
+            "white_line_contrast": 0.3649631990991478,
+            "white_line_gradient_mae": 0.15914352030734855,
+            "static_flicker": 0.053253822491877774,
+            "building_flicker": 0.045455385551658456,
+            "vegetation_flicker": 0.10451067944153243
+          },
+          "native384": {
+            "rgb_mae": 0.12749140723176136,
+            "vehicle_contrast": 0.20499159047848367,
+            "vehicle_gradient_mae": 0.14244713756762278,
+            "white_line_contrast": 0.6695303824166202,
+            "white_line_gradient_mae": 0.10079011335173528,
+            "static_flicker": 0.05020827326377628,
+            "building_flicker": 0.043992369828561785,
+            "vegetation_flicker": 0.09883718418529067
+          },
+          "down256_up384": {
+            "rgb_mae": 0.1275356024193069,
+            "vehicle_contrast": 0.17150370765523246,
+            "vehicle_gradient_mae": 0.1410965193282959,
+            "white_line_contrast": 0.46558403738956916,
+            "white_line_gradient_mae": 0.13402725680942382,
+            "static_flicker": 0.04965154923812953,
+            "building_flicker": 0.0433347510298365,
+            "vegetation_flicker": 0.09796574766939282
+          }
+        }
+      }
+    }
+  },
+  "relative_changes": {
+    "40": {
+      "chase": {
+        "rgb_mae": -0.04758757432441485,
+        "vehicle_contrast": 1.2789013399771099,
+        "vehicle_gradient_mae": -0.1584381890580141,
+        "white_line_contrast": 0.8291291340181008,
+        "white_line_gradient_mae": -0.40583971352851567,
+        "static_flicker": -0.06355725220637543,
+        "building_flicker": -0.03053874338969831,
+        "vegetation_flicker": -0.05949547612156214
+      },
+      "sweep": {
+        "rgb_mae": -0.04128423852900287,
+        "vehicle_contrast": 1.864399669086478,
+        "vehicle_gradient_mae": -0.13262342452447018,
+        "white_line_contrast": 0.8221557227192755,
+        "white_line_gradient_mae": -0.3887921883065304,
+        "static_flicker": -0.048891740409635065,
+        "building_flicker": -0.031676914472722806,
+        "vegetation_flicker": -0.03975822469127155
+      }
+    },
+    "41": {
+      "chase": {
+        "rgb_mae": -0.04766724980489401,
+        "vehicle_contrast": 0.7717762046391248,
+        "vehicle_gradient_mae": -0.09703402091871416,
+        "white_line_contrast": 0.9121198953007708,
+        "white_line_gradient_mae": -0.3980101100344525,
+        "static_flicker": -0.06969442030003192,
+        "building_flicker": -0.0288717618067319,
+        "vegetation_flicker": -0.084867166877575
+      },
+      "sweep": {
+        "rgb_mae": -0.03823990981624692,
+        "vehicle_contrast": 0.6719069421591493,
+        "vehicle_gradient_mae": -0.050571353119279516,
+        "white_line_contrast": 0.8345147786660323,
+        "white_line_gradient_mae": -0.366671585766843,
+        "static_flicker": -0.05718930746362849,
+        "building_flicker": -0.032185751046682975,
+        "vegetation_flicker": -0.05428627281497822
+      }
+    }
+  },
+  "checks": {
+    "40": {
+      "chase": {
+        "vehicle_contrast": true,
+        "white_line_contrast": true,
+        "vehicle_gradient_mae": true,
+        "white_line_gradient_mae": true,
+        "static_flicker": true,
+        "building_flicker": true,
+        "vegetation_flicker": true
+      },
+      "sweep": {
+        "vehicle_contrast": true,
+        "white_line_contrast": true,
+        "vehicle_gradient_mae": true,
+        "white_line_gradient_mae": true,
+        "static_flicker": true,
+        "building_flicker": true,
+        "vegetation_flicker": true
+      }
+    },
+    "41": {
+      "chase": {
+        "vehicle_contrast": true,
+        "white_line_contrast": true,
+        "vehicle_gradient_mae": true,
+        "white_line_gradient_mae": true,
+        "static_flicker": true,
+        "building_flicker": true,
+        "vegetation_flicker": true
+      },
+      "sweep": {
+        "vehicle_contrast": true,
+        "white_line_contrast": true,
+        "vehicle_gradient_mae": true,
+        "white_line_gradient_mae": true,
+        "static_flicker": true,
+        "building_flicker": true,
+        "vegetation_flicker": true
+      }
+    }
+  },
+  "bandwidth_control": "native384 reduced to 256x128 with antialiasing, then bicubic back to the common grid"
+}

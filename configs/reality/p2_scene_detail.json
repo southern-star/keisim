@@ -1,0 +1,12 @@
+{
+  "readout_seed": 2881, "train_towns": [0,1,2,3,4,5,6,7],
+  "training_tick_stride": 4, "cells_per_camera_tick": 256, "ridge": 0.0001,
+  "splat_strength": 0.72, "ground_strength": 0.95, "sky_strength": 0.95, "previous_static_weight": 0.55,
+  "native_hw": [128,256], "edge_threshold": 0.10, "eval_angles": [0,-36,36,-18,18],
+  "validation_towns": [40,41], "fresh_towns": [20400,20401,20402,20403],
+  "fresh_seeds": [32040,32041,32042,32043], "fresh_starts": [0,30,60,90],
+  "controls": "A is the original Phase 2 temporal renderer. B is the frozen previous depth-projection candidate. C uses A as fallback, a learned readout of the shared stem, predicted depth and predicted source semantic probabilities. All images are 256x128.",
+  "selection": "Fit one 3x3 ridge readout of source RGB on train-town camera features. Freeze the readout and all mixing parameters before evaluating C. Towns 40 and 41 are previously viewed validation towns.",
+  "gate": "For each chase run on towns 40 and 41, require the original silhouette, static flicker and vacated-surface conditions versus A, plus improved whole-frame SSIM, aligned-edge contrast and RGB L1 versus A. A validation pass releases the previously reserved four fresh 320-tick drives.",
+  "media": "Show full frames at the predetermined midpoint of each town and the complete chase videos at 10 Hz. Include sky and unobserved surfaces in full-frame scores."
+}

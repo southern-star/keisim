@@ -1,0 +1,11 @@
+{
+  "train_towns": [0,1,2,3,4,5,6,7],
+  "validation_towns": [40,41],
+  "primary_alpha": 0.25,
+  "sensitivity_alpha": [0.15,0.35],
+  "diagnosis": "Use every consecutive chase frame in every training town. At a matching teacher surface record effective projected-color alpha after the sky and ground layers. Compare both transition directions, continuously supported and continuously weak pixels. Hold alpha at the lower of its two values, leaving both observed colors, other layers, temporal correction and teacher fixed. Support the gap hypothesis if, for both building and vegetation, switching has higher C-minus-A temporal error than continuous support, and equalizing alpha reduces error on switching pairs. Report town replication and pixel counts.",
+  "validation": "Compare A, frozen C and the train-selected candidate on identical inputs and all five fixed cameras. On the chase camera of each town require the original six unrounded conditions against A and preservation of visible vehicle silhouette and marking-edge contrast against C. Allow only a numerical parity tolerance of 0.00001 against C.",
+  "fresh_towns": [20400,20401,20402,20403],
+  "fresh_seeds": [32040,32041,32042,32043],
+  "fresh_starts": [0,30,60,90]
+}

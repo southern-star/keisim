@@ -1,0 +1,7 @@
+{
+  "epochs": 4, "batch_size": 8, "learning_rate": 0.0003, "weight_decay": 0.01, "seed": 17,
+  "class_weights": [1, 1, 2.5, 1, 1, 1, 1, 1.5, 4, 4, 4, 3, 4],
+  "selection": "lowest validation objective",
+  "gate": "held-out visible L1 lower or SSIM higher than train per-pixel mean, and visible road and vehicle IoU above train per-pixel modal labels; correct mem outperforms shuffled and zero mem",
+  "test_towns": [60, 61, 62, 63]
+}

@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KeiReality | 未見の街の視点比較</title>
+<style>
+* { box-sizing: border-box }
+body { margin: 0; padding: clamp(20px, 4vw, 56px); color: #e6eaf1; background: #11171e;
+       font: 16px/1.55 Inter, "Noto Sans CJK JP", system-ui, sans-serif }
+main { max-width: 1280px; margin: auto }
+h1 { font-size: clamp(24px, 3vw, 38px); margin: 0; letter-spacing: -.035em }
+p { color: #b8c3d0; margin: 8px 0 24px }
+.controls { display: flex; align-items: center; flex-wrap: wrap; gap: 16px 28px; padding: 18px 0;
+            border-block: 1px solid #3b4652 }
+label, legend, figcaption { font-size: 14px }
+select { font: inherit; color: inherit; background: #202a34; border: 1px solid #677788; border-radius: 4px; padding: 5px }
+input { accent-color: #92ddc6; vertical-align: middle }
+input[type=range] { width: 130px }
+fieldset { margin: 0; padding: 0; border: 0 }
+fieldset label { white-space: nowrap; margin-right: 12px }
+.frames { margin: 24px 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px }
+figure { margin: 0 }
+canvas { width: 100%; height: auto; display: block; background: #080d12; image-rendering: pixelated }
+figcaption { margin: 0 0 6px; color: #dce4ed }
+output { font-variant-numeric: tabular-nums }
+a { color: #a7e5d2; text-underline-offset: 3px }
+@media(max-width: 720px) { .frames { grid-template-columns: 1fr } .controls { align-items: flex-start } }
+</style>
+<main>
+<h1>KeiReality の視点比較</h1>
+<p>学習視点は −36°、0°、+36°。カメラの高さは中央で4 m、両端で6 mです。−18°と+18°は学習で使わなかった中間視点です。</p>
+<div class="controls">
+<label>走行場面 <select id="episode"></select></label>
+<label>視点 <input type="range" id="view" min="0" max="4" step="1" value="2"> <output id="angle"></output></label>
+<fieldset><legend>履歴ありの生成映像</legend>
+<label><input type="radio" name="mode" value="raw" checked>全体</label>
+<label><input type="radio" name="mode" value="dim">低支持を暗く</label>
+<label><input type="radio" name="mode" value="hide">支持が50%未満を隠す</label>
+</fieldset>
+</div>
+<div class="frames">
+<figure><figcaption>KeiView 教師画像</figcaption><canvas id="gt" width="384" height="192"></canvas></figure>
+<figure><figcaption>現在の1時点から生成</figcaption><canvas id="single" width="384" height="192"></canvas></figure>
+<figure><figcaption>直近8時点から生成</figcaption><canvas id="temporal" width="384" height="192"></canvas></figure>
+<figure><figcaption>推定した観測支持度（白ほど高い）</figcaption><canvas id="support" width="384" height="192"></canvas></figure>
+</div>
+<p><a href="rotation.mp4">走行中に視点を回した動画</a>　<a id="movie" href="orbit_+0.mp4">この視点の全テスト走行</a></p>
+</main>
+<script>
+const samples = /* SAMPLES */{};
+const angles = [-36, -18, 0, 18, 36];
+const field = id => document.getElementById(id);
+const contexts = Object.fromEntries(["gt","single","temporal","support"].map(id =>
+  [id, field(id).getContext("2d", {willReadFrequently:true})]));
+const names = {"t70-e8770":"町70・旋回", "t71-e8771":"町71・発進", "t72-e8772":"町72・交差点付近", "t73-e8773":"町73・接続路"};
+for (const ep of Object.keys(samples)) field("episode").add(new Option(names[ep] || ep, ep));
+field("episode").value = "t71-e8771";
+let version = 0;
+async function draw() {
+  const token = ++version;
+  const angle = angles[Number(field("view").value)];
+  const signed = angle > 0 ? "+" + angle : String(angle);
+  field("angle").textContent = signed + "° / " + (4+Math.abs(angle)/18) + " m";
+  field("movie").href = "orbit_" + (angle >= 0 ? "+" : "") + angle + ".mp4";
+  const image = new Image();
+  image.src = samples[field("episode").value][angle];
+  await image.decode();
+  if (version !== token) return;
+  for (const [id,x,y] of [["gt",0,25], ["single",384,25], ["temporal",0,242], ["support",384,242]]) {
+    contexts[id].drawImage(image, x, y, 384, 192, 0, 0, 384, 192);
+  }
+  const mode = document.querySelector("input[name=mode]:checked").value;
+  if (mode !== "raw") {
+    const rgb = contexts.temporal.getImageData(0, 0, 384, 192);
+    const support = contexts.support.getImageData(0, 0, 384, 192).data;
+    for (let i = 0; i < rgb.data.length; i += 4) {
+      const p = support[i]/255;
+      const scale = mode === "hide" ? Number(p >= .5) : .16 + .84*p;
+      for (let j = 0; j < 3; j++) rgb.data[i+j] *= scale;
+    }
+    contexts.temporal.putImageData(rgb, 0, 0);
+  }
+  document.documentElement.dataset.drawn = String(token);
+}
+document.querySelector(".controls").addEventListener("input", draw);
+draw();
+</script>
+</html>

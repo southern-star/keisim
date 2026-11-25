@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>KeiReality · 走行ビュー</title>
+<style>
+:root { color-scheme:dark; font-family:Inter,"Noto Sans CJK JP",system-ui,sans-serif; color:#edf1ef; background:#101414 }
+* { box-sizing:border-box }
+body { margin:0 }
+main { width:min(1120px,100%); margin:auto; padding:clamp(16px,3.4vw,48px) clamp(14px,2.5vw,32px) }
+header,.toolbar,.transport,.tools,.readouts,.mode { display:flex; align-items:center; flex-wrap:wrap }
+header { justify-content:space-between; gap:12px 28px; padding-bottom:18px }
+h1 { font-size:clamp(23px,3vw,34px); letter-spacing:-.045em; margin:0; font-weight:650 }
+h1 span { margin-left:10px; color:#aebcb7; font-size:.52em; font-weight:450; letter-spacing:0; white-space:nowrap }
+.mode { gap:3px; padding:3px; background:#1a2220; border:1px solid #37443f; border-radius:9px }
+button,select { appearance:none; color:inherit; font:inherit; font-size:14px; cursor:pointer; border:1px solid #41504a; background:#202824; border-radius:6px; padding:7px 12px; min-height:36px }
+select { appearance:auto }
+button:hover,select:hover { border-color:#a4c1b0 }
+button:focus-visible,select:focus-visible,input:focus-visible,.viewport:focus-visible { outline:2px solid #ace2ba; outline-offset:2px }
+.mode button { border:0; background:transparent }
+.mode button[aria-pressed="true"] { background:#c3e4c8; color:#14261a; font-weight:650 }
+.toolbar { justify-content:space-between; gap:9px; margin-bottom:10px }
+.tools { gap:8px 15px }
+label { font-size:13px; color:#b5c2bb }
+label select { margin-left:5px; color:#edf1ef }
+.stage { position:relative; background:#080b09; border:1px solid #39453e; overflow:hidden; border-radius:8px }
+.viewport { position:relative; width:100%; aspect-ratio:2; overflow:auto; scrollbar-width:thin; overscroll-behavior:contain }
+.viewport.detail { cursor:grab }
+.viewport.orbit { cursor:ew-resize }
+.viewport.orbit:not(.detail) { touch-action:pan-y pinch-zoom }
+.viewport.drag { cursor:grabbing }
+.picture { width:100%; aspect-ratio:2; line-height:0 }
+video,#frame { width:100%; height:auto; display:block; image-rendering:pixelated; user-select:none }
+#displayState { position:absolute; top:10px; left:10px; margin:0; padding:5px 10px; border-radius:4px; background:#101714ed; color:#ecf3ef; font-size:13px; pointer-events:none }
+[hidden] { display:none !important }
+.transport { padding:10px 12px; gap:10px; border-top:1px solid #344038; background:#171d19 }
+.transport button { min-width:76px; white-space:nowrap }
+#timeline { flex:1 1 130px; min-width:65px; accent-color:#b3d6bc }
+#orbitControl { display:inline-flex; align-items:center; gap:5px }
+#orbitAngle { width:80px; accent-color:#b3d6bc }
+#angleLabel { min-width:4em }
+output,.readouts { font-variant-numeric:tabular-nums }
+#clock { font-size:13px; color:#d8e2da; white-space:nowrap }
+.readouts { gap:8px 15px; color:#b9c9bf; font-size:13px }
+#status { margin:12px 0 0; color:#b7c6bc; font-size:14px; line-height:1.6 }
+small { color:#a4b4a9; font-size:12px }
+#zoomHint { margin-left:8px }
+#player:fullscreen { display:flex; flex-direction:column; justify-content:center; background:#0b0e0c; padding:8px }
+#player:fullscreen .viewport { max-height:calc(100vh - 110px) }
+#player:fullscreen .stage { align-self:center; width:min(100%,calc((100vh - 110px)*2)) }
+@media(max-width:560px){ main { padding:14px 10px } header { padding-bottom:14px } .tools { gap:6px } button,select { padding:5px 8px } .transport { padding:7px; gap:7px } .transport button { min-width:58px } }
+</style>
+<main>
+<header>
+  <h1>KeiReality<span>背景補完版 D</span></h1>
+  <div class="mode" role="group" aria-label="表示モード">
+    <button id="recorded" aria-pressed="true">検証録画</button>
+    <button id="live" aria-pressed="false">ライブ生成</button>
+  </div>
+</header>
+<section id="player" aria-label="走行ビュー">
+  <div class="toolbar">
+    <div class="tools">
+      <label>走行 <select id="town"><option value="40">町40</option><option value="41">町41</option></select></label>
+      <label>拡大 <select id="zoom"><option value="1">全景</option><option value="1.5">1.5倍</option><option value="2">2倍</option><option value="3">3倍</option></select></label>
+      <label id="orbitControl" hidden>視点 <input id="orbitAngle" type="range" min="-36" max="36" step="1" value="0"><output id="angleLabel" for="orbitAngle">中央 0°</output></label>
+    </div>
+    <button id="fullscreen">全画面</button>
+  </div>
+  <div class="stage">
+    <div class="viewport" id="viewport" tabindex="0" aria-label="走行映像" aria-describedby="orbitHint zoomHint">
+      <div class="picture" id="picture">
+        <video id="clip" muted loop playsinline preload="auto" poster="town40.png" src="town40.mp4" aria-label="補完版の検証録画"></video>
+        <img id="frame" width="256" height="128" hidden draggable="false" src="town40.png" alt="町40の検証時の静止画">
+      </div>
+    </div>
+    <p id="displayState" hidden></p>
+    <div class="transport">
+      <button id="play">再生</button>
+      <input type="range" id="timeline" min="0" max="9.5" step="0.1" value="0" aria-label="録画の再生位置">
+      <label id="speedLabel">速度 <select id="rate"><option value="1">1倍</option><option value=".5">0.5倍</option></select></label>
+      <output id="clock">0.0 / 9.6 秒</output>
+      <div class="readouts" id="readouts" hidden><span id="fps"></span><span id="inference"></span><span id="driveSpeed"></span></div>
+    </div>
+  </div>
+</section>
+<p id="status" role="status">町40の検証録画を表示しています。</p>
+<small>生成解像度 256 × 128　<span id="orbitHint" hidden>左右ドラッグで視点を回転（左右36°）。ダブルクリックで中央に戻ります。</span><span id="zoomHint" hidden>ドラッグで見たい場所に移動できます。</span></small>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const clip = $("clip"), frame = $("frame"), displayState = $("displayState");
+const orbitAngle = $("orbitAngle");
+const hosted = ["http:", "https:"].includes(location.protocol);
+let mode = "recorded", stream = null;
+let shown = [], drag = null;
+let liveImageURL = null;
+
+function setStatus(text) { $("status").textContent = text; }
+function setAngle(value) {
+  orbitAngle.value = Math.round(value);
+  const angle = orbitAngle.valueAsNumber;
+  const label = (angle < 0 ? "左 " : angle > 0 ? "右 " : "中央 ")+Math.abs(angle)+"°";
+  $("angleLabel").textContent = label;
+  orbitAngle.setAttribute("aria-valuetext",label);
+}
+orbitAngle.oninput = () => setAngle(orbitAngle.valueAsNumber);
+function banner(text) {
+  displayState.textContent = text;
+  displayState.hidden = !text;
+}
+function setImage(url, live) {
+  const previous = liveImageURL;
+  frame.src = url;
+  frame.alt = "町"+$("town").value+(live ? "のライブ生成映像" : "の検証時の静止画");
+  liveImageURL = live ? url : null;
+  if (previous) URL.revokeObjectURL(previous);
+}
+function showReference(label) {
+  setImage("town"+$("town").value+".png",false);
+  frame.hidden = false; clip.hidden = true;
+  banner("検証時の静止画 · "+label);
+}
+async function showPNG(blob, controller) {
+  const url = URL.createObjectURL(blob);
+  try {
+    const decoded = new Image();
+    await new Promise((resolve,reject)=>{
+      decoded.onload=resolve; decoded.onerror=reject; decoded.src=url;
+    });
+    if(stream!==controller) return false;
+    setImage(url,true); banner("");
+    return true;
+  } finally {
+    if(liveImageURL!==url) URL.revokeObjectURL(url);
+  }
+}
+function stopLive() {
+  if (stream) stream.abort();
+  stream = null;
+  orbitAngle.disabled = true;
+  $("viewport").classList.remove("orbit");
+  if (mode === "live") $("play").textContent = "開始";
+}
+function freezeLive(label,text) {
+  stopLive();
+  banner((liveImageURL ? "最終フレーム" : "検証時の静止画")+" · "+label);
+  setStatus(text);
+}
+function waitForVisible(signal) {
+  if(!document.hidden || signal.aborted) return;
+  return new Promise(resolve=>{
+    function check() {
+      if(document.hidden && !signal.aborted) return;
+      document.removeEventListener("visibilitychange",check);
+      signal.removeEventListener("abort",check);
+      resolve();
+    }
+    document.addEventListener("visibilitychange",check);
+    signal.addEventListener("abort",check);
+  });
+}
+async function startLive() {
+  stopLive(); shown = [];
+  showReference("ライブ準備中");
+  $("clock").textContent="0.0 秒"; $("fps").textContent=""; $("inference").textContent=""; $("driveSpeed").textContent="";
+  setStatus("町"+$("town").value+"のシミュレータを起動しています…");
+  const controller = new AbortController();
+  const headers = {"X-KeiReality":"preview"};
+  const post = url => fetch(url,{method:"POST",headers,signal:controller.signal,cache:"no-store"});
+  stream = controller; $("play").textContent="停止";
+  orbitAngle.disabled = false;
+  $("viewport").classList.add("orbit");
+  try {
+    await waitForVisible(controller.signal);
+    if(stream!==controller) return;
+    const started=await post("/start?town="+$("town").value);
+    if(!started.ok) throw new Error();
+    headers["X-KeiReality-Session"]=await started.text();
+    while(stream===controller){
+      if(document.hidden) {
+        shown=[];
+        await waitForVisible(controller.signal);
+        if(stream!==controller) return;
+      }
+      const begin=performance.now();
+      // The calibrated camera uses a positive lateral offset on the car's left.
+      headers["X-KeiReality-Angle"] = String(-orbitAngle.valueAsNumber);
+      const response=await post("/frame");
+      if(stream!==controller) return;
+      if(response.status===204){freezeLive("走行終了","走行が終了しました。「開始」で同じ町をもう一度走ります。"); return;}
+      if(response.status===409){freezeLive("走行切り替え","別の走行が開始されました。「開始」でこの町に戻れます。"); return;}
+      if(!response.ok) throw new Error();
+      const displayed = await showPNG(await response.blob(),controller);
+      if (!displayed) return;
+      const tick=Number(response.headers.get("X-Tick"));
+      const now=performance.now(); shown.push(now);
+      if(shown.length>20) shown.shift();
+      $("fps").textContent=shown.length>1 ? ((shown.length-1)*1000/(now-shown[0])).toFixed(1)+" fps" : "計測中";
+      $("inference").textContent="モデル生成 "+Number(response.headers.get("X-Model-Ms")).toFixed(0)+" ms";
+      $("driveSpeed").textContent=Number(response.headers.get("X-Speed")).toFixed(0)+" km/h";
+      $("clock").textContent=(tick/10).toFixed(1)+" 秒";
+      if(tick===0) setStatus("町"+$("town").value+"をKeiSimのエキスパートが走行中。2台の車載カメラから、このPCで毎フレーム生成しています。");
+      await new Promise(resolve=>setTimeout(resolve,Math.max(0,100-(performance.now()-begin))));
+    }
+  } catch {
+    if(stream===controller) freezeLive("接続できません","ライブ接続が切れました。「開始」で再接続するか、「検証録画」で録画を再生できます。");
+  }
+}
+function playClip() { clip.play().catch(() => { $("play").textContent="再生"; }); }
+function selectMode(next) {
+  if (next==="live" && !hosted) {
+    setStatus("ライブ生成はローカルサーバーのページで利用できます。ここでは検証録画を再生できます。"); return;
+  }
+  stopLive(); clip.pause(); mode=next;
+  const live=mode==="live";
+  $("live").setAttribute("aria-pressed",String(live)); $("recorded").setAttribute("aria-pressed",String(!live));
+  $("readouts").hidden=!live;
+  $("orbitControl").hidden=!live; $("orbitHint").hidden=!live;
+  $("zoomHint").textContent=live ? "拡大後はShift＋ドラッグかタッチで表示位置を移動できます。" : "ドラッグで見たい場所に移動できます。";
+  $("timeline").hidden=live; $("speedLabel").hidden=live;
+  if (live) { startLive(); return; }
+  const town=$("town").value;
+  setImage("town"+town+".png",false); frame.hidden=true; clip.hidden=false; banner("");
+  clip.poster="town"+town+".png"; clip.src="town"+town+".mp4"; clip.playbackRate=Number($("rate").value);
+  $("timeline").value="0"; $("clock").textContent="0.0 / 9.6 秒"; $("play").textContent="再生";
+  setStatus("町"+town+"の検証録画。検証と同じ96フレームを拡大表示しています。");
+  playClip();
+}
+$("recorded").onclick=()=>selectMode("recorded"); $("live").onclick=()=>selectMode("live");
+$("town").onchange=()=>selectMode(mode);
+$("play").onclick=()=>{
+  if (mode==="recorded") { if (clip.paused) playClip(); else clip.pause(); }
+  else if (stream) freezeLive("停止中","ライブ生成を停止しました。「開始」で町の先頭から再開します。");
+  else startLive();
+};
+clip.onplay=()=>{if(mode==="recorded") $("play").textContent="一時停止";};
+clip.onpause=()=>{if(mode==="recorded") $("play").textContent="再生";};
+clip.ontimeupdate=()=>{if(mode==="recorded"){
+  $("timeline").value=clip.currentTime; $("clock").textContent=clip.currentTime.toFixed(1)+" / 9.6 秒";
+}};
+clip.onerror=()=>{if(mode==="recorded"){
+  showReference("録画を読み込めません");
+  setStatus("録画を再生できなかったため、選択した町の静止画を表示しています。");
+}};
+$("timeline").oninput=()=>{clip.pause(); clip.currentTime=Number($("timeline").value);};
+$("rate").onchange=()=>{clip.playbackRate=Number($("rate").value);};
+const viewport=$("viewport");
+$("zoom").onchange=()=>{
+  const x=(viewport.scrollLeft+viewport.clientWidth/2)/viewport.scrollWidth;
+  const y=(viewport.scrollTop+viewport.clientHeight/2)/viewport.scrollHeight;
+  const z=Number($("zoom").value);
+  $("picture").style.width=100*z+"%"; viewport.classList.toggle("detail",z>1); $("zoomHint").hidden=z===1;
+  viewport.scrollLeft=x*viewport.scrollWidth-viewport.clientWidth/2; viewport.scrollTop=y*viewport.scrollHeight-viewport.clientHeight/2;
+};
+viewport.onpointerdown=e=>{
+  if (!e.isPrimary || e.button!==0) return;
+  const zoomed = $("zoom").value !== "1";
+  const rotate = Boolean(stream) && !e.shiftKey && !(zoomed && e.pointerType==="touch");
+  if (!rotate && (!zoomed || e.pointerType==="touch")) return;
+  drag={id:e.pointerId,rotate,x:e.clientX,y:e.clientY,angle:orbitAngle.valueAsNumber,left:viewport.scrollLeft,top:viewport.scrollTop};
+  viewport.setPointerCapture(e.pointerId); viewport.classList.add("drag");
+};
+viewport.onpointermove=e=>{
+  if (!drag || e.pointerId!==drag.id) return;
+  if (drag.rotate) {
+    if (stream) setAngle(drag.angle+(e.clientX-drag.x)*(orbitAngle.max-orbitAngle.min)/viewport.clientWidth);
+  } else {
+    viewport.scrollLeft=drag.left+drag.x-e.clientX; viewport.scrollTop=drag.top+drag.y-e.clientY;
+  }
+};
+viewport.onlostpointercapture=()=>{drag=null;viewport.classList.remove("drag");};
+viewport.ondblclick=()=>{if(stream) setAngle(0);};
+$("fullscreen").onclick=async()=>{
+  try { if(document.fullscreenElement) await document.exitFullscreen(); else await $("player").requestFullscreen(); }
+  catch { setStatus("このブラウザは全画面表示に対応していません。拡大メニューを使用できます。"); }
+};
+document.onfullscreenchange=()=>{$("fullscreen").textContent=document.fullscreenElement?"全画面を終了":"全画面";};
+let resumeAfterNavigation=false;
+window.addEventListener("pagehide",()=>{resumeAfterNavigation=Boolean(stream);stopLive();});
+window.addEventListener("pageshow",event=>{if(event.persisted && resumeAfterNavigation && mode==="live") startLive();});
+const params=new URLSearchParams(location.search);
+setAngle(0);
+if(params.get("town")==="41") $("town").value="41";
+selectMode(hosted && params.get("mode")==="live" ? "live" : "recorded");
+</script>
+</html>

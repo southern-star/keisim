@@ -1,0 +1,19 @@
+{
+  "epochs": 3, "batch_size": 8, "learning_rate": 0.0003, "weight_decay": 0.01, "seed": 17,
+  "class_weights": [1, 1, 2.5, 1, 1, 1, 1, 1.5, 4, 4, 4, 3, 4],
+  "support_loss_weight": 0.15, "support_class_weights": [1, 1, 4, 0.5], "past_rgb_weight": 3,
+  "train_views_deg": [0, -36, 36], "interpolated_test_views_deg": [-18, 18],
+  "selection": "minimum validation objective on trained camera poses",
+  "history_frames_including_current": 8,
+  "gate": {
+    "spatial_visible_vehicle_l1_ratio_max": 0.95, "spatial_visible_l1_ratio_max": 1.01,
+    "spatial_road_iou_drop_max": 0.02,
+    "chase_past_static_l1_ratio_max_vs_single": 0.98,
+    "chase_past_static_l1_ratio_max_vs_original_p1": 1.0,
+    "chase_past_static_must_improve_vs_history_removed": true,
+    "chase_warped_temporal_l1_ratio_max_vs_single": 1.05,
+    "chase_vacated_rgb_l1_increase_max": 0.02,
+    "chase_phantom_fpr_increase_max": 0.005,
+    "interpolated_pose_l1_must_beat_swapped": true
+  }
+}

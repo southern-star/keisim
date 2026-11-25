@@ -1,0 +1,25 @@
+{
+  "version": 1, "seed": 91, "updates": 10000, "batch_size": 4, "window": 10,
+  "resolution_hw": [64, 128], "train_angles": [0, -36, 36], "test_angles": [0, -36, 36, -18, 18],
+  "fps": 10, "eval_towns": [80, 81, 82, 83], "frames_per_town": 320,
+  "learning_rate": 0.0001, "end_learning_rate": 0.00002, "warmup_steps": 200,
+  "weight_decay": 0.01, "gradient_clip": 1.0, "prior_sigma": 0.18,
+  "equal_times_probability": 0.25, "endpoint_probability": 0.15,
+  "endpoint_l1_weight": 0.5, "endpoint_dynamic_pixel_weight": 2.0,
+  "switch_view_probability": 0.12, "previous_dropout": 0.10,
+  "validation_every": 2000, "checkpoint_every": 500, "validation_seed": 40523,
+  "selection": "lowest mean of NFE1 and NFE4 RGB L1 in two full 96-tick validation episodes at three trained poses",
+  "evaluation_seed": 16411, "test_nfe": [1, 4],
+  "flow_matching_control_updates": 2000, "control_validation_nfe": [1, 4, 8],
+  "phantom_probe": {"updates": 1200, "batch": 16, "seed": 831, "minimum_dynamic_iou_on_real_validation_and_test": 0.40},
+  "gate": {
+    "scope": "pool all five fixed calibrated views of four full causal test episodes, score each NFE independently",
+    "quality_l1_gain_ratio": 0.98, "quality_ssim_gain": 0.01, "compute_gain_p50_ratio": 0.90,
+    "common_l1_noninferiority_ratio": 1.02, "native_display_l1_ratio_max": 1.03,
+    "static_warped_residual_ratio_max": 1.05, "vacated_rgb_l1_increase_max": 0.02,
+    "static_phantom_fpr_increase_max": 0.005,
+    "last_quarter_l1_ratio_max": 1.05, "relative_late_vs_early_drift_max": 1.05,
+    "end_to_end_p95_ms_max": 100.0,
+    "pass": "complete uninterrupted rollouts, reliable independent RGB probe, all guards, and a quality or compute gain; at least one NFE must pass"
+  }
+}

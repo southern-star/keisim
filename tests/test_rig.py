@@ -180,5 +180,15 @@ def test_agent_drives_a_rig_model(tmp_path):
     env, obs = rig_env()
     action, p = agent.act(obs["rgbs"], obs["command"], obs["target_point"], 0.0, 0.1, with_seg=True)
     assert np.isfinite(action).all() and p["seg"].ndim == 2
+    agent.reset()
+    decoder_inputs = []
+    hook = agent.model.decoder.register_forward_pre_hook(lambda module, args: decoder_inputs.append(args[1]))
+    try:
+        observed, plan = agent.act(obs["rgbs"], obs["command"], obs["target_point"], 0.0, 0.1, with_reality=True)
+    finally:
+        hook.remove()
+    assert np.array_equal(action, observed) and "seg" not in plan
+    assert len(decoder_inputs) == 1 and torch.equal(plan["reality"]["mem"], decoder_inputs[0])
+    assert plan["reality"]["source_logits"].shape[:2] == (1, 2)
     with pytest.raises(ValueError):
         agent.act(obs["rgb"], obs["command"], obs["target_point"], 0.0, 0.1)

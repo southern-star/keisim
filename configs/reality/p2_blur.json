@@ -1,0 +1,9 @@
+{
+  "fit_towns": [0, 1, 2, 3, 4, 5], "development_towns": [6, 7],
+  "train_stride": 2, "seed": 11437, "epochs": 10, "batch": 6,
+  "learning_rate": 0.001, "sweep_degrees_per_tick": 3, "max_angle": 36,
+  "diagnosis": "Run frozen D on every consecutive training tick. Substitute current and historical source color, source radial depth at exactly the same rays, or both. Select the larger factorial marginal improvement in pooled teacher-aligned whole-image edge contrast.",
+  "selection": "Select the deployable variant on training towns before scoring towns 40 and 41. Retain the configuration, weights and algorithm hashes for validation and the reserved drives.",
+  "gate": "On each validation town apply the existing six unrounded chase tests against A. Require visible vehicle silhouette and marking-edge contrast to be preserved versus current D both on the chase and across the moving camera drive, allowing 0.00001 numerical parity. Score every sweep frame against its synchronized teacher, and report each angle. Replay an out-and-back orbit at a fixed observation as a separate state check.",
+  "split_contract": "configs/reality/p2_surface_history.json"
+}

@@ -145,10 +145,12 @@ class KeiPilotAgent:
         return img.contiguous(memory_format=torch.channels_last)
 
     @torch.no_grad()
-    def plan(self, rgb_bgr, command, target_point, with_seg=False, speed=None, prev_bgr=None, stand_m=None):
+    def plan(self, rgb_bgr, command, target_point, with_seg=False, speed=None, prev_bgr=None, stand_m=None,
+             *, with_reality=False):
         """rgb_bgr: the camera image, or the list of a rig's images (obs["rgbs"]) for multi-camera models.
         prev_bgr: for history models, the frame `history_dt` s earlier (None: not available yet).
-        stand_m: for memory-input models, metres since the ego last stood (None: unknown)."""
+        stand_m: for memory-input models, metres since the ego last stood (None: unknown).
+        with_reality: expose the current input and detached driving features to the display."""
         if self.model.n_cams != (len(rgb_bgr) if isinstance(rgb_bgr, (list, tuple)) else 1):
             raise ValueError(f"the model takes {self.model.n_cams} camera images")
         img = self._tensor(rgb_bgr)
@@ -160,9 +162,12 @@ class KeiPilotAgent:
         if self.model.history:
             prev = self._tensor(prev_bgr) if prev_bgr is not None else torch.zeros_like(img)
             has_prev = torch.tensor([prev_bgr is not None], device=self.device)
+        reality_args = {}
+        if with_reality:
+            reality_args = dict(with_reality_features=True, with_reality_pyramid=True, with_reality_stem=True)
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=self.amp):
-            out = self.model(img, cmd, tp, with_seg=with_seg, speed=spd, img_prev=prev, has_prev=has_prev,
-                             stand_m=stand)
+            out = self.model(img, cmd, tp, with_seg=with_seg or with_reality, speed=spd, img_prev=prev,
+                             has_prev=has_prev, stand_m=stand, **reality_args)
         v, p = self.model.decode_speed(out["speed_logits"])
         res = {
             "path": out["path"][0].float().cpu().numpy(),
@@ -175,9 +180,13 @@ class KeiPilotAgent:
             res["seg"] = out["seg"][0].float().argmax(0).cpu().numpy().astype(np.uint8)
         if "yield_tta" in out:
             res["yield_tta"] = float(out["yield_tta"][0])
+        if with_reality:
+            res["reality"] = {name: out["reality_" + name] for name in ("mem", "c2", "c3", "stem")}
+            res["reality"]["source_logits"] = out["seg"].detach().unflatten(0, (len(img), self.model.n_cams))
+            res["reality"]["rgb_in"] = img
         return res
 
-    def act(self, rgb_bgr, command, target_point, speed, dt, with_seg=False):
+    def act(self, rgb_bgr, command, target_point, speed, dt, with_seg=False, *, with_reality=False):
         prev = None
         if self.model.history:
             if self.frames is None:
@@ -186,8 +195,9 @@ class KeiPilotAgent:
             if len(self.frames) == self.frames.maxlen:
                 prev = self.frames[0]
         self.stand_m = stand_update(self.stand_m, speed, dt)
+        options = {"with_reality": True} if with_reality else {}
         p = self.plan(rgb_bgr, command, target_point, with_seg=with_seg, speed=speed, prev_bgr=prev,
-                      stand_m=self.stand_m)
+                      stand_m=self.stand_m, **options)
         if self.hold or self.red_hold or self.yield_hold:
             p["target_speed_raw"] = p["target_speed"]
         if self.hold:

@@ -1,0 +1,8 @@
+{
+  "width": 384, "height": 192, "baseline": "ray_aa_strong",
+  "fit_towns": [0,1,2,3,4,5], "selection_towns": [6,7], "validation_towns": [40,41],
+  "training_ticks": 128, "validation_ticks": 320, "seed": 24381,
+  "strengths": [0.5,1.0], "training_steps": 720, "edge_threshold": 0.1,
+  "quality": "Compare both outputs at 384x192 against independent, same-pose native RGB and labels. The 256x128 control uses bicubic interpolation. On both tracks in each town, seek stronger signed teacher-aligned vehicle and marking boundary contrast and no increase in the static warped residual. Report buildings and vegetation separately.",
+  "timing": "Drive from rest on both towns at 10 Hz for 320 ticks. Also measure actual displayed fps. For the paced control loop use at least 9.9 Hz and control work p95 <=100 ms after the first 16 ticks; report all deadline misses and skipped display frames."
+}

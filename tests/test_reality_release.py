@@ -1,0 +1,49 @@
+import hashlib
+from pathlib import Path
+
+import pytest
+
+
+@pytest.fixture
+def release(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts"))
+    from download_reality_release import install
+
+    assets, checkout = tmp_path / "assets", tmp_path / "clone"
+    assets.mkdir()
+    files = []
+    for name in ("head.pt", "config.json"):
+        data = name.encode()
+        (assets / name).write_bytes(data)
+        files.append(dict(asset=name, path="runs/model/" + name,
+                          sha256=hashlib.sha256(data).hexdigest(), bytes=len(data)))
+    manifest = dict(repository="southern-star/keisim", tag="test", files=files)
+    return assets, checkout, lambda: install(checkout, manifest, assets)
+
+
+def test_installed_release_can_be_verified_offline(release):
+    assets, checkout, install = release
+    install()
+    for asset in assets.iterdir():
+        assert (checkout / "runs/model" / asset.name).read_bytes() == asset.read_bytes()
+        asset.unlink()
+    install()
+
+
+def test_corrupt_download_leaves_no_partial_install(release):
+    assets, checkout, install = release
+    (assets / "config.json").write_bytes(b"x" * len("config.json"))
+    with pytest.raises(ValueError, match="SHA-256"):
+        install()
+    assert not list((checkout / "runs/model").iterdir())
+
+
+def test_existing_different_weights_are_preserved(release):
+    _, checkout, install = release
+    other = checkout / "runs/model/config.json"
+    other.parent.mkdir(parents=True)
+    other.write_bytes(b"another model")
+    with pytest.raises(ValueError, match="SHA-256"):
+        install()
+    assert other.read_bytes() == b"another model"
+    assert not (other.parent / "head.pt").exists()

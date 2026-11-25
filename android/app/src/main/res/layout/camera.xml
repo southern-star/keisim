@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/screen"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000">
+
+    <ImageView
+        android:id="@+id/generated"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:contentDescription="KeiRealityの生成映像。タップで操作の表示を切り替えます。"
+        android:focusable="true"
+        android:scaleType="fitCenter" />
+
+    <FrameLayout
+        android:id="@+id/controls"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:background="#DF151919">
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp">
+            <TextView
+                android:id="@+id/status"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:paddingEnd="12dp"
+                android:text="背面カメラを水平に構えてください。映像をタップすると操作できます。"
+                android:textColor="#E6EBE2"
+                android:textSize="14sp" />
+            <Button
+                android:id="@+id/start"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:backgroundTint="#D6EAAF"
+                android:text="カメラを開始"
+                android:textColor="#152518" />
+        </LinearLayout>
+    </FrameLayout>
+</FrameLayout>

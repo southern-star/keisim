@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#141719">
+<link rel="icon" href="data:,">
+<title>KeiPilot × KeiReality · ライブ走行</title>
+<style>
+  :root{color-scheme:dark;font-family:Inter,"Noto Sans CJK JP",system-ui,sans-serif;background:#121617;color:#eef1ee;--muted:#acb5b0;--line:#36403b;--amber:#edb481}
+  *{box-sizing:border-box}body{margin:0}main{max-width:2000px;margin:auto;padding:clamp(12px,2vw,30px)}
+  header,.controls,.caption,.actions,.meters{display:flex;align-items:center;gap:.6rem;flex-wrap:wrap}
+  header{justify-content:space-between;margin-bottom:1rem}h1{font-size:clamp(1.12rem,2vw,1.75rem);letter-spacing:-.025em;margin:0}
+  h1 small{font-size:.55em;color:var(--muted);font-weight:500;white-space:nowrap;margin-left:.6rem}
+  button,select{font:inherit;font-size:.87rem;color:inherit;background:#242a27;border:1px solid #414a46;border-radius:6px;padding:.43rem .7rem;min-height:36px;cursor:pointer}
+  button:hover,select:hover{border-color:#99a89a}button:disabled,select:disabled{opacity:.52;cursor:default}
+  #resolution-link{color:var(--amber);font-size:.86rem;text-underline-offset:.2em}
+  #start{background:#e8e7dc;color:#141816;font-weight:650} :focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+  #panes{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,2fr);align-items:center;gap:clamp(.55rem,1.2vw,1.4rem);padding:.65rem 0}
+  #inputs{display:grid;gap:.7rem}figure{margin:0;min-width:0}figcaption{font-size:.82rem;color:#c7cfca;margin-bottom:.3rem}
+  .screen{position:relative;background:#0b0d0c}canvas{display:block;width:100%;height:auto;aspect-ratio:2;image-rendering:pixelated}
+  .waiting::after{content:"映像を待っています";position:absolute;inset:0;display:grid;place-items:center;color:#89948d;font-size:.88rem}
+  .caption{justify-content:space-between}.caption output{font-variant-numeric:tabular-nums;color:var(--muted)}
+  #panes.pilot{display:block}#panes.pilot #inputs{grid-template-columns:repeat(2,minmax(0,1fr))}#panes.pilot #reality-pane{display:none}
+  .meters{margin-top:.7rem;padding:.8rem 0;border-block:1px solid var(--line);gap:.6rem clamp(1rem,2.8vw,3rem);list-style:none}
+  .meters li{min-width:6rem}.meters small{display:block;color:var(--muted);font-size:.72rem}.meters output{display:block;font-size:clamp(.95rem,1.4vw,1.3rem);font-variant-numeric:tabular-nums}
+  .actions{min-height:2.9rem;gap:.7rem 1.5rem;color:#ccd4cd;font-size:.85rem;font-variant-numeric:tabular-nums}
+  .angle{display:inline-flex;align-items:center;gap:.4rem;margin-left:auto}input[type="range"]{accent-color:var(--amber);width:clamp(72px,12vw,190px)}
+  #status{min-height:1.5rem;margin:.3rem 0 .9rem;color:var(--muted);font-size:.87rem}details{border-top:1px solid var(--line);padding:.7rem 0;overflow:auto}
+  summary{cursor:pointer;width:fit-content}table{border-collapse:collapse;white-space:nowrap;margin:.75rem 0;font-size:.85rem}th,td{text-align:right;padding:.36rem .8rem;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}
+  th:first-child,td:first-child,th:nth-child(2),td:nth-child(2){text-align:left}details p{font-size:.8rem;color:var(--muted)}
+  [hidden]{display:none!important}
+  @media(max-width:670px){main{padding:10px}.controls{gap:.32rem}button,select{padding:.3rem .45rem}.meters{gap:.5rem 1rem}
+    #panes{display:flex;flex-direction:column-reverse;align-items:stretch}#inputs{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .angle{margin-left:0}.actions{gap:.4rem .7rem}h1 small{font-size:.65em}}
+</style>
+<main>
+  <header>
+    <h1>KeiPilot × KeiReality<small>ライブ走行</small></h1>
+    <div class="controls">
+      <a id="resolution-link" href="/resolution/" hidden>解像度を比較</a>
+      <select id="town" aria-label="走行する町" disabled><option value="40">町40</option><option value="41">町41</option></select>
+      <select id="mode" aria-label="表示方式" disabled>
+        <option value="stable">ちらつき抑制</option><option value="sharp">輪郭優先</option><option value="pilot">KeiPilot単体</option>
+      </select>
+      <button id="start" disabled>走行開始</button><button id="stop" disabled>停止</button><button id="full">全画面</button>
+    </div>
+  </header>
+  <section id="panes" aria-label="同じ時刻のカメラ入力と生成映像">
+    <div id="inputs">
+      <figure><figcaption>運転入力 · 広角 180°</figcaption><div class="screen waiting"><canvas id="wide" width="320" height="160"></canvas></div></figure>
+      <figure><figcaption>運転入力 · 望遠 50°</figcaption><div class="screen waiting"><canvas id="narrow" width="320" height="160"></canvas></div></figure>
+    </div>
+    <figure id="reality-pane"><figcaption class="caption">KeiReality <output id="view-label"></output></figcaption>
+      <div class="screen waiting"><canvas id="generated" width="256" height="128"></canvas></div></figure>
+  </section>
+  <ul class="meters" aria-label="直近の走行と処理速度">
+    <li><small>速度 / 目標　km/h</small><output id="speed">—</output></li>
+    <li><small>走行時間 / 距離</small><output id="progress">—</output></li>
+    <li><small>制御　Hz</small><output id="control">—</output></li>
+    <li><small>制御処理 p95　ms</small><output id="p95">—</output></li>
+    <li><small>生成 / ブラウザ表示　fps</small><output id="fps">—</output></li>
+    <li><small>観測開始 → 生成完了　ms</small><output id="latency">—</output></li>
+  </ul>
+  <div class="actions">
+    <span>操舵 <output id="steer">—</output></span><span>アクセル <output id="throttle">—</output></span>
+    <span>ブレーキ <output id="brake">—</output></span>
+    <label class="angle" id="angle-box">生成視点 <input id="angle" type="range" min="-36" max="36" value="0" aria-label="生成視点の角度">
+      <output id="angle-value">0°</output></label>
+  </div>
+  <p id="status" role="status">走行開始で、KeiPilotが発進します。</p>
+  <details id="bench"><summary>町40・41の計測結果</summary><div id="benchmark"></div></details>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const names = {pilot:"KeiPilot単体", sharp:"輪郭優先", stable:"ちらつき抑制", stable384:"384×192 試作版"};
+const canvases = ["wide","narrow","generated"].map(id => $(id).getContext("2d",{alpha:false}));
+const format = (n, places=1) => Number.isFinite(n) ? n.toFixed(places) : "—";
+const deg = angle => (angle > 0 ? "+" : "") + angle + "°";
+const query = new URLSearchParams(location.search);
+if (["40","41"].includes(query.get("town"))) $("town").value = query.get("town");
+let session = null, busy = false, stopping = false;
+const headers = id => id ? {"X-KeiReality":"closed-loop","X-Kei-Session":id} : {"X-KeiReality":"closed-loop"};
+const post = (url,id) => fetch(url,{method:"POST",headers:headers(id)});
+
+function layout() {
+  const pilot = $("mode").value === "pilot";
+  $("panes").classList.toggle("pilot", pilot);
+  $("angle-box").hidden = pilot;
+  $("view-label").textContent = names[$("mode").value];
+}
+function controls(running) {
+  $("start").disabled = $("mode").disabled = $("town").disabled = running;
+  $("stop").disabled = !session || stopping;
+  $("angle").disabled = !session || stopping;
+}
+function clearFrame() {
+  for (const ctx of canvases) {
+    ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height);
+    ctx.canvas.parentElement.classList.add("waiting");
+  }
+  for (const item of document.querySelectorAll(".meters output,.actions span output")) item.textContent = "—";
+  delete $("panes").dataset.tick;
+}
+function show(bitmap, meta, shownHz) {
+  const shape = meta.sizes || (bitmap.width === 896 ? [[320,160],[320,160],[256,128]] : [[320,160],[320,160]]);
+  if (shape.length<2 || shape.length>3 || bitmap.height!==Math.max(...shape.map(s=>s[1])) ||
+      bitmap.width!==shape.reduce((v,s)=>v+s[0],0)) throw Error("カメラの寸法が一致しません");
+  let x = 0;
+  for (const [i,[w,h]] of shape.entries()) {
+    const ctx = canvases[i];
+    if (ctx.canvas.width!==w || ctx.canvas.height!==h) { ctx.canvas.width=w; ctx.canvas.height=h; }
+    ctx.drawImage(bitmap,x,0,w,h,0,0,w,h);
+    ctx.canvas.parentElement.classList.remove("waiting");
+    x += w;
+  }
+  $("panes").dataset.tick = meta.tick;
+  $("speed").textContent = format(meta.speed) + " / " + format(meta.target);
+  $("progress").textContent = format(meta.sim_time) + " 秒 / " + format(meta.distance,0) + " m";
+  $("control").textContent = format(meta.control_hz,2);
+  $("p95").textContent = format(meta.work_p95);
+  $("latency").textContent = format(meta.latency_ms);
+  $("fps").textContent = format(meta.generation_fps) + " / " + format(shownHz);
+  $("steer").textContent = format(meta.action[0],2);
+  $("throttle").textContent = format(meta.action[1]*100,0) + "%";
+  $("brake").textContent = format(meta.action[2]*100,0) + "%";
+  $("view-label").textContent = names[$("mode").value] + "　" + deg(meta.angle);
+}
+async function live(id) {
+  let after = -1;
+  const shown = [];
+  while (session === id) {
+    if (document.hidden) await new Promise(resolve=>document.addEventListener("visibilitychange",resolve,{once:true}));
+    const response = await fetch("/frame?after="+after,{headers:headers(id),cache:"no-store"});
+    if (response.status === 204) continue;
+    if (response.status === 410) {
+      const info = await response.json();
+      const reason = {stopped:"停止",success:"ルート完走",blocked:"進行停止",route_deviation:"ルート逸脱"}[info.stop_reason] || info.stop_reason;
+      let summary = reason+" · "+format(info.time)+" 秒 / "+format(info.distance)+" m / 違反 "+info.infractions.length+" 件";
+      if (info.timing) {
+        summary += "　全走行の制御 "+format(info.timing.wall_control_hz,2)+" Hz";
+        if ($("mode").value!=="pilot") summary += " / 生成 "+info.timing.generated_frames+" コマ";
+      }
+      $("status").textContent = summary;
+      break;
+    }
+    if (response.status === 409) throw Error("別の走行に切り替わりました");
+    if (!response.ok) throw Error("走行映像を取得できませんでした");
+    const meta = JSON.parse(response.headers.get("X-Kei-Frame"));
+    after = meta.tick;
+    if (staleView(meta)) { await response.body.cancel(); continue; }
+    const bitmap = await createImageBitmap(await response.blob());
+    try {
+      const decoded = performance.now();
+      const now = await new Promise(resolve=>requestAnimationFrame(resolve));
+      if (session !== id || staleView(meta) || now-decoded > 500) continue;
+      shown.push(now); if (shown.length > 30) shown.shift();
+      const rate = shown.length > 1 ? 1000*(shown.length-1)/(now-shown[0]) : null;
+      show(bitmap,meta,rate);
+      if (!stopping) $("status").textContent = "町"+$("town").value+"をKeiPilotが運転中";
+    } finally { bitmap.close(); }
+  }
+}
+function staleView(meta) {
+  return $("mode").value !== "pilot" && meta.angle !== $("angle").valueAsNumber && !stopping;
+}
+async function start() {
+  if (busy) return;
+  busy = true; stopping = false;
+  $("start").textContent="走行中";
+  $("angle").value = 0; $("angle-value").textContent = "0°";
+  controls(true); layout(); clearFrame();
+  $("status").textContent = "町とカメラを準備しています…";
+  try {
+    const response = await post("/start?town="+$("town").value+"&mode="+$("mode").value);
+    if (!response.ok) throw Error("走行を開始できませんでした");
+    session = await response.text();
+    controls(true);
+    await live(session);
+  } catch (error) {
+    $("status").textContent = error.message;
+  } finally {
+    busy = false; stopping = false; session = null;
+    controls(false); $("start").textContent="同じ町から再走";
+  }
+}
+$("start").onclick = start;
+for (const select of [$("town"),$("mode")]) select.onchange = () => {
+  layout(); clearFrame();
+  $("start").textContent="走行開始";
+  $("status").textContent="走行開始で、町"+$("town").value+"を最初から走ります。";
+};
+$("stop").onclick = async () => {
+  if (!session || stopping) return;
+  stopping = true; controls(true);
+  $("status").textContent = "走行を停止しています…";
+  try { await post("/stop",session); } catch { $("status").textContent="停止要求を送れませんでした"; stopping=false; controls(true); }
+};
+let angleRequest = false;
+async function sendAngle() {
+  if (angleRequest || !session) return;
+  const id = session;
+  angleRequest = true;
+  try {
+    let sent;
+    do {
+      sent = $("angle").value;
+      const response = await post("/angle?value="+sent,id);
+      if (!response.ok) throw Error("視点を変更できませんでした");
+    } while (session === id && sent !== $("angle").value);
+  } catch (error) { $("status").textContent=error.message; }
+  finally { angleRequest=false; }
+}
+$("angle").oninput = () => { $("angle-value").textContent=deg($("angle").valueAsNumber); sendAngle(); };
+$("full").hidden = !document.fullscreenEnabled;
+$("full").onclick = () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+document.addEventListener("fullscreenchange",()=>{ $("full").textContent=document.fullscreenElement?"全画面を終了":"全画面"; });
+$("bench").ontoggle = async () => {
+  if (!$("bench").open) return;
+  try {
+    const response = await fetch("/metrics.json",{cache:"no-store"});
+    if (!response.ok) throw Error();
+    const report = await response.json(), table = document.createElement("table");
+    const measured = await fetch("/browser.json",{cache:"no-store"});
+    const browser = measured.ok ? await measured.json() : null;
+    const readReport = async path => {
+      const file = await fetch(path,{cache:"no-store"});
+      return file.ok ? file.json() : null;
+    };
+    const [resolution, resolutionBrowser] = await Promise.all([
+      readReport("/resolution/timing.json"), readReport("/resolution/browser.json")
+    ]);
+    const row = (values,head=false) => {
+      const tr = table.insertRow();
+      for (const text of values) { const c=document.createElement(head?"th":"td"); c.textContent=text; tr.append(c); }
+    };
+    row(["町","条件","制御 Hz","制御 p95 ms","100 ms超","生成 fps","Chrome表示 fps","走行 m","違反"],true);
+    for (const town of ["40","41"]) {
+      const cases = [];
+      if (resolution) {
+        for (const [mode,size] of [["stable","256×128"],["stable384","384×192"]]) {
+          cases.push(["解像度比較 "+size,resolution.runs[town][mode],resolutionBrowser?.results[town][mode].display_fps]);
+        }
+      }
+      for (const mode of ["pilot","sharp","stable"]) {
+        cases.push([names[mode],report.results[town][mode],browser?.results[town][mode].display_fps]);
+      }
+      if (report.pilot_repeat) cases.push(["単体・再計測",report.pilot_repeat.towns[town].summary,null]);
+      for (const [name,r,shown] of cases) row([town,name,format(r.wall_control_hz,2),format(r.control_work_ms.p95),
+        r.over_100ms+"/"+r.measured_ticks,format(r.generated_fps,2),format(shown,2),format(r.result.distance),r.result.infractions.length]);
+    }
+    const note=document.createElement("p");
+    note.textContent="各条件とも発進から"+format(report.ticks_requested*report.control_dt,0)+"秒。最初の"+report.warmup_ticks+
+      "コマを除き、カメラ取得開始から操作適用までを計測。"+(browser?"Chrome表示は別走行で"+browser.measured_displayed+"コマを実測。":"");
+    $("benchmark").replaceChildren(table,note);
+  } catch { $("benchmark").textContent="計測結果を読み込めませんでした。"; }
+};
+async function initialize() {
+  try {
+    const response = await fetch("/modes.json");
+    if (response.ok) {
+      const info = await response.json();
+      if (info.modes.includes("stable384")) {
+        $("mode").add(new Option(names.stable384,"stable384"));
+        $("mode").value = "stable384";
+      }
+      $("resolution-link").hidden=!info.comparison;
+    }
+  } catch { /* The original local server also supports the three existing modes. */ }
+  if ([...$("mode").options].some(o=>o.value===query.get("mode"))) $("mode").value=query.get("mode");
+  layout(); controls(false);
+  if (query.get("run")==="1") start();
+}
+initialize();
+</script>
+</html>

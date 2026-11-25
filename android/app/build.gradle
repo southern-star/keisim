@@ -1,0 +1,38 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace = 'jp.keireality.camera'
+    compileSdk = 36
+    defaultConfig {
+        applicationId = 'jp.keireality.camera'
+        minSdk = 29
+        targetSdk = 36
+        versionCode = 2
+        versionName = '0.2'
+        testInstrumentationRunner = 'jp.keireality.camera.CameraCheck'
+        ndk { abiFilters 'arm64-v8a', 'x86_64' }
+    }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    androidResources { noCompress += 'onnx' }
+}
+
+dependencies {
+    def cachedAar = providers.gradleProperty('onnxRuntimeAar')
+    if (cachedAar.isPresent()) {
+        implementation files(cachedAar.get())
+    } else {
+        implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.23.2'
+    }
+}
+
+def modelAsset = layout.projectDirectory.file('src/main/assets/keireality.onnx')
+tasks.named('preBuild') {
+    doFirst {
+        if (!modelAsset.asFile.isFile()) {
+            throw new GradleException('KeiReality model missing. From the keisim root run: python scripts/export_reality_android.py')
+        }
+    }
+}

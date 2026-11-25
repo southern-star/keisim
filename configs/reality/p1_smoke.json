@@ -1,0 +1,7 @@
+{
+  "epochs": 150, "batch_size": 4, "learning_rate": 0.0003, "weight_decay": 0.01, "seed": 17,
+  "limit": 12, "max_steps": 300,
+  "class_weights": [1, 1, 2.5, 1, 1, 1, 1, 1.5, 4, 4, 4, 3, 4],
+  "selection": "same 12 evenly spaced training frames for the tiny overfit only",
+  "gate": "final training RGB L1 below 70 percent of initial L1; both mismatched and zero features increase L1"
+}

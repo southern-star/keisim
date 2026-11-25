@@ -232,7 +232,8 @@ class KeiPilot(nn.Module):
         return self._depth(p, half)
 
     def forward(self, img, cmd, tp, with_seg=True, speed=None, speed_known=None, img_prev=None, has_prev=None,
-                stand_m=None, stand_known=None, with_future=False, fut_dt=None, fut_v=None, with_depth=False):
+                stand_m=None, stand_known=None, with_future=False, fut_dt=None, fut_v=None, with_depth=False,
+                with_reality_features=False, with_reality_pyramid=False, with_reality_stem=False):
         """img: (B,3,H,W) uint8/float RGB in [0,255]; (B,n_cams,3,H,W) for camera rigs (out["seg"] is then
         (B*n_cams, ...)). speed (B,) m/s is used by speed-input models only;
         speed_known (B,) bool hides it per sample (False -> the learned 'unknown' embedding).
@@ -242,7 +243,8 @@ class KeiPilot(nn.Module):
         logits of every camera's segmentation fut_dt (B,) s ahead (1 s if None), given the recorded ego speed
         fut_v (B,) m/s (0 if None).
         with_depth (models with the depth head): out["depth"] (B*n_cams, 2, H/2, W/2), see _depth and depth_metres;
-        the driving outputs are computed by the same operations as without it."""
+        the driving outputs are computed by the same operations as without it.
+        with_reality_stem: expose the detached half-resolution driving stem features [B, K, 64, H/2, W/2]."""
         B = img.shape[0]
         if self.n_cams > 1:
             img = img.flatten(0, 1).contiguous(memory_format=torch.channels_last)
@@ -258,7 +260,7 @@ class KeiPilot(nn.Module):
                     xp = xp * has_prev.to(xp.dtype)[:, None, None, None]
             x = torch.cat([x, xp], 1)
         with_depth = with_depth and self.aux_depth
-        if with_depth:          # the stem's layers one by one (the same operations), to keep its 1/2 features
+        if with_depth or with_reality_stem:  # keep the shared 1/2 features from the same driving pass
             half = self.stem[2](self.stem[1](self.stem[0](x)))
             x = self.stem[3](half)
         else:
@@ -292,6 +294,13 @@ class KeiPilot(nn.Module):
             t3 = (self.proj3(c3) + self.pos3).flatten(2).transpose(1, 2)
             t4 = (self.proj4(c4) + self.pos4).flatten(2).transpose(1, 2)
         mem = torch.cat([t3, t4], 1)
+        if with_reality_features:
+            out["reality_mem"] = mem.detach()
+        if with_reality_pyramid:
+            out["reality_c2"] = c2.detach().unflatten(0, (B, self.n_cams))
+            out["reality_c3"] = c3.detach().unflatten(0, (B, self.n_cams))
+        if with_reality_stem:
+            out["reality_stem"] = half.detach().unflatten(0, (B, self.n_cams))
         cond = self.cond(self.encode_cond(cmd, tp))
         if self.speed_input:
             unknown = self.speed_unknown.to(cond.dtype)[None].expand_as(cond)

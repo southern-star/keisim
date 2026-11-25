@@ -1,0 +1,15 @@
+{
+  "seed": 2071, "epochs": 5, "batch_pairs": 8, "learning_rate": 0.0006,
+  "end_learning_rate": 0.00006, "weight_decay": 0.005, "edge_threshold": 0.10,
+  "train_towns": [0,1,2,3,4,5,6,7], "validation_towns": [40,41],
+  "train_angles": [0,-36,36], "evaluation_angles": [0,-36,36,-18,18],
+  "validation_ticks": 96, "fresh_ticks": 320, "fps": 10,
+  "fresh_towns": [20400,20401,20402,20403], "fresh_episode_seeds": [32040,32041,32042,32043],
+  "fresh_start_steps": [0,30,60,90],
+  "selection": "Use the fixed final update from all five epochs. No tuning or checkpoint selection on towns 40/41.",
+  "control": "The unchanged Phase 2 temporal best checkpoint, FP32 native 256x128. Both paths use the same frozen backbone features, causal history, view and tick. Only B enables the learned predicted-depth projection branch.",
+  "gate": "On the chase camera of each of towns 40 and 41 separately, B must increase signed aligned silhouette contrast on visible vehicle boundaries, and must not increase either static warped RGB-residual flicker or RGB L1 on newly vacated surfaces. Require measured pixels for all three. Compare unrounded pooled pixel sums. Only a validation pass releases the four fresh 32-second runs.",
+  "silhouette": "Horizontal/vertical neighbors, both currently visible, exactly one labeled vehicle, mean absolute true RGB change at least 0.10. Sum predicted gradient dotted with true gradient divided by true gradient energy.",
+  "stability": "Use consecutive 10Hz frames within each episode and view. Match static surfaces using the existing Phase 2 correspondence. Flicker is mean absolute change in prediction-minus-teacher RGB. Vacated error is RGB L1 on current static pixels occluded by a nearer vehicle or pedestrian in the previous frame.",
+  "media": "For each town save the complete chase movie and a crop at the time with the largest currently visible vehicle component, selected using teacher labels only."
+}

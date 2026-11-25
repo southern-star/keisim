@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#141719">
+  <link rel="icon" href="data:,">
+  <title>走行比較 · KeiReality</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Inter, "Noto Sans CJK JP", "Hiragino Kaku Gothic ProN", sans-serif;
+      color: #f0f2f0;
+      background: #141719;
+      --muted: #abb3b3;
+      --border: #3d4345;
+      --accent: #e9aa72;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; height: 100vh; height: 100dvh; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; }
+    button, select, input { font: inherit; }
+    button, select {
+      border: 1px solid var(--border); border-radius: .45rem; background: #222628;
+      color: inherit; min-height: 2.35rem; padding: .35rem .7rem; cursor: pointer;
+    }
+    button:hover, select:hover { background: #333839; }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .toolbar, .transport { display: flex; align-items: center; gap: 1.1rem; padding: .72rem clamp(.6rem, 1.6vw, 1.7rem); background: #181b1d; z-index: 2; }
+    .toolbar { border-bottom: 1px solid #303436; }
+    h1 { margin: 0 auto 0 0; font-size: .98rem; font-weight: 650; white-space: nowrap; }
+    h1 span { font-weight: 450; color: var(--muted); border-left: 1px solid var(--border); padding-left: .65rem; margin-left: .55rem; }
+    .modes, .options, .player { display: flex; align-items: center; gap: .35rem; }
+    .modes { background: #101214; border-radius: .55rem; padding: .2rem; border: 1px solid #34393b; }
+    .modes button { background: transparent; border-color: transparent; font-size: .87rem; min-height: 2rem; }
+    .modes button:hover { background: #24282a; }
+    .modes button[aria-pressed="true"] { background: #e9e6df; color: #191c1d; }
+    kbd { font: .72rem ui-monospace, monospace; margin-left: .4rem; opacity: .65; }
+    .options { margin-left: auto; }
+    .options select, .options button { font-size: .86rem; }
+    .stage { position: relative; display: grid; place-items: center; min-height: 0; min-width: 0; background: #0b0d0e; container-type: size; }
+    .picture { position: relative; width: min(100cqw, 200cqh); aspect-ratio: 2; overflow: hidden; }
+    canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
+    .picture.pending { visibility: hidden; }
+    #message { position: absolute; max-width: 90%; padding: .65rem 1rem; background: #202527; border-radius: .45rem; text-align: center; }
+    [hidden] { display: none !important; }
+    #wipe { position: absolute; inset: 0; --cut: 50%; }
+    #split {
+      position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0;
+      appearance: none; background: transparent; cursor: ew-resize; z-index: 1; touch-action: pan-y;
+    }
+    #split::-webkit-slider-thumb { appearance: none; width: 0; height: 1px; }
+    #split::-moz-range-thumb { width: 0; height: 1px; border: 0; }
+    .divider { position: absolute; inset-block: 0; left: var(--cut); width: 2px; transform: translateX(-50%); background: #fff9; box-shadow: 0 0 2px #111a; }
+    .divider::after {
+      content: "‹ ›"; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      background: #141718db; color: white; border: 1px solid #fffc; border-radius: 1rem;
+      padding: .08rem .34rem .17rem; white-space: nowrap; font: 600 .92rem system-ui, sans-serif;
+    }
+    #split:focus-visible + .divider { background: var(--accent); }
+    #split:focus-visible + .divider::after { outline: 2px solid var(--accent); }
+    .tag { position: absolute; top: .65rem; padding: .25rem .6rem; color: white; background: #131719ce; border-radius: .3rem; font-size: .78rem; pointer-events: none; }
+    .tag.left { left: .65rem; } .tag.right { right: .65rem; }
+    .transport { border-top: 1px solid #303436; }
+    #drive-link { color: var(--accent); font-size: .82rem; white-space: nowrap; text-underline-offset: .2em; }
+    .player button { min-width: 2.45rem; }
+    #play { min-width: 5.1rem; }
+    #seek { accent-color: var(--accent); flex: 1; min-width: 3rem; height: 2rem; cursor: pointer; }
+    .readout { white-space: nowrap; color: var(--muted); font-size: .85rem; font-variant-numeric: tabular-nums; }
+    #time { color: #f0f2f0; }
+    #angle { display: inline-block; min-width: 3.4em; text-align: right; }
+    :fullscreen .stage { position: absolute; inset: 0; }
+    :fullscreen .toolbar, :fullscreen .transport {
+      position: absolute; inset-inline: 0; background: #181b1df2; transition: opacity .18s;
+    }
+    :fullscreen .toolbar { top: 0; } :fullscreen .transport { bottom: 0; }
+    :fullscreen .quiet { opacity: 0; pointer-events: none; }
+    @media (max-width: 900px) {
+      .toolbar, .transport { gap: .55rem; padding: .45rem .6rem; }
+      h1 span, kbd { display: none; }
+      .modes button, .options button, .options select { padding-inline: .55rem; }
+    }
+    @media (max-width: 655px) {
+      .toolbar { flex-wrap: wrap; } .modes { order: 1; width: 100%; }
+      .modes button { flex: 1; } .options { gap: .25rem; }
+      .transport { display: grid; grid-template-columns: auto minmax(1rem, 1fr) auto auto; column-gap: .35rem; }
+      #seek { width: 100%; min-width: 0; margin: 0; } #drive-link { font-size: .75rem; }
+      .player { gap: .2rem; } .player button { min-width: 1.9rem; padding-inline: .35rem; } #play { min-width: 3.5rem; }
+      .total { display: none; } .readout { font-size: .78rem; }
+    }
+    @media (max-height: 500px) and (orientation: landscape) {
+      .toolbar, .transport { padding-block: .2rem; } .toolbar { flex-wrap: nowrap; }
+      h1, kbd { display: none; } .modes { width: auto; order: 0; }
+      .modes button { white-space: nowrap; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      :fullscreen .toolbar, :fullscreen .transport { transition: none; }
+    }
+  </style>
+</head>
+<body>
+  <header class="toolbar">
+    <h1>KeiReality<span>走行比較</span></h1>
+    <div class="modes" role="group" aria-label="表示方式">
+      <button type="button" data-mode="sharp" aria-pressed="false">輪郭優先<kbd>1</kbd></button>
+      <button type="button" data-mode="stable" aria-pressed="false">ちらつき抑制<kbd>2</kbd></button>
+      <button type="button" data-mode="wipe" aria-pressed="true">左右比較<kbd>3</kbd></button>
+    </div>
+    <div class="options">
+      <select id="town" aria-label="町"><option value="40">町40</option><option value="41" selected>町41</option></select>
+      <select id="track" aria-label="収録視点"><option value="sweep">左右に振る視点</option><option value="chase">固定視点</option></select>
+      <button id="fullscreen" type="button" title="全画面表示（F）">全画面</button>
+    </div>
+  </header>
+  <main class="stage" aria-label="同じ走行フレームの比較">
+    <div class="picture pending">
+      <canvas id="scene" aria-label="走行映像" width="256" height="128"></canvas>
+      <div id="wipe">
+        <input id="split" type="range" min="0" max="256" value="128" aria-label="左右の比較境界" title="ドラッグで境界を移動">
+        <div class="divider"></div>
+        <span class="tag left">輪郭優先</span><span class="tag right">ちらつき抑制</span>
+      </div>
+    </div>
+    <p id="message" role="status">映像を読み込み中…</p>
+  </main>
+  <footer class="transport">
+    <div class="player" role="group" aria-label="再生操作">
+      <button id="previous" type="button" aria-label="1コマ戻る" title="1コマ戻る（←）">◀</button>
+      <button id="play" type="button" title="再生・停止（スペース）">一時停止</button>
+      <button id="next" type="button" aria-label="1コマ進む" title="1コマ進む（→）">▶</button>
+    </div>
+    <input id="seek" type="range" min="0" max="95" value="0" aria-label="走行の再生位置">
+    <div class="readout"><span id="time">0.0 秒</span><span class="total"> / <span id="duration">9.6 秒</span></span>
+      <span id="angle" aria-label="視点の角度">0°</span></div>
+    <a id="drive-link" target="_blank" rel="noopener" hidden>ライブ走行</a>
+  </footer>
+  <script src="clips.js"></script>
+  <script>
+    const $ = (selector) => document.querySelector(selector);
+    const town = $("#town");
+    const track = $("#track");
+    const canvas = $("#scene");
+    const ctx = canvas.getContext("2d", { alpha: false });
+    const picture = $(".picture");
+    const message = $("#message");
+    const seek = $("#seek");
+    const wipe = $("#wipe");
+    const split = $("#split");
+    const modes = [...document.querySelectorAll("[data-mode]")];
+    const params = new URLSearchParams(location.search);
+    let mode = "wipe";
+    let tick = 0;
+    let active;
+    let playing = !matchMedia("(prefers-reduced-motion: reduce)").matches;
+    let animation = null;
+    let lastTime = null;
+    let idleTimer;
+
+    function paint() {
+      const { width, height, fps, perSheet, angles } = clips;
+      const index = Math.floor(tick / perSheet);
+      if (clips.windowed && active.center !== index) preloadAround(active,index);
+      const image = active.images[index];
+      seek.value = tick;
+      const time = (tick / fps).toFixed(1) + " 秒";
+      $("#time").textContent = time;
+      seek.setAttribute("aria-valuetext", time);
+      const angle = track.value === "sweep" ? angles[tick] : 0;
+      $("#angle").textContent = (angle > 0 ? "+" : "") + angle + "°";
+      const pending = !image || active.failed;
+      picture.classList.toggle("pending", pending);
+      message.hidden = !pending;
+      if (pending) {
+        message.textContent = active.failed ? "映像を読み込めませんでした。ページを再読み込みしてください。" : "映像を読み込み中…";
+        return;
+      }
+
+      const y = (tick % perSheet) * height;
+      const cut = Number(split.value);
+      if (mode === "wipe") {
+        if (cut > 0) ctx.drawImage(image, 0, y, cut, height, 0, 0, cut, height);
+        if (cut < width) {
+          ctx.drawImage(image, width + cut, y, width - cut, height, cut, 0, width - cut, height);
+        }
+      } else {
+        ctx.drawImage(image, mode === "sharp" ? 0 : width, y, width, height, 0, 0, width, height);
+      }
+    }
+
+    function advance(now) {
+      if (lastTime === null) lastTime = now;
+      const period = 1000 / clips.fps;
+      const steps = Math.floor((now - lastTime) / period);
+      if (steps) {
+        tick = (tick + steps) % clips.angles.length;
+        lastTime += steps * period;
+        paint();
+      }
+      if (active.ready) animation = requestAnimationFrame(advance);
+    }
+
+    function resetClock() {
+      if (animation !== null) cancelAnimationFrame(animation);
+      animation = null;
+      lastTime = null;
+      if (playing && active?.ready && !document.hidden) animation = requestAnimationFrame(advance);
+    }
+
+    async function decodeSheet(paths, i) {
+      const image = new Image();
+      image.src = paths[i];
+      await image.decode();
+      const rows = Math.min(clips.perSheet, clips.angles.length - i * clips.perSheet);
+      if (image.naturalWidth !== 2 * clips.width || image.naturalHeight !== rows * clips.height) {
+        throw new Error("Incomplete frame sheet: " + paths[i]);
+      }
+      return image;
+    }
+
+    function preloadAround(clip, index) {
+      clip.center = index;
+      const count = clip.paths.length;
+      clip.wanted = new Set([0,1,2,-1].map(offset=>(index+offset+count)%count));
+      for (const key of Object.keys(clip.images)) if (!clip.wanted.has(Number(key))) delete clip.images[key];
+      if (clip.ready !== Boolean(clip.images[index])) { clip.ready=Boolean(clip.images[index]); resetClock(); }
+      for (const i of clip.wanted) {
+        if (clip.images[i] || clip.loading.has(i)) continue;
+        clip.loading.add(i);
+        decodeSheet(clip.paths,i).then(image=>{
+          if (active!==clip || !clip.wanted.has(i)) return;
+          clip.images[i]=image;
+          if (i===clip.center) { clip.ready=true; paint(); resetClock(); }
+        }).catch(error=>{
+          if (active===clip && clip.wanted.has(i)) {
+            console.error(error); clip.failed=true; clip.ready=false; resetClock(); paint();
+          }
+        }).finally(()=>clip.loading.delete(i));
+      }
+    }
+
+    async function loadClip() {
+      updateDriveLink();
+      const paths = clips.clips["town" + town.value + "-" + track.value];
+      const clip = { paths, images: [], loading:new Set(), ready: false, failed: false };
+      active = clip;
+      resetClock();
+      paint();
+      if (clips.windowed) return;
+      try {
+        await Promise.all(paths.map(async (_, i) => {
+          clip.images[i] = await decodeSheet(paths,i);
+          if (clip === active && i === Math.floor(tick / clips.perSheet)) paint();
+        }));
+        if (clip === active) {
+          clip.ready = true;
+          resetClock();
+        }
+      } catch (error) {
+        console.error(error);
+        if (clip === active) {
+          clip.failed = true;
+          paint();
+        }
+      }
+    }
+
+    function updateDriveLink() {
+      const link = $("#drive-link");
+      if (!["127.0.0.1", "localhost"].includes(location.hostname)) return;
+      if (location.port !== "8767" && !location.pathname.startsWith("/resolution/")) return;
+      const url = new URL("http://127.0.0.1:8768/");
+      const liveMode = clips.liveModes ? clips.liveModes[mode] : (mode === "sharp" ? "sharp" : "stable");
+      url.search = new URLSearchParams({town: town.value, mode: liveMode, run: "1"});
+      link.href = url.href;
+      link.hidden = false;
+    }
+
+    function setMode(next) {
+      mode = next;
+      updateDriveLink();
+      for (const button of modes) {
+        button.setAttribute("aria-pressed", String(button.dataset.mode === mode));
+      }
+      wipe.hidden = mode !== "wipe";
+      if (active) paint();
+    }
+
+    function setSplit() {
+      const fraction = split.valueAsNumber / clips.width;
+      wipe.style.setProperty("--cut", 100 * fraction + "%");
+      split.setAttribute("aria-valuetext", "左の" + $(".tag.left").textContent + " " + Math.round(100 * fraction) + "%");
+      $(".tag.left").hidden = fraction === 0;
+      $(".tag.right").hidden = fraction === 1;
+      if (active) paint();
+    }
+
+    function showControls() {
+      const bars = [$(".toolbar"), $(".transport")];
+      clearTimeout(idleTimer);
+      for (const bar of bars) bar.classList.remove("quiet");
+      if (document.fullscreenElement && playing) {
+        idleTimer = setTimeout(() => {
+          if (bars.some(bar => bar.matches(":hover") || bar.querySelector(":focus-visible"))) return;
+          for (const bar of bars) bar.classList.add("quiet");
+        }, 1800);
+      }
+    }
+
+    function setPlaying(next) {
+      playing = next;
+      $("#play").textContent = next ? "一時停止" : "再生";
+      resetClock();
+      showControls();
+    }
+
+    function seekTo(next) {
+      setPlaying(false);
+      const count = clips.angles.length;
+      tick = (next + count) % count;
+      paint();
+    }
+
+    async function toggleFullscreen() {
+      try {
+        if (document.fullscreenElement) await document.exitFullscreen();
+        else await document.documentElement.requestFullscreen();
+      } catch {
+        $("#fullscreen").textContent = "全画面を利用できません";
+      }
+    }
+
+    function start() {
+      if (clips.labels) {
+        $(".tag.left").textContent = modes[0].firstChild.textContent = clips.labels[0];
+        $(".tag.right").textContent = modes[1].firstChild.textContent = clips.labels[1];
+        $("h1 span").textContent = "解像度比較";
+        document.title = "解像度比較 · KeiReality";
+      }
+      if (clips.defaultTrack) track.value = clips.defaultTrack;
+      if (params.has("tick")) {
+        const initial=Number(params.get("tick"));
+        if (Number.isInteger(initial) && initial>=0 && initial<clips.angles.length) tick=initial;
+      }
+      if (params.get("pause")==="1") playing=false;
+      if (clips.towns.map(String).includes(params.get("town"))) town.value = params.get("town");
+      if (["sweep", "chase"].includes(params.get("view"))) track.value = params.get("view");
+      canvas.width = clips.width;
+      canvas.height = clips.height;
+      ctx.imageSmoothingEnabled = false;
+      split.max = clips.width;
+      split.value = clips.width / 2;
+      seek.max = clips.angles.length - 1;
+      $("#duration").textContent = (clips.angles.length / clips.fps).toFixed(1) + " 秒";
+      for (const button of modes) button.addEventListener("click", () => setMode(button.dataset.mode));
+      for (const select of [town, track]) select.addEventListener("change", loadClip);
+      split.addEventListener("input", setSplit);
+      seek.addEventListener("input", () => seekTo(seek.valueAsNumber));
+      $("#previous").addEventListener("click", () => seekTo(tick - 1));
+      $("#next").addEventListener("click", () => seekTo(tick + 1));
+      $("#play").addEventListener("click", () => setPlaying(!playing));
+      $("#fullscreen").hidden = !document.fullscreenEnabled;
+      $("#fullscreen").addEventListener("click", toggleFullscreen);
+      document.addEventListener("fullscreenchange", () => {
+        $("#fullscreen").textContent = document.fullscreenElement ? "全画面を終了" : "全画面";
+        showControls();
+      });
+      document.addEventListener("visibilitychange", resetClock);
+      document.addEventListener("pointermove", showControls);
+      document.addEventListener("focusin", showControls);
+      document.addEventListener("keydown", event => {
+        if (event.ctrlKey || event.altKey || event.metaKey) return;
+        showControls();
+        if (["1", "2", "3"].includes(event.key)) setMode(modes[Number(event.key) - 1].dataset.mode);
+        else if (event.key === "f" && document.fullscreenEnabled) toggleFullscreen();
+        else if (event.target.matches("select")) return;
+        else if (event.code === "Space" && !event.target.matches("button")) setPlaying(!playing);
+        else if (["ArrowLeft", "ArrowRight"].includes(event.key) && !event.target.matches("input")) {
+          seekTo(tick + (event.key === "ArrowLeft" ? -1 : 1));
+        } else return;
+        event.preventDefault();
+      });
+      setMode(mode);
+      setSplit();
+      setPlaying(playing);
+      loadClip();
+    }
+
+    if (typeof clips === "undefined") message.textContent = "映像データが見つかりません。比較ページをフォルダー内で開いてください。";
+    else start();
+  </script>
+</body>
+</html>

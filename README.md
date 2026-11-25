@@ -3,6 +3,8 @@
 **軽 (Kei) = light.** ゲームエンジンを使わず `numpy + OpenCV + PyTorch` だけで動く、
 「**シミュレータ × 軽量 E2E モデル**」を最初から一体で設計したクローズドループ環境です。
 
+[KeiReality 384×192 初版の比較画像・完走結果・起動手順](#keireality-384)
+
 > **English summary** — KeiSim is a procedurally generated, Japan-style (left-hand traffic) driving simulator
 > written in plain numpy + OpenCV (no game engine, no GPU needed; ~30× real time without rendering).
 > KeiPilot is a 15M-parameter end-to-end driving model (one camera frame + ego speed), trained inside KeiSim by
@@ -62,6 +64,42 @@ KeiPilot がブラウザの中で KeiView の街を運転します。インス�
 | クローズドループ評価 | ○ | ○ | ○ (DS/RC/IS, 違反ログ, 動画, 決定論的リプレイ) |
 
 ---
+
+<a id="keireality-384"></a>
+
+## KeiReality 384×192 初版
+
+KeiPilot Mc が広角・望遠の2眼（各320×160）を見て運転し、KeiReality が同じ時刻の視覚特徴と走行履歴から384×192の追従視点を生成します。ブラウザには運転に使った2眼と生成映像が並び、走行中も視点を左右に36°振れます。初版のタグは `keireality-384-v1.0.0` です。[GitHub Release](https://github.com/southern-star/keisim/releases/tag/keireality-384-v1.0.0)
+
+町41の8.3秒地点を拡大しました。上段は車体、下段は白線です。左から旧256版、384版、同じ車両姿勢でシミュレータが描いた正解画像です。町41の固定視点32秒では、旧版に比べて車の輪郭誤差が9.7%、白線が39.8%、静止面のちらつきが7.0%減りました。[町40・41の画質計測](docs/keireality/384-v1/quality.json)
+
+![町41の同じ場面。左から256×128、384×192、正解画像。上段は車、下段は白線。](docs/keireality/384-v1/town41-details.png)
+
+GeForce RTX 3060で各町を発進からゴールまで走らせました。制御周波数は起動直後を含む全区間の平均です。Chrome表示fpsは同じ走行で実際に表示したコマから求めました。[完走記録](docs/keireality/384-v1/routes.json)
+
+| 町 | 完走時間 | 実走距離 | 完走率 | 違反 | 制御 | Chrome表示 |
+|---|---:|---:|---:|---:|---:|---:|
+| 40 | 166.70秒 | 672.2 m | 100% | 0件 | 9.96 Hz | 9.99 fps |
+| 41 | 166.35秒 | 583.1 m | 100% | 0件 | 9.98 Hz | 9.98 fps |
+
+### ローカルでライブ走行を始める
+
+検証環境はLinux、CUDA 13対応のNVIDIAドライバー、Python 3.12、Node.js 20、Chromeです。`uv`、`npm`、WebGL 2が使えるChromeまたはChromiumを用意します。次のコマンドでソースと重みの版を揃え、9ファイル（96.5 MiB）をSHA-256で照合して配置します。[9ファイルの配置先・サイズ・SHA-256](configs/reality/releases/keireality-384-v1.0.0.json)
+
+```bash
+git clone --depth 1 --branch keireality-384-v1.0.0 https://github.com/southern-star/keisim.git
+cd keisim
+uv sync --frozen --extra cu130
+npm ci --prefix web --no-audit --no-fund
+.venv/bin/python scripts/download_reality_release.py
+.venv/bin/python scripts/serve_reality_closed_loop.py
+```
+
+サーバーの起動後、ブラウザで町を開くと384版で発進します。停止・再走・全画面表示は画面上部、生成視点の操作は映像の下にあります。Chromeの実行場所を指定する場合は環境変数 `CHROME` を設定します。[町40で走る](http://127.0.0.1:8768/?town=40&mode=stable384&run=1) ・ [町41で走る](http://127.0.0.1:8768/?town=41&mode=stable384&run=1)
+
+Androidではモデルを同梱したテスト用APKで、背面カメラから384×192の追従視点を生成できます。[APKをダウンロード](https://github.com/southern-star/keisim/releases/download/keireality-384-v1.0.0/KeiReality-Pixel11.apk) ・ [SHA256SUMS](https://github.com/southern-star/keisim/releases/download/keireality-384-v1.0.0/SHA256SUMS) ・ [Android版の使い方](android/README.md)
+
+研究記録には、同期収集・学習の再現手順と、Phase 3で条件付きMeanFlowを追加4町×32秒で評価した結果があります。[設計](docs/keireality_design.md) ・ [同期収集と学習](docs/keireality_progress.md) ・ [Phase 3の評価と再現手順](docs/keireality_phase3.md)
 
 ## 1. 何が問題で、どう解いたか
 
