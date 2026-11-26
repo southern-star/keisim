@@ -26,7 +26,7 @@ import math
 
 import numpy as np
 
-from .config import TL_RED, TL_YELLOW, TrafficConfig
+from .config import TL_GREEN, TL_RED, TL_YELLOW, TrafficConfig
 from .geometry import cumlen, curvature_of, headings_of, wrap
 from .parked import PARKED_OWNER, PK_BIKE_CLEAR
 
@@ -86,7 +86,7 @@ SIGNAL_D = 30.0             # m: a car signals a left turn from this far before 
 LOOK_BACK = 0.6             # s: the look over the shoulder before moving out
 STUCK_S = 45.0              # s: a rider standing this long out of the ego's sight is put elsewhere
 
-SIG, SIGN, YIELD, ZEBRA = range(4)
+SIG, SIGN, YIELD, ZEBRA, STAGE = range(5)
 PEDAL, COAST, BRAKE = range(3)
 
 # colours are B, G, R like the cars' and the pedestrians'
@@ -161,6 +161,86 @@ def bike_track(town, lid) -> BikeTrack:
     return tr
 
 
+def two_stage_track(town, cid):
+    """二段階右折 (TrafficConfig.bike_two_stage): how a rider turns right by right connector `cid` at a signalised
+    junction in two stages -> (c1, first, c2, second, wait_lane, exit_lane) or None. Straight on along the bicycle line
+    of the approach's straight connector c1 to where it meets the line of the straight connector c2 into the exit
+    lane (from the arm on the left as the rider comes: the far left corner), then along c2 to the exit lane. `first`
+    and `second` are the two pieces of line (BikeTrack) with c1's and c2's lane_s: the cars meet the rider as one
+    going straight on c1, then as one going straight on c2 (whoever gives way to the straight traffic gives way to it
+    too; on the right connector the oncoming right-turners did not, and car and rider stood face to face). The rider
+    waits at the corner while wait_lane's (c2's approach) light is not green. On roads with two lanes each way the
+    right connector leaves the inner lane: the rider still comes from the kerb lane and leaves by the exit's kerb
+    lane. Cached."""
+    cache = town.__dict__.setdefault("_two_stage", {})
+    if cid in cache:
+        return cache[cid]
+    lanes = town.lanes
+    C = lanes[cid]
+    out = None
+
+    def kerb(lid):              # the kerb lane of a road lane's direction (片側2車線: right turns leave the inner one)
+        L = lanes[lid]
+        return lid if L.lane_index == 0 else next((o for o in L.siblings if lanes[o].lane_index == 0), None)
+
+    if C.kind == "conn" and C.turn == "right" and C.pred and C.succ:
+        A, E = kerb(C.pred[0]), kerb(C.succ[0])
+        c1 = None if A is None else next((c for c in lanes[A].succ if lanes[c].turn == "straight" and lanes[c].succ
+                                          and lanes[lanes[c].succ[0]].lane_index == 0), None)
+        c2 = None if E is None else next((c.id for c in lanes if c.kind == "conn" and c.turn == "straight" and c.succ
+                                          and c.succ[0] == E and c.junction == C.junction and c.pred
+                                          and lanes[c.pred[0]].lane_index == 0), None)
+        if c1 is not None and c2 is not None:
+            t1, t2 = bike_track(town, c1), bike_track(town, c2)
+            hit = None
+            for a in range(len(t1.pts) - 1):
+                for b in range(len(t2.pts) - 1):
+                    x = _cross(t1.pts[a], t1.pts[a + 1], t2.pts[b], t2.pts[b + 1])
+                    if x is not None:
+                        hit = (a, b, x)
+                        break
+                if hit:
+                    break
+            if hit is not None:
+                a, b, x = hit
+                u1 = float(t1.cum[a] + np.hypot(*(x - t1.pts[a])))         # x along each line
+                u2 = float(t2.cum[b] + np.hypot(*(x - t2.pts[b])))
+                first = _sub_track(t1, 0.0, u1)
+                second = _sub_track(t2, u2, t2.length)
+                if first is not None and second is not None and first.length > 3.0 and second.length > 3.0:
+                    out = (c1, first, c2, second, lanes[c2].pred[0], E)
+    cache[cid] = out
+    return out
+
+
+def _sub_track(t, u0, u1):
+    """The piece u0..u1 of BikeTrack t (with t's lane_s), or None if it is too short."""
+    if u1 - u0 < 0.5:
+        return None
+    inner = (t.cum > u0 + 1e-6) & (t.cum < u1 - 1e-6)
+    cum = np.concatenate([[u0], t.cum[inner], [u1]])
+    tr = BikeTrack()
+    tr.pts = np.stack([np.interp(cum, t.cum, t.pts[:, 0]), np.interp(cum, t.cum, t.pts[:, 1])], -1)
+    tr.cum = cum - u0
+    tr.length = float(tr.cum[-1])
+    tr.lane_s = np.interp(cum, t.cum, t.lane_s)
+    tr.off = np.interp(cum, t.cum, t.off)
+    tr.heading = np.interp(cum, t.cum, t.heading)
+    tr.curv = np.interp(cum, t.cum, t.curv) if len(t.curv) == len(t.cum) else np.zeros(len(cum))
+    return tr
+
+
+def _cross(a, b, c, d):
+    """The point where segments ab and cd cross, or None."""
+    r, q = b - a, d - c
+    den = r[0] * q[1] - r[1] * q[0]
+    if abs(den) < 1e-9:
+        return None
+    t = ((c - a)[0] * q[1] - (c - a)[1] * q[0]) / den
+    u = ((c - a)[0] * r[1] - (c - a)[1] * r[0]) / den
+    return a + t * r if 0.0 <= t <= 1.0 and 0.0 <= u <= 1.0 else None
+
+
 def bike_lanes(town):
     """The lanes bicycles ride beside: the kerb lanes of the roads (cached)."""
     out = town.__dict__.get("_bike_lanes")
@@ -219,6 +299,8 @@ class Bicycles:
         self.n = 0
         self.route: list[list[int]] = []
         self._cat: list = []
+        self.two: list[dict] = []           # 二段階右折: lane -> the piece of line the rider takes along it
+                                            # (two_stage_track; the second piece's lane -> (piece, wait_lane))
         z = lambda *shape, dt=float: np.zeros(shape, dt)      # noqa: E731
         self.ri = z(0, dt=int)
         for name in ("u", "v", "acc", "lat", "lat_t", "dwell", "crank", "wheel", "roll", "steer", "foot", "look",
@@ -288,6 +370,7 @@ class Bicycles:
         ap = lambda a, x: np.append(a, x)       # noqa: E731
         self.route.append([lid])
         self._cat.append(None)
+        self.two.append({})
         self.ri = ap(self.ri, 0)
         self.u = ap(self.u, u)
         v0 = cruise * rng.uniform(0.6, 1.0)
@@ -362,11 +445,30 @@ class Bicycles:
             if not ok:
                 break
             pick = [c for c in ok if lanes[c].turn != "right"] or ok
-            wts = np.array([1.5 if lanes[c].turn == "straight" else 1.0 for c in pick])
-            r.append(pick[rng.choice(len(pick), p=wts / wts.sum())])
+            two = self.cfg.bike_two_stage
+            staged = []
+            if two > 0.0:                   # 二段階右折 at two-phase signals (no other draw changes when off)
+                J = town.junctions[lanes[ok[0]].junction]
+                if J.signalized and J.groups is not None and J.phases == 2:
+                    staged = [c for lid in [last.id] + list(last.siblings) for c in lanes[lid].succ
+                              if lanes[c].kind == "conn" and lanes[c].turn == "right"
+                              and two_stage_track(town, c) is not None]
+                    pick = [c for c in pick if c not in staged] + staged
+            wts = np.array([two if c in staged else 1.5 if lanes[c].turn == "straight" else 1.0 for c in pick])
+            c = pick[rng.choice(len(pick), p=wts / wts.sum())]
+            if c in staged:                 # straight on to the far left corner, then along the crossing road
+                c1, first, c2, second, wait_lane, exit_lane = two_stage_track(town, c)
+                self.two[i][c1] = (first, None)
+                self.two[i][c2] = (second, wait_lane)
+                r += [c1, c2, exit_lane]
+            else:
+                r.append(c)
         if k > 2:
             del r[: k - 1]
             self.ri[i] -= k - 1
+        if self.two[i]:
+            keep = set(r)
+            self.two[i] = {lid: v for lid, v in self.two[i].items() if lid in keep}
 
     def respawn(self, i, avoid_xy, car_xy, car_r):
         town, rng = self.town, self.rng
@@ -381,6 +483,7 @@ class Bicycles:
                 continue
             self.route[i] = [lid]
             self._cat[i] = None
+            self.two[i] = {}
             self.ri[i] = 0
             self.u[i] = u
             self.v[i] = 0.0
@@ -396,6 +499,12 @@ class Bicycles:
         return False
 
     # ------------------------------------------------------------------ paths
+    def _trk(self, i, lid):
+        """Rider i's line along lane `lid`: a piece of a two-stage right turn's (two_stage_track) or the lane's
+        bike_track."""
+        two = self.two[i].get(lid)
+        return bike_track(self.town, lid) if two is None else two[0]
+
     def _cat_of(self, i):
         r, k = self.route[i], self.ri[i]
         if len(r) - k < 4:
@@ -413,8 +522,11 @@ class Bicycles:
         base = 0.0
         h_off = 0.0
         for j, lid in enumerate(key):
-            tr = bike_track(town, lid)
+            tr = self._trk(i, lid)
             lane = lanes[lid]
+            two = self.two[i].get(lid)
+            if two is not None and two[1] is not None:  # 二段階右折: at the far left corner, stopping there and
+                stops.append((base, lid, STAGE, two[1]))  # waiting for the crossing road's green
             sl = slice(1, None) if j else slice(None)
             if j:                                   # keep the heading continuous over the joins
                 h_off += 2 * math.pi * round((head[-1][-1] - (tr.heading[0] + h_off)) / (2 * math.pi))
@@ -428,10 +540,12 @@ class Bicycles:
                 stops.append((base + tr.at(lane.stop_s), lid, SIG, None))
             if lane.stop_sign_s is not None:
                 stops.append((base + tr.at(lane.stop_sign_s), lid, SIGN, None))
-            if lane.kind == "conn" and getattr(lane, "yields", None) and getattr(lane, "wait_s", None) is not None:
+            if lane.kind == "conn" and getattr(lane, "yields", None) and getattr(lane, "wait_s", None) is not None \
+                    and two is None:
                 stops.append((base + tr.at(lane.wait_s), lid, YIELD, None))
             for ci, a0, _, u0, u1 in town.lane_crossings.get(lid, ()):
-                stops.append((base + tr.at(a0), lid, ZEBRA, (ci, u0, u1)))
+                if two is None or tr.lane_s[0] - 0.5 <= a0 <= tr.lane_s[-1]:    # (on the piece of a two-stage turn)
+                    stops.append((base + tr.at(a0), lid, ZEBRA, (ci, u0, u1)))
             base += tr.length
         cat.pts = np.concatenate(pts)
         cat.cum = np.concatenate(cum)
@@ -745,6 +859,13 @@ class Bicycles:
                         self.ss_done[i] = lid
                         continue
                     stop_d = min(stop_d, d - 0.4)
+                elif kind == STAGE:                 # 二段階右折: a stop at the far corner (turning the bicycle round),
+                    if self.ss_done[i] == lid:      # then on with the crossing road's green
+                        continue
+                    if v < 0.05 and d <= 1.0 and town.signal_state_for_lane(data, t) == TL_GREEN:
+                        self.ss_done[i] = lid
+                        continue
+                    stop_d = min(stop_d, max(d - 0.2, 0.0))
                 elif kind == YIELD:
                     if v > 1.0 and d < v * v / (2 * 3.0):
                         continue
@@ -880,7 +1001,7 @@ class Bicycles:
                 cat = self._cat_of(i)
                 r, k = self.route[i], self.ri[i]
             self.u[i] = u
-            trk = bike_track(town, r[k])
+            trk = self._trk(i, r[k])
             self.lane_s[i] = trk.lane_at(u)
             self.lane[i] = r[k]
             # -- sideways: the move out and back, and the wobble (larger when slow, none when standing)

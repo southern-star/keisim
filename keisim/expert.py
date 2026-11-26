@@ -18,8 +18,8 @@ from .parked import (PARKED_OWNER, PK_CLEAR, PK_DECIDE, PK_GAP0, PK_GIVE_ROOM, P
                      PK_PASS_V, PK_SLOW_AT, PK_SLOW_B, PK_WAIT, PK_ZONE)
 from .route import LC_CHECK, LC_PUSH, LC_PUSH_TO, change_room, link_map
 from .traffic import (BIKE_END, BIKE_FREE, BIKE_IN, BIKE_KEEP, BIKE_LEFT, BIKE_LEFT_WAIT, BIKE_MIN, BIKE_OUT,
-                      BIKE_PASS_DV, BIKE_PASS_V, CW_MARGIN, CW_REACH, HIDE_DIMS, PASS_SPEED, YIELD_GAP, Traffic,
-                      corridor_gaps, sweep_gaps, vehicle_circles)
+                      BIKE_PASS_DV, BIKE_PASS_V, CW_MARGIN, CW_REACH, HIDE_DIMS, OVERTAKE_AHEAD, PASS_SPEED,
+                      YIELD_GAP, Traffic, corridor_gaps, sweep_gaps, vehicle_circles)
 
 def _seg_cross(a, b, c, d):
     """Where segment ab crosses segment cd: the fraction along ab, or None."""
@@ -351,6 +351,18 @@ class Expert:
                 # 0.5 m to the right, and the ego waiting there for oncoming cars stood in their way (long3c
                 # 1012/9400: the oncoming car and the ego blocked each other for good)
                 c = cap * min(max((s_j - s0) / BIKE_START, 0.0), 1.0)
+                # TrafficConfig.bike_overtake: over the centre line when the oncoming lane stays clear for the pass
+                # (Traffic.overtake_room, as the NPCs), from OVERTAKE_AHEAD behind the rider until past it
+                if w.traffic.cfg.bike_overtake and not out["nopass"][j]:
+                    need = max(hw + 0.3 + BIKE_FREE + 0.05 - d_j, 0.0)
+                    ds_ = s_j - s - hl - hb
+                    if need > c + 0.05 and -(2 * hl + 2 * hb + BIKE_OUT[0]) < ds_ < OVERTAKE_AHEAD and \
+                            lane.speed_limit > vb + 2.0:
+                        k0 = route.lane_index_at(s - hl)
+                        s_back = route.local_s(s - hl, k) if k0 == k else -1.0
+                        o = w.traffic.overtake_room(lane, s_back, route.local_s(s_j, k), vb, need, lane.speed_limit)
+                        if o > c:
+                            c = cap = o
             if lane.kind == "conn":
                 # in a junction (on the route's connector): the rider's line and the ego's are not side by side there
                 # (suburban 2007/9900: the ego caught up with a rider on its right turn and ran into it; 2001/9900: it

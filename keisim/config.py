@@ -254,6 +254,16 @@ class TrafficConfig:
     # to here; no random draw is made for them, so the old episodes stay as they were). max_bikes caps the number.
     bicycles: float = 0.0
     max_bikes: int = 40
+    # 二段階右折 (bicycles.two_stage_track): the weight of a right turn among a rider's choices at a signalised junction
+    # of two-phase signals, against 1.5 for straight on and 1 for left; a rider turning right there goes straight on
+    # to the far left corner, turns, and waits there for the green of the road it turns into, then rides on along it.
+    # 0: riders do not turn right where they have another way (as before; no other draw changes).
+    bike_two_stage: float = 0.0
+    # 追い越し (Traffic.overtake_room): cars (and the expert) pass a bicycle they cannot pass with room to spare inside
+    # their lane over the centre line, on two-way roads with one lane each way whose centre line is not yellow
+    # (はみ出し禁止), when the oncoming lane stays clear of cars for the whole pass and the pass ends well before the
+    # junction; an NPC that has begun to pass goes on to the end. Off: inside the lane only (as before).
+    bike_overtake: bool = False
     # Bicycles on the sidewalks (keisim/sidewalk_bikes.py, 歩道を走る自転車): riders per km of sidewalk (walkways that are
     # not in the road), on its road side at 10-16 km/h. At a junction they turn the corner, turn back, or ride on
     # across the mouth of the road in front of them: at a two-phase signal with the pedestrian light, elsewhere after a

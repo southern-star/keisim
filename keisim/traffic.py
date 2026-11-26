@@ -168,6 +168,11 @@ SWEEP_MIN = 0.05            # m: ... for the cars whose front corner swings out 
 SWEEP_STAND = 0.5           # m/s: ... against the cars standing (slower than this): a moving one is left to the give-way
 #                             rules (an NPC turning left that stopped for the ego still coming up to its right turn's
 #                             wait point broke them: the ego, no longer waiting for it, drove into its nose)
+OVERTAKE_PAST = 8.0         # m: TrafficConfig.bike_overtake: the pass ends this far past the bicycle
+OVERTAKE_END = 25.0         # m before the lane's end at the latest
+OVERTAKE_MARGIN = 2.0       # s: the oncoming lane clear this much longer than the pass takes
+OVERTAKE_AHEAD = 25.0       # m: a pass over the centre line begins with the bicycle at most this far ahead
+OVERTAKE_CLEAR = 5.0        # m: no car ahead in the own lane up to this far past the end of the pass
 HIDE_DIMS = (3.4, 1.48)     # m: EnvConfig.expert_hidden_cars: the smallest car that could be on the road unseen (a kei
 #                             car), as a box at the spots Traffic.hidden_spot tests
 HIDE_STEP = 1.0             # m between those spots along a lane
@@ -605,6 +610,7 @@ class Traffic:
                 continue
             if self.parked is not None and self.parked.n and np.min(np.hypot(*(self.parked.xy - p).T)) < 7.0:
                 continue
+            getattr(self, "bk_over", {}).pop(i, None)
             self.route[i] = [lid]
             self.ri[i] = 0
             self.s[i] = s
@@ -1389,6 +1395,7 @@ class Traffic:
         if self.parked is not None and self.parked.n:   # parked cars: move out round them, or wait behind them
             ego = None if ego_yaw is None else (ego_xy, ego_v, ego_yaw, ego_len)
             pk_target, pk_swing, vmax = self._parked_gaps(stop_gap, hl, vmax, ego)
+        self._ego_overtake = None if ego_yaw is None else (ego_xy, ego_v, ego_yaw, ego_len)    # (bike_overtake)
         if self.bikes is not None and self.bikes.n:     # bicycles: pass them with room to spare, or follow them
             g_b, v_b, vmax = self._bike_gaps(stop_gap, paths, relc, valid, hl, vmax, dt, pk_target, pk_swing)
             bike_pair = ((g_b, v_b),)
@@ -1741,6 +1748,16 @@ class Traffic:
         for j in range(nb):
             by_lane.setdefault(int(bk.lane[j]), []).append(j)
         room = np.zeros((n, nb))            # how far car i can move over where bicycle j is
+        by_cars = None                      # TrafficConfig.bike_overtake: the cars by lane (cars_by_lane)
+        ego_ot = getattr(self, "_ego_overtake", None)
+        if not hasattr(self, "bk_over"):
+            self.bk_over = {}               # car -> the bicycle it is passing over the centre line
+        for i, j in list(self.bk_over.items()):     # the pass is over: the car or the rider has left the lane (or both
+            if i >= n or j >= nb or int(bk.lane[j]) != self.route[i][self.ri[i]] or \
+                    self.town.lanes[self.route[i][self.ri[i]]].kind != "road" or \
+                    self.s[i] - self.dims[i, 0] / 2 - float(bk.lane_s[j]) - 0.9 > BIKE_OUT[1]:   # are in a junction),
+                #                                                                                 or the car is past it
+                del self.bk_over[i]
         pk_any = self.parked is not None and self.parked.n > 0
         target = np.zeros(n)
         half_b = 0.9                        # half a bicycle's length
@@ -1778,6 +1795,26 @@ class Traffic:
                     # room is checked on the unshifted path, so it only holds for a rider left of it: one out round
                     # a parked car itself (or moving out) is on or right of the car's line, and gets less than none
                     rc += 2.0 * min(float(bk.side[j]) - max(float(bk.lat_t[j] - bk.lat[j]), 0.0), 0.0)
+                if self.cfg.bike_overtake and pkp is None and not changing:
+                    need = max(hw[i] + 0.3 + BIKE_FREE + 0.05 - float(bk.side[j]), 0.0)
+                    go = self.bk_over.get(i) == j
+                    if need > c + 0.05 and (go or (0.0 < ahead < OVERTAKE_AHEAD and lane.speed_limit > vb + 2.0)):
+                        if go and behind > BIKE_OUT[1]:
+                            del self.bk_over[i]
+                        else:
+                            if by_cars is None:
+                                by_cars = self.cars_by_lane()
+                            # committed once level with the rider; until then checked again at every step (a car
+                            # that moved out and then caught up with a slower car ahead stood at its red light still
+                            # out over the centre line, in the way of a car turning across: suburban 2001/9851)
+                            o = need if go and ahead <= 0.0 else \
+                                self.overtake_room(lane, si - hl[i], sj, vb, need, lane.speed_limit, by_cars,
+                                                   exclude=i, ego=ego_ot)
+                            if o > c:
+                                self.bk_over[i] = j
+                                c = rc = max(c, o)
+                            elif go:
+                                del self.bk_over[i]
                 room[i, j] = rc
                 want = min(max(hw[i] + 0.3 + BIKE_FREE + 0.05 - bk.side[j], 0.0), c)
                 if ahead > 0.0:
@@ -1821,6 +1858,9 @@ class Traffic:
             target = np.where(near.any(1), np.maximum(target, self.shift), target)
         if pk_target is not None:                   # parked cars too (_parked_gaps): the larger move out
             target = np.maximum(target, pk_target)
+        if self.bk_over:                            # (bike_overtake: out over the centre line as round a parked car)
+            swing = np.zeros(n, bool) if swing is None else swing.copy()
+            swing[[i for i in self.bk_over if i < n]] = True
         self._integrate_shift(target, dt, swing)
         me = np.full(n, -1)
         less = room[:, bow]
@@ -1840,6 +1880,43 @@ class Traffic:
             vmax = vmax.copy()
             vmax[m] = np.minimum(vmax[m], np.sqrt(v_pass ** 2 + 3.0 * np.maximum(g_free[m], 0.0)))
         return gap, lead_v, vmax
+
+    def overtake_room(self, lane, s_back, s_j, vb, need, v_pass, by_lane=None, exclude=None, ego=None):
+        """TrafficConfig.bike_overtake: how far a car may move out over the centre line of `lane` to pass a bicycle at
+        lane position s_j (speed vb) with `need` m of move needed, its rear at s_back -> that move (at most a lane
+        width) or 0. Only on two-way roads with one lane each way whose centre line is not yellow, with the pass over
+        OVERTAKE_END before the lane's end, no car ahead in the own lane up to OVERTAKE_CLEAR past the end of the pass
+        (the pass would be held up beside the bicycle), and the oncoming lane clear: no car (NPC, or the ego given as
+        (xy, v, yaw, length)) on it within the passing stretch, from the car's rear to OVERTAKE_PAST past the bicycle
+        where it will be then, during the pass (at v_pass over the bicycle's speed, OVERTAKE_MARGIN s more)."""
+        from .parked import opposite_lane
+        if lane.kind != "road" or lane.nlanes != 1 or lane.road < 0:
+            return 0.0
+        rs = self.town.roads[lane.road].spec
+        if rs.oneway or rs.center == "yellow":
+            return 0.0
+        opp = opposite_lane(self.town, lane)
+        if opp < 0:
+            return 0.0
+        rel = max(v_pass - vb, 1.5)
+        t_pass = (s_j - s_back + OVERTAKE_PAST) / rel + 2.5             # (+ the move out)
+        s_hi = s_j + OVERTAKE_PAST + vb * t_pass
+        if s_hi > lane.length - OVERTAKE_END:
+            return 0.0
+        if by_lane is None:
+            by_lane = self.cars_by_lane()
+        for s_c, v_c, l_c in self.lane_cars(lane.id, by_lane, exclude=exclude, ego=ego):
+            if s_back < s_c + l_c / 2 and s_c - l_c / 2 < s_hi + OVERTAKE_CLEAR and v_c < v_pass:
+                return 0.0                                      # a car ahead in the way of the pass
+        L_o = self.town.lanes[opp]
+        o_lo = L_o.poly.project(np.asarray(lane.poly.interp1(min(s_hi, lane.length))))[0]   # (the other way round)
+        o_hi = L_o.poly.project(np.asarray(lane.poly.interp1(max(s_back, 0.0))))[0]
+        for s_o, v_o, l_o in self.lane_cars(opp, by_lane, exclude=exclude, ego=ego):
+            if s_o - l_o / 2 > o_hi:
+                continue                                        # past the stretch (behind the car)
+            if s_o + l_o / 2 + max(v_o, 3.0) * (t_pass + OVERTAKE_MARGIN) >= o_lo:
+                return 0.0
+        return float(min(need, lane.width))
 
     def _bike_defer(self, bow, byw):
         """TrafficConfig.bike_defer: (N, M) bool, the circles of where a moving bicycle will be (Bicycles.circles'

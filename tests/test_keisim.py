@@ -2904,3 +2904,102 @@ def test_right_arrows_timing_and_lamps():
     w.t = next(t for t in ts if J.signal_state(sh["phase"], t) == TL_RED and not J.arrow_on(sh["phase"], t))
     dark = env._obs()["seg"]
     assert (lit == SEM["tl_green"]).sum() > (dark == SEM["tl_green"]).sum()
+
+
+def test_bicycles_two_stage_right_turn():
+    """TrafficConfig.bike_two_stage (二段階右折): at a two-phase signal a rider may turn right in two stages: straight
+    on along the approach's straight connector to the far left corner (two_stage_track), a stop there, standing while
+    the light of the road it turns into is not green, then along that road's straight connector. The cars meet it as
+    a rider on those two straight connectors. On roads with two lanes each way too (the right connector leaves the
+    inner lane; the rider comes from the kerb lane and leaves by the exit's kerb lane)."""
+    from keisim.bicycles import two_stage_track
+    from keisim.config import TL_GREEN, town_config
+
+    T = Town(2000, town_config("suburban"))
+    staged = [L.id for L in T.lanes if L.kind == "conn" and L.turn == "right" and T.junctions[L.junction].signalized
+              and two_stage_track(T, L.id) is not None]
+    assert staged and any(T.lanes[T.lanes[c].pred[0]].lane_index == 1 for c in staged)
+    for c in staged:
+        c1, first, c2, second, wait_lane, exit_lane = two_stage_track(T, c)
+        assert T.lanes[c1].turn == T.lanes[c2].turn == "straight" and T.lanes[exit_lane].lane_index == 0
+        assert T.lanes[c2].succ[0] == exit_lane and T.lanes[c2].pred[0] == wait_lane
+        assert np.hypot(*(first.pts[-1] - second.pts[0])) < 1e-6                 # they meet at the corner
+        turn = (second.heading[-1] - first.heading[0] + np.pi) % (2 * np.pi) - np.pi
+        assert np.degrees(turn) < -60.0                                           # a right turn
+        assert 0.0 <= first.lane_s[0] < first.lane_s[-1] <= T.lanes[c1].length + 1e-6
+        assert 0.0 <= second.lane_s[0] < second.lane_s[-1] <= T.lanes[c2].length + 1e-6
+    cfg = EnvConfig()
+    cfg.render_rgb = cfg.render_seg = False
+    cfg.town = town_config("suburban")
+    cfg.traffic.box_rule = cfg.traffic.release_hidden = True
+    cfg.traffic.bicycles = 12.0
+    cfg.traffic.bike_two_stage = 3.0
+    env = KeiEnv(cfg)
+    env.reset(town_seed=2000, episode_seed=1, route_length=600.0)
+    bk, town = env.world.bikes, env.world.town
+    on, done, waited, green_at = {}, 0, 0, {}
+    for _ in range(2000):
+        env.step(np.array([0.0, 0.0, 1.0]))
+        for i in range(bk.n):
+            lid = bk.route[i][bk.ri[i]]
+            two = bk.two[i].get(lid)
+            if two is not None and two[1] is None:              # the first piece: up to the corner
+                on[i] = lid
+                if bk.v[i] < 0.05 and bk.stood[i] > 1.0 and two[0].length - bk.u[i] < 2.5:
+                    waited += 1                                  # standing at the corner: off soon after the green
+                    wait_lane = bk.two[i][bk.route[i][bk.ri[i] + 1]][1]
+                    if town.signal_state_for_lane(wait_lane, env.world.t) == TL_GREEN:
+                        green_at.setdefault(i, env.world.t)
+                        assert env.world.t - green_at[i] < 2.5   # (its reaction time)
+                    else:
+                        green_at.pop(i, None)
+            elif two is not None and i in on:                    # on along the crossing road
+                del on[i]
+                green_at.pop(i, None)
+                done += 1
+        if done >= 2:
+            break
+    assert done >= 2 and waited > 0
+
+
+def test_bicycles_overtake_over_centre_line():
+    """TrafficConfig.bike_overtake: the NPCs pass bicycles over the centre line of two-way roads with one lane each way
+    (Traffic.overtake_room: never where the centre line is yellow, on multi-lane or one-way roads), and never with an
+    oncoming car beside them; a pass is over (Traffic.bk_over) once the car is past the rider."""
+    from keisim.config import town_config
+    from keisim.traffic import BIKE_OUT
+
+    cfg = EnvConfig()
+    cfg.render_rgb = cfg.render_seg = False
+    cfg.town = town_config("twophase")
+    cfg.traffic.box_rule = cfg.traffic.release_hidden = True
+    cfg.traffic.bicycles = 12.0
+    cfg.traffic.bike_overtake = True
+    env = KeiEnv(cfg)
+    env.reset(town_seed=1010, episode_seed=1, route_length=600.0)
+    tr, bk, town = env.world.traffic, env.world.bikes, env.world.town
+    passes, in_junction = set(), set()
+    for _ in range(900):
+        env.step(env.expert_action())
+        was, in_junction = in_junction, set()
+        for i, j in tr.bk_over.items():
+            passes.add((i, j))
+            lane = town.lanes[tr.route[i][tr.ri[i]]]
+            if lane.kind != "road":                 # just moved on into the junction: over at the next step
+                assert (i, j) not in was
+                in_junction.add((i, j))
+                continue
+            spec = town.roads[lane.road].spec
+            assert lane.nlanes == 1 and not spec.oneway and spec.center != "yellow"
+            assert tr.s[i] - tr.dims[i, 0] / 2 - bk.lane_s[j] - 0.9 <= BIKE_OUT[1] + 0.5
+            u = np.array([np.cos(tr.yaw[i]), np.sin(tr.yaw[i])])
+            rel = tr.xy - tr.xy[i]
+            lon, lat = rel @ u, np.abs(rel[:, 0] * u[1] - rel[:, 1] * u[0])
+            oncoming = (np.cos(tr.yaw - tr.yaw[i]) < -0.5) & (np.abs(lon) < (tr.dims[:, 0] + tr.dims[i, 0]) / 2)
+            assert not (oncoming & (lat < (tr.dims[:, 1] + tr.dims[i, 1]) / 2 + 0.5)).any()   # side by side, close
+    assert len(passes) >= 3
+    # no room where it is not allowed
+    for L in town.lanes:
+        if L.kind == "road" and L.road >= 0 and (L.nlanes != 1 or town.roads[L.road].spec.center == "yellow"
+                                                 or town.roads[L.road].spec.oneway):
+            assert tr.overtake_room(L, 0.0, 10.0, 3.0, 1.0, L.speed_limit) == 0.0

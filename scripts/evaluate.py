@@ -177,6 +177,8 @@ def run_route(job):
     cfg.traffic.crosswalks = float(args.get("crosswalks", 0.0))
     cfg.traffic.bicycles = float(args.get("bicycles", 0.0))
     cfg.traffic.sidewalk_bikes = float(args.get("sidewalk_bikes", 0.0))
+    cfg.traffic.bike_two_stage = float(args.get("bike_two_stage", 0.0))
+    cfg.traffic.bike_overtake = bool(args.get("bike_overtake", False))
     cfg.traffic.parked = float(args.get("parked", 0.0))
     cfg.traffic.dart_out = float(args.get("dart_out", 0.0))
     if args.get("dense"):
@@ -542,6 +544,12 @@ def main():
     ap.add_argument("--sidewalk_bikes", type=float, default=None,
                     help="bicycles per km of sidewalk (TrafficConfig.sidewalk_bikes, keisim/sidewalk_bikes.py; 0: none, "
                          "as in every evaluation before them); suffix _sw<N>")
+    ap.add_argument("--bike_two_stage", type=float, default=0.0,
+                    help="二段階右折: the weight of a two-stage right turn among the riders' choices at two-phase "
+                         "signals (TrafficConfig.bike_two_stage; 0: none); suffix _ts<W>")
+    ap.add_argument("--bike_overtake", type=int, default=0, choices=[0, 1],
+                    help="cars and the expert pass bicycles over the centre line when the oncoming lane is clear "
+                         "(TrafficConfig.bike_overtake); suffix _ot")
     ap.add_argument("--bike_visible", type=int, default=None, choices=[0, 1],
                     help="the expert counts only the riders the camera sees for its 巻き込み確認 and give-way "
                          "(EnvConfig.expert_bike_visible); suffix _bv")
@@ -642,6 +650,7 @@ def main():
         ("" if args.crosswalks == suite_cw else f"_cw{args.crosswalks:g}") + \
         ("" if args.bicycles == suite_bk else f"_bk{args.bicycles:g}") + \
         ("" if args.sidewalk_bikes == suite_sw else f"_sw{args.sidewalk_bikes:g}") + \
+        (f"_ts{args.bike_two_stage:g}" if args.bike_two_stage else "") + ("_ot" if args.bike_overtake else "") + \
         ("" if int(args.bike_visible) == suite_bv else ("_bv" if args.bike_visible else "_nobv")) + \
         ("" if int(args.bike_sweep) == suite_bs else ("_bs" if args.bike_sweep else "_nobs")) + \
         ("" if args.parked == suite_pk else f"_pk{args.parked:g}") + \
@@ -674,6 +683,8 @@ def main():
          "crosswalks": args.crosswalks,
          "bicycles": args.bicycles,
          **({"sidewalk_bikes": args.sidewalk_bikes} if args.sidewalk_bikes else {}),
+         **({"bike_two_stage": args.bike_two_stage} if args.bike_two_stage else {}),
+         **({"bike_overtake": True} if args.bike_overtake else {}),
          "bike_visible": bool(args.bike_visible), "bike_sweep": bool(args.bike_sweep), "parked": args.parked,
          "dart_out": args.dart_out, "cap_scale": int(args.cap_scale),
          **({"expert_wait_back": args.expert_wait_back} if args.expert_wait_back else {}),
