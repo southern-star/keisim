@@ -3,7 +3,7 @@
 **軽 (Kei) = light.** ゲームエンジンを使わず `numpy + OpenCV + PyTorch` だけで動く、
 「**シミュレータ × 軽量 E2E モデル**」を最初から一体で設計したクローズドループ環境です。
 
-[KeiReality 384×192 初版の比較画像・完走結果・起動手順](#keireality-384)
+[KeiReality 384×192 背景補正版の比較と起動手順](#keireality-384-1-1) ・ [384×192 初版](#keireality-384)
 
 > **English summary** — KeiSim is a procedurally generated, Japan-style (left-hand traffic) driving simulator
 > written in plain numpy + OpenCV (no game engine, no GPU needed; ~30× real time without rendering).
@@ -64,6 +64,52 @@ KeiPilot がブラウザの中で KeiView の街を運転します。インス�
 | クローズドループ評価 | ○ | ○ | ○ (DS/RC/IS, 違反ログ, 動画, 決定論的リプレイ) |
 
 ---
+
+<a id="keireality-384-1-1"></a>
+
+## KeiReality 384×192 背景補正版 v1.1.0
+
+歩行者や車が通り過ぎて背景が見えた瞬間の色を、動体の周辺だけ補正します。PCのライブ画面で「384×192 背景補正」と「384×192 初版」を選んで比較できます。[GitHub Release](https://github.com/southern-star/keisim/releases/tag/keireality-384-v1.1.0)
+
+### KeiPilot Mc と生成器のつながり
+
+PCのクローズドループ版では**運転判断と映像生成が同じエンコーダ特徴を共有します**。KeiPilot Mc の1回の運転推論で、広角・望遠カメラの中間特徴 `stem`・`c2`・`c3` と、運転用Transformerが読む2眼の視覚トークン `mem` を取り出します。KeiReality はこの特徴とセグメンテーション出力を受け取り、仮想カメラの姿勢、自車の相対移動、過去フレームを使って追従視点を描きます。深度は同じ2眼画像から別の固定モデル `mc14-depth` で推定します。運転用モデルの重みは固定し、生成RGBの行き先は表示です。[運転推論で共有する特徴](keipilot/model.py#L291) ・ [生成側への受け渡し](keipilot/agent.py#L165) ・ [表示側の深度推定と描画](scripts/reality_closed_loop.py#L141)
+
+町40・41の各320コマで同じカメラ観測を両方の制御器に渡した検証では、特徴の取り出しを有効にした場合と無効にした場合で、予測経路、目標速度、操作量の最大絶対差はいずれも0でした。[同一入力での制御比較](docs/keireality/384-v1/closed-loop-metrics.json#L554)
+
+### 同じ場面での画質と走行結果
+
+町20401は初版で5/6だった画質条件が6/6になりました。固定視点の32秒で、動体が去った直後の背景のRGB平均絶対誤差は0.09745から0.09546へ2.05%減少しました。下図は記録開始2.8秒の同じ場所です。黄色で示した範囲のうち、歩行者の足元を中心とする26画素での改善は0.67%で、残像はまだ見えます。[32秒の比較動画](https://github.com/southern-star/keisim/releases/download/keireality-384-v1.1.0/town20401-background-comparison.mp4)
+
+![町20401の4倍拡大。上段は正解画像と新しく見えた背景の位置、下段は左が初版、右が背景補正版。](docs/keireality/384-v1.1/town20401-crop.png)
+
+重みを固定してから新たに収録した町20404〜20407は、各32秒、全4町で6条件を通過しました。新規4町を採点画素数で重み付けすると、初版に対する退去直後の背景誤差は固定視点で1.30%、左右旋回で1.86%減少しました。町40・41の原寸では白線のコントラストが0.24〜0.37%上がり、車の輪郭コントラストは最大0.80%低下。町41の旋回中の静止面ちらつきは0.022%増え、いずれも事前に定めた相対1%の許容幅内でした。[10町の画質評価](docs/keireality/384-v1.1/quality.json) ・ [評価レポートと計測記録（ZIP）](https://github.com/southern-star/keisim/releases/download/keireality-384-v1.1.0/keireality-384-v1.1.0-evaluation.zip)
+
+RTX 3060でKeiPilotと同時に10町を各32秒走らせ、制御は9.99 Hz、制御処理p95は50.5〜69.4 ms、違反は0件でした。3,200制御コマのうち3,198コマで画像を生成しました。町20404の発進直後に表示2コマを省いた間も制御は動いています。Chromeの実表示は町40で10.00 fps、町41で9.97 fpsでした。[クローズドループ計測](docs/keireality/384-v1.1/timing.json) ・ [Chromeでの実測](docs/keireality/384-v1.1/browser.json)
+
+配布用の11ファイルを導入したクリーン環境でも、町40・41をChromeから発進させ、ゴールまで確認しました。下表は起動直後を含む全走行の平均です。この追加検証中は同じPCで別のCPU処理も並行していました。[背景補正版の完走記録](docs/keireality/384-v1.1/routes.json)
+
+| 町 | シミュレーション時間 | 走行距離 | 完走率 | 違反 | 制御 | Chrome表示 |
+|---|---:|---:|---:|---:|---:|---:|
+| 40 | 166.70秒 | 672.2 m | 100% | 0件 | 8.95 Hz | 6.97 fps |
+| 41 | 166.35秒 | 583.1 m | 100% | 0件 | 9.92 Hz | 7.28 fps |
+
+### PCで背景補正版を起動する
+
+Linux、CUDA 13対応のNVIDIAドライバー、Python 3.12、Node.js 20、WebGL 2を使えるChromeまたはChromiumで検証しました。次の手順で学習済みの11ファイルをGitHub Releasesから取得し、サイズとSHA-256を照合します。[配布マニフェスト](configs/reality/releases/keireality-384-v1.1.0.json)
+
+```bash
+git clone --depth 1 --branch keireality-384-v1.1.0 https://github.com/southern-star/keisim.git
+cd keisim
+uv sync --frozen --extra cu130
+npm ci --prefix web --no-audit --no-fund
+.venv/bin/python scripts/download_reality_release.py
+.venv/bin/python scripts/serve_reality_closed_loop.py --background-repair
+```
+
+初版を導入済みのクローンでは、`git fetch origin tag keireality-384-v1.1.0` と `git switch --detach keireality-384-v1.1.0` の後に上の最後の2コマンドを実行します。初版の9ファイルを検証して再利用し、追加の重みと選定設定の2ファイルを取得します。起動後は次のリンクから発進できます。[町40の背景補正版](http://127.0.0.1:8768/?town=40&mode=repair384&run=1) ・ [町41の背景補正版](http://127.0.0.1:8768/?town=41&mode=repair384&run=1)
+
+Android向けには、端末の背面カメラを使う単一フレーム版を初版のReleaseから配布しています。[Android初版APK](https://github.com/southern-star/keisim/releases/download/keireality-384-v1.0.0/KeiReality-Pixel11.apk) ・ [Android版の仕様](android/README.md)
 
 <a id="keireality-384"></a>
 

@@ -72,7 +72,7 @@
 </main>
 <script>
 const $ = id => document.getElementById(id);
-const names = {pilot:"KeiPilot単体", sharp:"輪郭優先", stable:"ちらつき抑制", stable384:"384×192 試作版"};
+const names = {pilot:"KeiPilot単体", sharp:"輪郭優先", stable:"ちらつき抑制", stable384:"384×192 初版", repair384:"384×192 背景補正"};
 const canvases = ["wide","narrow","generated"].map(id => $(id).getContext("2d",{alpha:false}));
 const format = (n, places=1) => Number.isFinite(n) ? n.toFixed(places) : "—";
 const deg = angle => (angle > 0 ? "+" : "") + angle + "°";
@@ -226,8 +226,10 @@ $("bench").ontoggle = async () => {
       const file = await fetch(path,{cache:"no-store"});
       return file.ok ? file.json() : null;
     };
-    const [resolution, resolutionBrowser] = await Promise.all([
-      readReport("/resolution/timing.json"), readReport("/resolution/browser.json")
+    const hasRepair = [...$("mode").options].some(option => option.value === "repair384");
+    const [resolution, resolutionBrowser, repair, repairBrowser] = await Promise.all([
+      readReport("/resolution/timing.json"), readReport("/resolution/browser.json"),
+      hasRepair ? readReport("/repair/timing.json") : null, hasRepair ? readReport("/repair/browser.json") : null
     ]);
     const row = (values,head=false) => {
       const tr = table.insertRow();
@@ -236,6 +238,11 @@ $("bench").ontoggle = async () => {
     row(["町","条件","制御 Hz","制御 p95 ms","100 ms超","生成 fps","Chrome表示 fps","走行 m","違反"],true);
     for (const town of ["40","41"]) {
       const cases = [];
+      if (repair) {
+        for (const mode of ["stable384","repair384"]) {
+          cases.push([names[mode],repair.towns[town].methods[mode],repairBrowser?.results[town][mode].display_fps]);
+        }
+      }
       if (resolution) {
         for (const [mode,size] of [["stable","256×128"],["stable384","384×192"]]) {
           cases.push(["解像度比較 "+size,resolution.runs[town][mode],resolutionBrowser?.results[town][mode].display_fps]);
@@ -262,6 +269,10 @@ async function initialize() {
       if (info.modes.includes("stable384")) {
         $("mode").add(new Option(names.stable384,"stable384"));
         $("mode").value = "stable384";
+      }
+      if (info.modes.includes("repair384")) {
+        $("mode").add(new Option(names.repair384,"repair384"));
+        $("mode").value = "repair384";
       }
       $("resolution-link").hidden=!info.comparison;
     }

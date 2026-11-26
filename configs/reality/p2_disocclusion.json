@@ -1,0 +1,12 @@
+{
+  "fit_towns": [0, 1, 2, 3, 4, 5],
+  "selection_towns": [6, 7],
+  "seed": 34681,
+  "steps": 900,
+  "batch": 24,
+  "patch": 48,
+  "strengths": [0.25, 0.5, 1.0],
+  "relative_guard": 0.01,
+  "selection": "Compare a local blend toward Phase 2 with a learned bounded RGB correction. Prefer a reduction in both selection towns' chase vacated-background MAE, protecting white-line and vehicle signed contrast and static flicker against a 1% relative regression on both tracks. Rank eligible variants by the worst chase improvement, then mean improvement across both tracks.",
+  "evaluation": "Freeze the choice before replaying towns 40, 41 and the four previously evaluated 20400-series drives. Reuse the historical six conditions against A and outline guards against D. Additionally report changes against release384, including the fixed 20401 crop, tail, and current-view white lines. Time the selected candidate in real closed-loop drives at 9.9 Hz or higher and at most 100 ms p95 after 16 ticks."
+}

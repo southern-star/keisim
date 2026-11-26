@@ -14,6 +14,7 @@ from eval_reality_depth_refiner import contract, read_refiner
 from eval_reality_temporal import load_renderer
 from keipilot.agent import KeiPilotAgent
 from keireality.dataset import file_hash
+from keireality.disocclusion import BackgroundRepair, DisocclusionDrive
 from keireality.encoder import frozen_pilot
 from keireality.geometry import orbit_camera, relative_pose, view_pose
 from keireality.refined_display import RefinedDrive
@@ -29,8 +30,25 @@ TOWNS = {r["town_seed"]: r["episode_seed"] for r in
 YIELD_HOLD = (4, 1, 3.5, 4, .5, .5, 10)
 
 
+def load_background_repair():
+    directory = ROOT / "runs/reality/disocclusion384/fit"
+    selection = json.loads((directory / "selection.json").read_text())
+    if (selection["release"] != file_hash(ROOT / "configs/reality/releases/keireality-384-v1.0.0.json")
+            or selection["model"] != file_hash(ROOT / "keireality/disocclusion.py")
+            or not 0 < selection["strength"] <= 1):
+        raise ValueError("Background repair selection does not match this release")
+    if selection["method"] == "coarse":
+        return None, selection["strength"]
+    path = directory / "repair.pt"
+    if selection["method"] != "learned" or file_hash(path) != selection["repair"]:
+        raise ValueError("Selected background repair weights differ")
+    model = BackgroundRepair().cuda().to(memory_format=torch.channels_last)
+    model.load_state_dict(torch.load(path, map_location="cpu")["model"])
+    return model.eval().requires_grad_(False), selection["strength"]
+
+
 class Runtime:
-    def __init__(self):
+    def __init__(self, *, background_repair=False):
         pair = json.loads((OUT / "development/paired-selection.json").read_text())
         if pair["weights_and_software"] != contract():
             raise ValueError("Validation weights or rendering code changed")
@@ -39,6 +57,11 @@ class Runtime:
         self.resolution_head = None
         if (self.resolution_dir/"selection.json").is_file():
             self.methods["stable384"] = pair["secondary"]
+        if background_repair:
+            if "stable384" not in self.methods:
+                raise ValueError("Background repair requires the native 384 release")
+            self.repair, self.repair_strength = load_background_repair()
+            self.methods["repair384"] = pair["secondary"]
         self.device = "cuda"
         self.agent = KeiPilotAgent(ROOT / WEIGHTS[0], self.device, brake_hold=True, red_hold=True, yield_hold=YIELD_HOLD)
         self.agent.model.requires_grad_(False)
@@ -56,7 +79,7 @@ class Runtime:
 
     def display(self, mode):
         baseline = RefinedDrive(self.renderer, self.detail, self.refiner, self.methods[mode])
-        if mode != "stable384":
+        if mode not in ("stable384", "repair384"):
             return baseline
         if self.resolution_head is None:
             selection = json.loads((self.resolution_dir/"selection.json").read_text())
@@ -69,7 +92,10 @@ class Runtime:
             self.resolution_head = head.eval().requires_grad_(False)
             self.resolution_strength = selection["strength"]
             torch.cuda.synchronize()
-        return ResolutionDrive(baseline, self.resolution_head, self.resolution_strength)
+        native = ResolutionDrive(baseline, self.resolution_head, self.resolution_strength)
+        if mode == "repair384":
+            return DisocclusionDrive(native, self.repair, self.repair_strength)
+        return native
 
 
 @dataclass
@@ -155,9 +181,10 @@ class DisplayWorker:
 
 
 class Drive:
-    def __init__(self, runtime, town, mode, *, capture_trace=False):
+    def __init__(self, runtime, town, mode, *, capture_trace=False, episode_seed=None):
         self.runtime = runtime
         self.town = town
+        self.episode_seed = TOWNS[town] if episode_seed is None else episode_seed
         self.mode = mode
         self.capture_trace = capture_trace
         self.stop = threading.Event()
@@ -185,11 +212,11 @@ class Drive:
         worker = None
         try:
             agent.reset()
-            env.reset(self.town, TOWNS[self.town], render=False)
+            env.reset(self.town, self.episode_seed, render=False)
             if env.keiview().gl != "hw":
                 raise RuntimeError("Hardware KeiView cameras required for this benchmark")
             if self.mode != "pilot":
-                worker = DisplayWorker(self.runtime, self.mode, (self.town, TOWNS[self.town]), self.publish)
+                worker = DisplayWorker(self.runtime, self.mode, (self.town, self.episode_seed), self.publish)
             scheduled = perf_counter()
             while not env.done and (limit is None or len(self.steps) < limit):
                 if self.stop.wait(max(0., scheduled - perf_counter())):

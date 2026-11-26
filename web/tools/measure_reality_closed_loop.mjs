@@ -7,9 +7,18 @@ import puppeteer from 'puppeteer-core';
 const endpoint = new URL(process.argv[2] || 'http://127.0.0.1:8768/');
 assert.equal(endpoint.hostname, '127.0.0.1');
 const resolution = process.argv.includes('--resolution');
-const output = new URL(resolution ? '../../runs/reality/p2_resolution/' : '../../runs/reality/closed_loop/', import.meta.url);
-const cases = resolution ? [['40',['stable','stable384']],['41',['stable384','stable']]]
-                         : [['40',['pilot','sharp','stable']],['41',['stable','sharp','pilot']]];
+const repair = process.argv.includes('--background-repair');
+assert.ok(!(repair && resolution), 'Select one comparison at a time');
+let directory = 'closed_loop', featured = 'stable';
+let cases = [['40',['pilot','sharp','stable']],['41',['stable','sharp','pilot']]];
+if (resolution) {
+  directory = 'p2_resolution'; featured = 'stable384';
+  cases = [['40',['stable','stable384']],['41',['stable384','stable']]];
+} else if (repair) {
+  directory = 'disocclusion384'; featured = 'repair384';
+  cases = [['40',['stable384','repair384']],['41',['repair384','stable384']]];
+}
+const output = new URL(`../../runs/reality/${directory}/`, import.meta.url);
 const warmup = 16, measured = 64;
 const browser = await puppeteer.launch({executablePath:'/usr/bin/google-chrome', headless:true,
   defaultViewport:{width:1440,height:900,deviceScaleFactor:1}, args:['--window-size=1440,900']});
@@ -19,7 +28,7 @@ try {
   const errors = [];
   page.on('pageerror', err=>errors.push(err.message));
   await page.goto(endpoint.href);
-  if (resolution) await page.waitForFunction(()=>[...document.querySelector('#mode').options].some(v=>v.value==='stable384'));
+  await page.waitForFunction(mode=>[...document.querySelector('#mode').options].some(v=>v.value===mode), {}, featured);
   await page.evaluate(()=>{
     window.samples = [];
     const panes = document.getElementById('panes');
@@ -59,10 +68,10 @@ try {
         console.log(town,mode,results[town][mode]);
         if (mode!=='pilot') {
           const size = await page.$eval('#generated', c=>[c.width,c.height]);
-          assert.deepEqual(size,mode==='stable384' ? [384,192] : [256,128]);
+          assert.deepEqual(size,['stable384','repair384'].includes(mode) ? [384,192] : [256,128]);
           results[town][mode].native_size = size;
         }
-        if (town==='41' && mode===(resolution ? 'stable384' : 'stable')) {
+        if (town==='41' && mode===featured) {
           await page.click('#full');
           await page.waitForFunction(()=>!!document.fullscreenElement);
           await page.click('#full');

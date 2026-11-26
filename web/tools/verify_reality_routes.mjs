@@ -2,18 +2,22 @@
 import assert from 'node:assert/strict';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
 
-const endpoint = 'http://127.0.0.1:8768/';
-const output = fileURLToPath(new URL('../../runs/reality/p2_resolution/', import.meta.url));
+const endpoint = new URL(process.argv.find(arg=>arg.startsWith('--url='))?.slice(6) || 'http://127.0.0.1:8768/');
+assert.equal(endpoint.hostname,'127.0.0.1');
+const repair = process.argv.includes('--background-repair');
+const mode = repair ? 'repair384' : 'stable384';
+const output = fileURLToPath(new URL(repair ? '../../runs/reality/disocclusion384/' : '../../runs/reality/p2_resolution/', import.meta.url));
 const started = new Date().toISOString();
 const directory = join(output, 'full_routes', started.replace(/[:.]/g, '-'));
 const selection = JSON.parse(await readFile(join(output, 'fit', 'selection.json'), 'utf8'));
 await mkdir(directory, {recursive: true});
 const browser = await puppeteer.launch({executablePath:'/usr/bin/google-chrome', headless:!process.argv.includes('--visible'),
   defaultViewport:{width:1440,height:900}, args:['--window-size=1470,1000']});
-const report = {started, browser:await browser.version(), mode:'stable384', checkpoint:selection.checkpoint,
+const report = {started, browser:await browser.version(), mode, checkpoint:repair ? selection.repair : selection.checkpoint,
   decoder:selection.model, input_sizes:[[320,160],[320,160]], output_size:[384,192], towns:{}};
 
 async function save() {
@@ -52,7 +56,8 @@ async function run(page, town) {
     }));
     assert.deepEqual(valid, [[320,160,true],[320,160,true],[384,192,true]]);
     console.log('町'+town+' 384×192 ライブ走行中');
-    await page.waitForFunction(() => !document.getElementById('start').disabled,{timeout:0});
+    // Each CDP call completes promptly even when the drive lasts longer than Chrome's protocol timeout.
+    while (await page.$eval('#start',button=>button.disabled)) await delay(750);
     assert.ok(finalResponse,await page.$eval('#status',e=>e.textContent));
     const result = await finalResponse.json();
     const shown = await page.evaluate(() => window.finishShown());
@@ -71,9 +76,10 @@ async function run(page, town) {
 
 try {
   const page = await browser.newPage();
-  await page.goto(endpoint);
+  await page.goto(endpoint.href);
   await page.bringToFront();
-  await page.waitForFunction(() => document.getElementById('mode').value === 'stable384');
+  await page.waitForFunction(value => [...document.getElementById('mode').options].some(o=>o.value===value),{},mode);
+  await page.select('#mode',mode);
   console.log('Drive report',join(directory,'routes.json'));
   for (const town of [40,41]) {
     const result = await run(page,town);

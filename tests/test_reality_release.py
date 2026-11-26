@@ -1,4 +1,5 @@
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -47,3 +48,17 @@ def test_existing_different_weights_are_preserved(release):
         install()
     assert other.read_bytes() == b"another model"
     assert not (other.parent / "head.pt").exists()
+
+
+def test_background_release_upgrades_the_pinned_baseline(monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts"))
+    from download_reality_release import CURRENT_TAG, MANIFEST
+
+    baseline = json.loads(MANIFEST.read_text())["files"]
+    current = json.loads(MANIFEST.with_name(CURRENT_TAG + ".json").read_text())
+    assert current["tag"] == CURRENT_TAG and current["mode"] == "repair384"
+    files = {item["path"]: item for item in current["files"]}
+    assert len(files) == len({item["asset"] for item in files.values()}) == len(baseline) + 2
+    for item in baseline:
+        assert files.pop(item["path"]) == item
+    assert set(files) == {"runs/reality/disocclusion384/fit/repair.pt", "runs/reality/disocclusion384/fit/selection.json"}

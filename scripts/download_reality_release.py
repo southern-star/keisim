@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install the nine pinned KeiReality 384×192 runtime files from GitHub Releases."""
+"""Install hash-pinned KeiReality 384×192 runtime files from GitHub Releases."""
 import argparse
 from contextlib import ExitStack
 import hashlib
@@ -14,7 +14,9 @@ from urllib.request import Request, urlopen
 
 
 ROOT = Path(__file__).resolve().parents[1]
+# The research scorers pin this specific baseline, including the manifest's file hash.
 MANIFEST = ROOT / "configs/reality/releases/keireality-384-v1.0.0.json"
+CURRENT_TAG = "keireality-384-v1.1.0"
 
 
 def verify(path, item):
@@ -63,9 +65,12 @@ def install(root, manifest, assets_dir=None):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--tag", choices=(MANIFEST.stem, CURRENT_TAG), default=CURRENT_TAG,
+                        help="release to install (default: %(default)s)")
     parser.add_argument("--from-dir", type=Path, help="install previously downloaded release assets from this directory")
     args = parser.parse_args()
     try:
-        install(ROOT, json.loads(MANIFEST.read_text(encoding="utf-8")), args.from_dir)
+        manifest = MANIFEST.with_name(args.tag + ".json")
+        install(ROOT, json.loads(manifest.read_text(encoding="utf-8")), args.from_dir)
     except (OSError, HTTPException, ValueError) as error:
         sys.exit(str(error))

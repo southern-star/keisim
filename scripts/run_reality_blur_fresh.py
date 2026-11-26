@@ -22,7 +22,7 @@ from keisim.env import KeiEnv
 from prepare_reality_projection import checked_fields
 
 
-def moving_teacher(env,angles,ep,rows,path):
+def moving_teacher(env,angles,ep,rows,path,*,data=FRESH):
     env.reset(town_seed=ep["town_seed"],episode_seed=ep["episode_seed"],render=False)
     for _ in range(ep["start_step"]):
         env.step(env.expert_action())
@@ -31,7 +31,7 @@ def moving_teacher(env,angles,ep,rows,path):
         raise ValueError("hardware renderer expected")
     samples={k:[] for k in ("angle","rgb","seg","depth","seen")}
     for row in rows:
-        raw=checked_fields(FRESH,row,("state_sha256","depth_in","depth_target","seg_target","rgb_target"))
+        raw=checked_fields(data,row,("state_sha256","depth_in","depth_target","seg_target","rgb_target"))
         for j in range(row["count"]):
             t=len(samples["angle"])
             angle=sweep(t)

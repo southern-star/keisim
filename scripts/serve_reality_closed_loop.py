@@ -26,6 +26,8 @@ REPORTS = {
     "/browser.json": (OUTPUT / "browser.json", PUBLISHED / "closed-loop-browser.json"),
     "/resolution/timing.json": (COMPARISON.parent / "timing.json", PUBLISHED / "resolution-timing.json"),
     "/resolution/browser.json": (COMPARISON.parent / "browser.json", PUBLISHED / "resolution-browser.json"),
+    "/repair/timing.json": (OUTPUT.parent / "disocclusion384/timing/summary.json", PUBLISHED.parent / "384-v1.1/timing.json"),
+    "/repair/browser.json": (OUTPUT.parent / "disocclusion384/browser.json", PUBLISHED.parent / "384-v1.1/browser.json"),
 }
 
 
@@ -184,11 +186,12 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8768)
+    parser.add_argument("--background-repair", action="store_true", help="Start with the released 384×192 background repair.")
     args = parser.parse_args()
     torch.set_num_threads(2)
     cv2.setNumThreads(1)
     with ThreadingHTTPServer(("127.0.0.1", args.port), Handler) as server:
-        runtime = Runtime()
+        runtime = Runtime(background_repair=args.background_repair)
         server.session = Session(runtime)
         try:
             print(f"KeiPilot × KeiReality http://127.0.0.1:{args.port}/", flush=True)
