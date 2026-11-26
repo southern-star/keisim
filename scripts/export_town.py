@@ -369,10 +369,12 @@ def export_town(town: Town) -> dict:
                       **({"guardrail_beam": list(rs.guardrail_beam)} if rs.guardrail_beam else {})})
     junctions = [{"id": J.id, "pos": r2(J.pos), "radius": round(J.radius, 2), "arms": len(J.arms),
                   "signalized": bool(J.signalized), "phases": J.phases, "green": round(J.green, 9),
-                  "yellow": J.yellow, "allred": J.allred, "offset": round(J.offset, 9)}
+                  "yellow": J.yellow, "allred": J.allred, "offset": round(J.offset, 9),
+                  **({"arrow": J.arrow} if J.arrow else {})}           # right-arrow s (TownConfig.right_arrow)
                  for J in town.junctions]
     signals = [{"junction": sh["junction"], "phase": sh["phase"], "head": r2(sh["head"]),
-                "pole": r2(sh["pole"]), "yaw": round(float(sh["yaw"]), 4), "z": sh["z"]}
+                "pole": r2(sh["pole"]), "yaw": round(float(sh["yaw"]), 4), "z": sh["z"],
+                **({"arrow": True} if sh.get("arrow") else {})}         # the head has a right arrow under it
                for sh in town.signal_heads]
     stop_signs = [{"lane": sp["lane"], "pole": r2(sp["pole"]), "yaw": round(float(sp["yaw"]), 4), "z": sp["z"]}
                   for sp in town.stop_sign_posts]

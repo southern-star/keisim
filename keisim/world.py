@@ -83,6 +83,7 @@ class World:
         self.n_heads = len(town.signal_heads)
         self._head_j = np.array([h["junction"] for h in town.signal_heads], int)
         self._head_p = np.array([h["phase"] for h in town.signal_heads], int)
+        self._head_arrow = np.array([bool(h.get("arrow")) for h in town.signal_heads], bool)
 
     def _hide_children(self, route):
         """TrafficConfig.dart_out: children hidden in front of the parked cars along the route ahead of the ego
@@ -113,6 +114,14 @@ class World:
         J = self.town.junctions
         return np.array([J[j].signal_state(p, self.t) for j, p in zip(self._head_j, self._head_p)], int)
 
+    def arrow_states(self):
+        """The right arrows lit now (TownConfig.right_arrow), per signal head; None in towns without any."""
+        if not self._head_arrow.any():
+            return None
+        J = self.town.junctions
+        return np.array([bool(a) and J[j].arrow_on(p, self.t)
+                         for j, p, a in zip(self._head_j, self._head_p, self._head_arrow)], bool)
+
     def ego_circles(self):
         e = self.ego
         return vehicle_circles(np.array([[e.x, e.y]]), np.array([e.yaw]), np.array([e.LENGTH]), np.array([e.WIDTH]))
@@ -137,6 +146,7 @@ class World:
             color, kind, brake = np.vstack([color, p_col]), np.append(kind, p_kind), np.append(brake, p_brake)
         st = SceneState(xy, yaw, dims, color, kind, brake, pd.xy, pd.yaw, pd.height, pd.colors, pd.phase,
                         self.lamp_states())
+        st.arrow_state = self.arrow_states()
         parts = [b.scene() for b in (self.bikes, self.sw_bikes) if b is not None and b.n]
         if parts:                       # the sidewalk riders after the road bicycles
             (st.bike_xy, st.bike_yaw, st.bike_pose, st.bike_kind, st.bike_height,

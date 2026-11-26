@@ -88,10 +88,15 @@ SUITES = {
     # other suite uses; the big-junction towns (right-turn lanes) and the suburban towns (片側2車線)
     "hidden_right": [(t, 9970 + e) for t in range(3000, 3010) for e in range(3)],
     "hidden_right_sub": [(t, 9970 + e) for t in range(2000, 2010) for e in range(3)],
+    # 右折矢印: the "arrows" towns (bigjunction without scrambles, a right arrow wherever there are right-turn lanes),
+    # every route starting before a signalised right turn across two or more oncoming lanes (as hidden_right; the
+    # town seed without right-turn lanes, 3002, left out), 600 m, people on the zebras
+    "arrows": [(t, 9970 + e) for t in (3000, 3001, 3003, 3004, 3005, 3006, 3007, 3008, 3009) for e in range(3)],
     "ramp_routes2": [(t, 9920 + e) for t in (2000, 2001, 2002, 2003, 2005, 2008, 2010, 2011, 2012, 2014)
                      for e in range(3)],
 }
-CAP_SCALE = {"classic": 1, "varied": 2, "twophase": 2, "roadtypes": 2, "suburban": 2, "ramps": 2, "bigjunction": 2}      # NPC count caps per town style
+CAP_SCALE = {"classic": 1, "varied": 2, "twophase": 2, "roadtypes": 2, "suburban": 2, "ramps": 2, "bigjunction": 2,
+             "arrows": 2}      # NPC count caps per town style
 # per-suite defaults for arguments left unset on the command line
 SUITE_DEFAULTS = {
     "long": {"route_length": 2500.0, "max_steps": 20000},
@@ -119,6 +124,7 @@ SUITE_DEFAULTS["parked"] = {**SUITE_DEFAULTS["long3"], "town_style": "roadtypes"
                             "cap_scale": 1}
 SUITE_DEFAULTS["hidden_right"] = {"route_length": 600.0, "max_steps": 6000, "town_style": "bigjunction",
                                   "jam_fixes": True, "blocked_timeout": 180.0, "via_right": 1, "crosswalks": 0.7}
+SUITE_DEFAULTS["arrows"] = {**SUITE_DEFAULTS["hidden_right"], "town_style": "arrows"}
 SUITE_DEFAULTS["hidden_right_sub"] = {**SUITE_DEFAULTS["hidden_right"], "town_style": "suburban", "crosswalks": 0.0}
 for _s in ("suburban", "ramps", "ramp_routes"):
     SUITE_DEFAULTS[_s + "2"] = SUITE_DEFAULTS[_s]

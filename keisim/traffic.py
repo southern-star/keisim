@@ -2378,7 +2378,7 @@ class Pedestrians:
         if self.cw_held[i]:
             return None
         if st == PED_GREEN:
-            if react and J.green + J.yellow + J.allred - left < self.cw_react[i]:
+            if react and J.per - left < self.cw_react[i]:
                 return None
             need = c["width"] / max(left - 1.0, 0.1)
             return max(need, 1.0) if need <= CW_SPEED_MAX else None

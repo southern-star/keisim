@@ -223,6 +223,21 @@ class StaticScene:
                 poly = ngon(c, u, v, 0.30, 8)
                 poly = _orient(poly, np.array([1.0, 0, 0]))
                 fb.add(transform(poly, hx, hy, yaw), LAMP_OFF, SEM["pole"], 2.5, emissive=True, lamp=hi * 3 + slot)
+            if sh.get("arrow"):     # right arrow (TownConfig.right_arrow): a small housing under the red lamp, a
+                #                     green arrow pointing to the driver's right (lamp 3 * n_heads + head)
+                ya, za = 0.68 * side, zc - hh_ - 0.27
+                ah = box_faces(-hd_, hd_, ya - 0.3, ya + 0.3, za - 0.25, za + 0.25)
+                for f in ah.values():
+                    fb.add(transform(f, hx, hy, yaw), dark, SEM["pole"], 2.0)
+                r = side                                    # the driver's right, in the housing's local y
+                x0 = hd_ + 0.02
+                shaft = np.array([[x0, ya - 0.17 * r, za - 0.05], [x0, ya + 0.02 * r, za - 0.05],
+                                  [x0, ya + 0.02 * r, za + 0.05], [x0, ya - 0.17 * r, za + 0.05]])
+                tip = np.array([[x0, ya + 0.02 * r, za - 0.14], [x0, ya + 0.19 * r, za], [x0, ya + 0.02 * r, za + 0.14]])
+                for poly in (shaft, tip):
+                    poly = _orient(poly, np.array([1.0, 0, 0]))
+                    fb.add(transform(poly, hx, hy, yaw), LAMP_OFF, SEM["pole"], 2.5, emissive=True,
+                           lamp=3 * len(town.signal_heads) + hi)
             cx, cy = (px + hx) / 2, (py + hy) / 2
             objs.append((cx, cy, L / 2 + 1.5, f0, len(fb)))
 

@@ -63,7 +63,7 @@ const COLORS = [[235, 235, 235], [238, 240, 240], [195, 190, 190], [32, 30, 30],
 /** keisim Junction.signal_state */
 export function signalState(J, phase, t) {
   if (!J.signalized) return TL.GREEN;
-  const per = J.green + J.yellow + J.allred;
+  const per = J.green + J.yellow + (J.arrow || 0) + J.allred;     // (arrow: keisim TownConfig.right_arrow)
   const T = per * J.phases;
   const tau = (((t + J.offset) % T) + T) % T;
   const k = Math.floor(tau / per);

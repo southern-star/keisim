@@ -1783,7 +1783,8 @@ def test_turn_rule_ordered():
     assert turn_labels([-1.6, 0.7], "ordered") == ["right", "left"]          # no pair: as by the heading
     assert turn_labels([0.2, 0.7, 1.5], "ordered") == ["straight", "left", "left"]   # a straight one already
     assert turn_labels([1.1, 1.9], "ordered") == ["left", "left"]            # nothing close to straight ahead
-    assert [s for s, d in TOWN_STYLES.items() if d.get("turn_rule", "heading") != "heading"] == ["bigjunction"]
+    # (arrows: bigjunction's layout, without scrambles and with right arrows)
+    assert [s for s, d in TOWN_STYLES.items() if d.get("turn_rule", "heading") != "heading"] == ["bigjunction", "arrows"]
 
     def approaches(T):
         out = {}
@@ -2850,3 +2851,56 @@ def test_expert_gives_way_to_a_sidewalk_rider_crossing_its_turn():
     sw.u[i] = 0.0
     assert all(x[0] != i for x in sw.crossing_ahead())
     assert env.expert.rider_crossings(route, s, 6.0, pose, hl) == math.inf
+
+
+def test_right_arrows_timing_and_lamps():
+    """TownConfig.right_arrow (右折矢印): after each phase's yellow, the right-turn lanes (pockets) of an arrow junction
+    read green for right_arrow_s s while every other lane of that phase and the pedestrians read red; the oncoming
+    cars stop, so a right turn has nobody to give way to. Without arrows the towns (tags, signal offsets) are as
+    before. KeiSim draws the arrow lamp under the red one, lit (and labelled tl_green) only during the arrow."""
+    import math
+    from keisim.config import SEM, TL_GREEN, TL_RED, TL_YELLOW, town_config, town_tag
+    from keisim.roadnet import PED_RED
+
+    assert town_tag(town_config("bigjunction")) == "7eae7d60"
+    base = Town(3000, town_config("bigjunction"))
+    assert not any(J.arrow for J in base.junctions) and not any(h.get("arrow") for h in base.signal_heads)
+    T = Town(3000, town_config("arrows"))
+    no_arrow = town_config("arrows")
+    no_arrow.right_arrow = 0.0
+    T0 = Town(3000, no_arrow)
+    assert [J.offset for J in T.junctions] == [J.offset for J in T0.junctions]
+    J = next(J for J in T.junctions if J.arrow)
+    assert J.arrow == 6.0 and abs(J.cycle - 2 * (J.green + J.yellow + 6.0 + J.allred)) < 1e-9
+    pk = next(l for l in J.incoming if T.lanes[l].kind == "pocket")
+    other = next(l for l in J.incoming if T.lanes[l].kind == "road" and T.lanes[l].signal == T.lanes[pk].signal)
+    ph = T.lanes[pk].signal[1]
+    ts = np.arange(0.0, J.cycle, 0.1)
+    arrow_t = [t for t in ts if J.arrow_on(ph, t)]
+    assert 5.8 <= len(arrow_t) * 0.1 <= 6.2
+    for t in arrow_t:
+        assert T.signal_state_for_lane(pk, t) == TL_GREEN and T.signal_state_for_lane(other, t) == TL_RED
+        assert all(J.ped_signal(p, t, 4.0)[0] == PED_RED for p in range(J.phases))
+    t_y = next(t for t in ts if J.signal_state(ph, t) == TL_YELLOW)
+    assert T.signal_state_for_lane(pk, t_y) == TL_YELLOW
+    assert any(h.get("arrow") for h in T.signal_heads if h["junction"] == J.id)
+
+    cfg = EnvConfig()
+    cfg.town = town_config("arrows")
+    cfg.render_seg = True
+    env = KeiEnv(cfg)
+    env.reset(town_seed=3000, episode_seed=0, route_length=300.0, weather="noon")
+    w = env.world
+    hi, sh = next((i, h) for i, h in enumerate(T.signal_heads) if h.get("arrow") and h["junction"] == J.id)
+    # the camera 12 m in front of that head, looking at it
+    hx, hy = sh["head"]
+    yaw = sh["yaw"] + math.pi
+    w.ego.x, w.ego.y, w.ego.yaw = hx - 12.0 * math.cos(yaw), hy - 12.0 * math.sin(yaw), yaw
+    w.traffic.xy[:] = 1e4
+    w.peds.xy[:] = 1e4
+    w.t = arrow_t[len(arrow_t) // 2]
+    assert w.arrow_states()[hi]
+    lit = env._obs()["seg"]
+    w.t = next(t for t in ts if J.signal_state(sh["phase"], t) == TL_RED and not J.arrow_on(sh["phase"], t))
+    dark = env._obs()["seg"]
+    assert (lit == SEM["tl_green"]).sum() > (dark == SEM["tl_green"]).sum()

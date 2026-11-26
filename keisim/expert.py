@@ -974,6 +974,7 @@ class Expert:
         # --- traffic light. The speed-independent inputs of the decision are returned too (lt_*), so recorded
         # frames can be relabelled for other ego speeds (and for later versions of the rule).
         tl = TL_NONE
+        arrow = False
         target_nolight = target
         lt = {"lt_over": False, "lt_d": math.nan, "lt_st": TL_NONE, "lt_trem": math.nan, "lt_blocked": False,
               "lt_in": math.nan}
@@ -992,6 +993,9 @@ class Expert:
                         target, reason = 0.0, "red_light"
                 continue
             tl = st
+            lane = w.town.lanes[lid]
+            if lane.arrow:                                  # under a lit right arrow (TownConfig.right_arrow): the
+                arrow = w.town.junctions[lane.signal[0]].arrow_on(lane.signal[1], w.t)    # light reads green
             t_rem = math.nan
             if st == TL_YELLOW:
                 J = w.town.junctions[w.town.lanes[lid].signal[0]]
@@ -1011,7 +1015,7 @@ class Expert:
         # lead_owner: what the gap is to (>= 0: NPC vehicle index in world.traffic, <= -2: pedestrian, -1: nothing)
         return {"path": path, "target_speed": float(target), "tl_state": int(tl), "reason": reason,
                 "gap": g, "lead_owner": int(lead_o[0]), "target_nolight": float(target_nolight),
-                "yield_tta": float(yield_tta), "hidden": hidden,
+                "yield_tta": float(yield_tta), "hidden": hidden, "arrow": arrow,
                 "ss_d": float(ss_d), "ss_go": float(ss_go), "ss_creep": ss_creep, **lt}
 
     def blocked_at(self, route, s_stop):
