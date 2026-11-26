@@ -70,12 +70,20 @@ class World:
                     ahead = (first.id, s0 + 14.0, min(first.length - 3.0, s0 + 50.0))
             self.bikes = Bicycles(town, tc, rng, n_bk, avoid_xy=ego_xy, avoid_r=10.0, car_xy=cxy, car_r=cr, ahead=ahead)
             self.traffic.bikes = self.bikes
+        self.sw_bikes = None
+        if tc.sidewalk_bikes > 0:   # bicycles on the sidewalks (keisim/sidewalk_bikes.py); no random draw without them
+            from .sidewalk_bikes import SidewalkRiders
+            km = sum(w["poly"].length for w in town.walkways if not w["in_road"]) / 1000.0
+            self.sw_bikes = SidewalkRiders(town, tc, rng, int(min(tc.max_sidewalk_bikes, round(tc.sidewalk_bikes * km))),
+                                           avoid_xy=ego_xy)
+            self.peds.riders = self.sw_bikes
         self.route = route
         self.ego_s = None                  # the ego's arc length along its route (set by KeiEnv after each step)
         self.ego_stood = 0.0               # s the ego has stood still (TrafficConfig.ego_patience_s)
         self.n_heads = len(town.signal_heads)
         self._head_j = np.array([h["junction"] for h in town.signal_heads], int)
         self._head_p = np.array([h["phase"] for h in town.signal_heads], int)
+        self._head_arrow = np.array([bool(h.get("arrow")) for h in town.signal_heads], bool)
 
     def _hide_children(self, route):
         """TrafficConfig.dart_out: children hidden in front of the parked cars along the route ahead of the ego
@@ -106,6 +114,14 @@ class World:
         J = self.town.junctions
         return np.array([J[j].signal_state(p, self.t) for j, p in zip(self._head_j, self._head_p)], int)
 
+    def arrow_states(self):
+        """The right arrows lit now (TownConfig.right_arrow), per signal head; None in towns without any."""
+        if not self._head_arrow.any():
+            return None
+        J = self.town.junctions
+        return np.array([bool(a) and J[j].arrow_on(p, self.t)
+                         for j, p, a in zip(self._head_j, self._head_p, self._head_arrow)], bool)
+
     def ego_circles(self):
         e = self.ego
         return vehicle_circles(np.array([[e.x, e.y]]), np.array([e.yaw]), np.array([e.LENGTH]), np.array([e.WIDTH]))
@@ -130,9 +146,11 @@ class World:
             color, kind, brake = np.vstack([color, p_col]), np.append(kind, p_kind), np.append(brake, p_brake)
         st = SceneState(xy, yaw, dims, color, kind, brake, pd.xy, pd.yaw, pd.height, pd.colors, pd.phase,
                         self.lamp_states())
-        if self.bikes is not None and self.bikes.n:
+        st.arrow_state = self.arrow_states()
+        parts = [b.scene() for b in (self.bikes, self.sw_bikes) if b is not None and b.n]
+        if parts:                       # the sidewalk riders after the road bicycles
             (st.bike_xy, st.bike_yaw, st.bike_pose, st.bike_kind, st.bike_height,
-             st.bike_colors) = self.bikes.scene()
+             st.bike_colors) = parts[0] if len(parts) == 1 else tuple(np.concatenate(x) for x in zip(*parts))
         return st
 
     # ------------------------------------------------------------------ step
@@ -147,6 +165,13 @@ class World:
         ext_o = np.concatenate([np.full(len(exy), -1), -2 - np.arange(pd.n)])
         ext_v = np.concatenate([np.full(len(exy), e.v), pd.vel])
         ext_yaw = np.concatenate([np.full(len(exy), e.yaw), pd.yaw])
+        sw = self.sw_bikes
+        if sw is not None and sw.n:     # sidewalk riders in (or at) the carriageway: obstacles as people are
+            rxy, rown = sw.circles()
+            ext_xy, ext_r = np.concatenate([ext_xy, rxy]), np.concatenate([ext_r, np.full(len(rxy), BIKE_R)])
+            ext_o = np.concatenate([ext_o, -2 - (pd.n + rown)])
+            ext_v = np.concatenate([ext_v, sw.v[rown]])
+            ext_yaw = np.concatenate([ext_yaw, sw.yaw[rown]])
         ego_info = None
         if self.traffic.has_yields and self.route is not None and self.ego_s is not None:
             k = self.route.lane_index_at(self.ego_s)
@@ -161,6 +186,8 @@ class World:
             pass_xy = pd.xy[walk]
         if self.darts:          # the children hiding in front of parked cars are beside the cars' way
             ped_margin = np.where(pd.mode == pd.HIDE, 0.0, 0.9 if ped_margin is None else ped_margin)
+        if ped_margin is not None and sw is not None and sw.n:      # (the sidewalk riders' owners follow the people's)
+            ped_margin = np.concatenate([ped_margin, np.full(sw.n, 0.9)])
         self.traffic.step(dt, self.t, ext_xy, ext_r, ext_o, ext_v, ext_yaw, e.xy, e.v, e.yaw, ego_info,
                           ped_margin=ped_margin, pass_xy=pass_xy, ego_len=e.LENGTH, ego_wait=self._ego_lc_wait(),
                           peds=pd)
@@ -177,6 +204,14 @@ class World:
             veh_xy = np.vstack([veh_xy, bk.xy[mv]])
             veh_v = np.append(veh_v, bk.v[mv])
             veh_yaw = np.append(veh_yaw, bk.yaw[mv])
+        if sw is not None and sw.n:
+            cxy = np.vstack([tr.xy, e.xy[None]])
+            sw.step(dt, self.t, cxy, np.append(tr.v, e.v), np.append(tr.yaw, e.yaw),
+                    np.vstack([tr.dims[:, :2], [[e.LENGTH, e.WIDTH]]]), pd.xy)
+            mv = sw.v > 0.8
+            veh_xy = np.vstack([veh_xy, sw.xy[mv]])
+            veh_v = np.append(veh_v, sw.v[mv])
+            veh_yaw = np.append(veh_yaw, sw.yaw[mv])
         if self.darts and self.ego_s is not None:      # 飛び出し: a hidden child runs out ahead of the ego
             front = self.ego_s + e.LENGTH / 2
             for dt_ in self.darts:
@@ -272,6 +307,15 @@ class World:
                                  np.full(len(idx), BIKE_W))
                 for i in idx[obb_overlap(ec, bc)]:
                     hits.append(("bicycle", int(i)))
+        sw = self.sw_bikes
+        if sw is not None and sw.n:
+            d = np.hypot(*(sw.xy - e.xy).T)
+            idx = np.nonzero(d < 5.0)[0]
+            if len(idx):
+                bc = box_corners(sw.xy[idx, 0], sw.xy[idx, 1], sw.yaw[idx], np.full(len(idx), BIKE_LEN),
+                                 np.full(len(idx), BIKE_W))
+                for i in idx[obb_overlap(ec, bc)]:
+                    hits.append(("bicycle", int(i) + (bk.n if bk is not None else 0)))
         if self.parked is not None and self.parked.n:
             hits += [("parked", j) for j in self.parked.collisions(ec, e.xy, obb_overlap)]
         sb = self.town.static_boxes

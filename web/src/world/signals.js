@@ -8,12 +8,21 @@ export const TL = { RED: 0, YELLOW: 1, GREEN: 2 };
 /** Same as keisim.roadnet.Junction.signal_state(phase, t). */
 export function signalState(J, phase, t) {
   if (!J.signalized) return TL.GREEN;
-  const per = J.green + J.yellow + J.allred, T = per * J.phases;
+  const per = J.green + J.yellow + (J.arrow || 0) + J.allred, T = per * J.phases;
   const tau = (((t + J.offset) % T) + T) % T;
   const k = Math.floor(tau / per);
   if (k !== phase) return TL.RED;
   const r = tau - k * per;
   return r < J.green ? TL.GREEN : r < J.green + J.yellow ? TL.YELLOW : TL.RED;
+}
+
+/** Same as keisim.roadnet.Junction.arrow_on(phase, t): the right arrow (TownConfig.right_arrow) of `phase` is lit. */
+export function arrowOn(J, phase, t) {
+  if (!J.signalized || !J.arrow) return false;
+  const per = J.green + J.yellow + J.arrow + J.allred, T = per * J.phases;
+  const tau = (((t + J.offset) % T) + T) % T;
+  const r = tau - phase * per;
+  return r >= J.green + J.yellow && r < J.green + J.yellow + J.arrow;
 }
 
 // lamp slots left -> right as seen by the driver: 青 (blue-green), 黄, 赤
@@ -36,6 +45,7 @@ export function build(ctx) {
   const root = new THREE.Group(); root.name = 'signals';
   const K = ctx.kit(root);
   const lamps = [];                                    // {signal, junction, slot, matrix}
+  const arrows = [];                                   // right arrows: {J, phase, local, head}
   const up = new THREE.Vector3(0, 1, 0);
 
   for (const s of T.signals) {
@@ -66,6 +76,11 @@ export function build(ctx) {
       k.box(0.34, 0.03, 0.22, mHousing, [x, 0.17, 0.2], [0.22, 0, 0]);             // visor (庇)
       for (const sx of [-1, 1]) k.box(0.02, 0.2, 0.18, mHousing, [x + sx * 0.165, 0.08, 0.19]);
       lamps.push({ J, phase: s.phase, slot: SLOT[i], local: new THREE.Vector3(x, 0, 0.118), head });
+    }
+    if (s.arrow) {          // right arrow (右折矢印): a small housing under the red lamp, a green arrow lamp
+      k.rbox(0.44, 0.4, 0.2, 0.05, mHousing, [0.4, -0.45, 0]);
+      k.box(0.38, 0.33, 0.02, mFace, [0.4, -0.45, 0.105]);
+      arrows.push({ J, phase: s.phase, local: new THREE.Vector3(0.4, -0.45, 0.118), head });
     }
   }
   // 止まれ signs (real towns, keisim Town.stop_sign_posts): a red inverted triangle with a white rim on a post,
@@ -118,6 +133,32 @@ export function build(ctx) {
   inst.castShadow = false; inst.receiveShadow = false;
   ctx.noOutline(inst);
   ctx.add(inst);
+  // right arrows: an arrow shape pointing to the driver's right (head local +x: SLOT puts 赤 there), lit with the green
+  // lamps' colour while arrowOn
+  let ainst = null, aLabel = null;
+  const aPos = [], aNrm = [];
+  if (arrows.length) {
+    const sh = new THREE.Shape();
+    sh.moveTo(-0.12, -0.035); sh.lineTo(0.02, -0.035); sh.lineTo(0.02, -0.1); sh.lineTo(0.13, 0);
+    sh.lineTo(0.02, 0.1); sh.lineTo(0.02, 0.035); sh.lineTo(-0.12, 0.035); sh.closePath();
+    const geo = new THREE.ShapeGeometry(sh);
+    ainst = new THREE.InstancedMesh(geo, mLamp, arrows.length);
+    ainst.name = 'signal-arrows';
+    arrows.forEach((a, i) => {
+      const world = a.head.localToWorld(a.local.clone());
+      m4.makeRotationY(a.head.rotation.y).scale(new THREE.Vector3(SCALE, SCALE, SCALE)).setPosition(world);
+      ainst.setMatrixAt(i, m4);
+      ainst.setColorAt(i, col.setRGB(...DIM[TL.GREEN]));
+      aPos.push(world);
+      aNrm.push(new THREE.Vector3(0, 0, 1).applyQuaternion(a.head.getWorldQuaternion(new THREE.Quaternion())));
+    });
+    aLabel = new THREE.InstancedBufferAttribute(new Float32Array(arrows.length * 3), 3);
+    for (let i = 0; i < arrows.length; i++) aLabel.setXYZ(i, 7 / 255, 0, 0);
+    ainst.userData.labelColors = aLabel;
+    ainst.castShadow = false; ainst.receiveShadow = false;
+    ctx.noOutline(ainst);
+    ctx.add(ainst);
+  }
   const cam = new THREE.Vector3(), toCam = new THREE.Vector3();
   ctx.onUpdate((dt, t) => {
     // colours follow the junction timing and, through the directivity, the camera position (every frame)
@@ -138,6 +179,22 @@ export function build(ctx) {
     }
     if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
     labelCol.needsUpdate = true;
+    for (let i = 0; i < arrows.length; i++) {
+      const a = arrows[i];
+      let f = 0, label = 7;
+      if (arrowOn(a.J, a.phase, t)) {
+        toCam.subVectors(cam, aPos[i]);
+        const d = toCam.length();
+        const c = d > 1e-6 ? toCam.dot(aNrm[i]) / d : 1;
+        f = Math.min(1, Math.max(0, (c - COS_ZERO) / (COS_FULL - COS_ZERO)));
+        if (c >= COS_LABEL) label = LABEL[TL.GREEN];
+      }
+      const lit = LIT[TL.GREEN], dim = DIM[TL.GREEN];
+      ainst.setColorAt(i, col.setRGB(dim[0] + f * (lit[0] - dim[0]), dim[1] + f * (lit[1] - dim[1]), dim[2] + f * (lit[2] - dim[2])));
+      aLabel.setXYZ(i, label / 255, 0, 0);
+    }
+    if (ainst) { if (ainst.instanceColor) ainst.instanceColor.needsUpdate = true; aLabel.needsUpdate = true; }
   });
-  ctx.services.signals = { count: T.signals.length, lamps: lamps.length, stopSigns: (T.stopSigns || []).length };
+  ctx.services.signals = { count: T.signals.length, lamps: lamps.length, arrows: arrows.length,
+                          stopSigns: (T.stopSigns || []).length };
 }

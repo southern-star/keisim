@@ -81,6 +81,7 @@ class Lane:
         self.stop_s = None                # arc length of the stop line
         self.stop_sign_s = None           # arc length of a 止まれ stop line (minor road before a priority crossing)
         self.signal = None                # (junction id, phase index)
+        self.arrow = False                # a right-turn lane under a right arrow (TownConfig.right_arrow)
 
     def __repr__(self):
         return f"Lane({self.id},{self.kind},L={self.length:.1f},turn={self.turn})"
@@ -253,15 +254,23 @@ class Junction:
         self.offset = 0.0
         self.groups = None              # signal phase of each arm (signalised junctions)
         self.scramble = False           # TownConfig.scramble: a third phase for the people only (all cars red)
+        self.arrow = 0.0                # TownConfig.right_arrow: s of the right arrow after each phase's yellow
+
+    @property
+    def per(self):
+        """Seconds of each phase: green, yellow, the right arrow (TownConfig.right_arrow; 0 without), all-red."""
+        return self.green + self.yellow + self.arrow + self.allred
 
     @property
     def cycle(self):
-        return self.phases * (self.green + self.yellow + self.allred)
+        return self.phases * self.per
 
-    def signal_state(self, phase, t):
+    def signal_state(self, phase, t, arrow=False):
+        """The light of `phase` at time t. arrow: for a right-turn lane under a right arrow (Lane.arrow), whose
+        arrow after the yellow counts as green."""
         if not self.signalized:
             return TL_GREEN
-        per = self.green + self.yellow + self.allred
+        per = self.per
         tau = (t + self.offset) % (per * self.phases)
         k = int(tau // per)
         if k != phase:
@@ -271,13 +280,24 @@ class Junction:
             return TL_GREEN
         if r < self.green + self.yellow:
             return TL_YELLOW
+        if arrow and r < self.green + self.yellow + self.arrow:
+            return TL_GREEN
         return TL_RED
+
+    def arrow_on(self, phase, t):
+        """The right arrow of `phase` is lit now (TownConfig.right_arrow)."""
+        if not self.arrow:
+            return False
+        per = self.per
+        tau = (t + self.offset) % (per * self.phases)
+        r = tau - phase * per
+        return self.green + self.yellow <= r < self.green + self.yellow + self.arrow
 
     def ped_signal(self, phase, t, flash):
         """Pedestrian light of a zebra that is green with the cars of `phase`: (state, s left), state PED_RED,
         PED_GREEN (the first green - flash s of the phase) or PED_FLASH (its last `flash` s); s left: until the
         phase's yellow and all-red are over (the cars crossing the zebra's road get their green then)."""
-        per = self.green + self.yellow + self.allred
+        per = self.per
         tau = (t + self.offset) % (per * self.phases)
         r = tau - phase * per
         if not 0.0 <= r < per:
@@ -291,7 +311,7 @@ class Junction:
 
     def remaining(self, phase, t):
         """Seconds until the state of `phase` changes."""
-        per = self.green + self.yellow + self.allred
+        per = self.per
         T = per * self.phases
         tau = (t + self.offset) % T
         start = phase * per
@@ -666,6 +686,7 @@ class Town:
         self._make_pockets()                         # right-turn lanes (RoadSpec.median): extra approach lanes
         ramp_skip = self._plan_ramps()               # (approach lane, exit lane) of the left turns ramps take over
         scramble = self._plan_scrambles()            # junction -> green of its phases (TownConfig.scramble)
+        arrows = self._plan_arrows(scramble)         # junctions with a right-arrow phase (TownConfig.right_arrow)
 
         # ---- junction connectors + polygons + signals
         def connect(J, lin, lout, turn):
@@ -740,6 +761,11 @@ class Town:
                         lin = self.lanes[lid]
                         lin.signal = (J.id, group[k])
                         lin.stop_s = max(1.0, lin.length - cfg.stop_line_setback)
+                if J.id in arrows and J.phases == 2 and any(self.lanes[lid].kind == "pocket" for lid in J.incoming):
+                    J.arrow = cfg.right_arrow_s          # (after the offset: its draw is that of right_arrow 0)
+                    for lid in J.incoming:
+                        if self.lanes[lid].kind == "pocket":
+                            self.lanes[lid].arrow = True
         self._make_yields()
 
         # swept strips of junction connectors (bends / skewed junctions bulge past the hull)
@@ -927,6 +953,16 @@ class Town:
             if u < cfg.scramble:
                 out[J.id] = green
         return out
+
+    def _plan_arrows(self, scramble):
+        """Junctions that get a right-arrow phase (TownConfig.right_arrow): signalised junctions of two-phase signals
+        that are not scrambles; _make_signals gives it to those whose approaches have right-turn lanes. Own random
+        stream (one draw per signalised junction, whatever the chance)."""
+        cfg = self.cfg
+        if cfg.right_arrow <= 0.0 or cfg.signal_mode != "two_phase":
+            return set()
+        rng = np.random.default_rng([self.seed, 0x6172726F])
+        return {J.id for J in self.junctions if J.signalized and J.id not in scramble and rng.random() < cfg.right_arrow}
 
     def _make_ramps(self):
         """The planned ramps (_plan_ramps): a 'ramp' lane each (no predecessor or successor: cars change into it from
@@ -1522,6 +1558,7 @@ class Town:
                 self.signal_heads.append({
                     "junction": J.id, "phase": lane.signal[1], "lane": lane.id,
                     "head": head, "pole": pole, "yaw": h_in + math.pi, "z": 5.4,
+                    **({"arrow": True} if any(self.lanes[lid].arrow for lid in arm["ins"]) else {}),
                 })
 
     def _make_stop_sign_posts(self):
@@ -1871,7 +1908,7 @@ class Town:
         if lane.signal is None:
             return TL_GREEN
         j, ph = lane.signal
-        return self.junctions[j].signal_state(ph, t)
+        return self.junctions[j].signal_state(ph, t, lane.arrow)
 
     def total_lane_length(self):
         return sum(l.length for l in self.lanes if l.kind == "road")

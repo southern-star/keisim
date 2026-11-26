@@ -16,7 +16,7 @@ from .render.maptex import MapTexture
 from .render.meshes import StaticScene
 from .render.rig import make_renderer
 from .roadnet import Town
-from .route import ramp_route, random_route
+from .route import ramp_route, random_route, right_turn_route
 from .world import World
 
 PENALTY = {"vehicle": 0.60, "parked": 0.60, "pedestrian": 0.50, "static": 0.65, "red_light": 0.70, "off_road": 0.80, "crosswalk": 0.70,
@@ -108,10 +108,12 @@ class KeiEnv:
 
     # ------------------------------------------------------------------ reset
     def reset(self, town_seed=0, episode_seed=None, route_length=None, weather=None, render=True, via_ramp=False,
-              route=None):
+              route=None, via_right=False):
         """town_seed: a procedural town's seed, or a Town (keisim/realworld.py) to drive in. via_ramp: a route that
-        takes one of the town's ramps (route.ramp_route; towns without ramps: a random route). route: a given Route
-        in that town instead of a random one (e.g. keisim/curve_course.py)."""
+        takes one of the town's ramps (route.ramp_route; towns without ramps: a random route). via_right: a route
+        that starts before a signalised right turn across two or more oncoming lanes (route.right_turn_route; none
+        found: a random route). route: a given Route in that town instead of a random one (e.g.
+        keisim/curve_course.py)."""
         cfg = self.cfg
         self.assets = get_assets(town_seed, cfg)
         town = self.assets.town
@@ -122,7 +124,9 @@ class KeiEnv:
         if route is not None:
             self.route = route
         else:
-            self.route = ramp_route(town, rng, L) if via_ramp and town.ramps else random_route(town, rng, L)
+            r = right_turn_route(town, rng, L) if via_right else None
+            self.route = r if r is not None else \
+                ramp_route(town, rng, L) if via_ramp and town.ramps else random_route(town, rng, L)
         p = self.route.poly.interp(self.route.s_start)
         h = float(self.route.poly.heading(self.route.s_start))
         self.world = World(town, cfg, rng, (p[0], p[1], h), self.route)

@@ -93,6 +93,13 @@ class TownConfig:
     # 25 s over a diagonal): own random stream, so the rest of the town is that of scramble 0.
     scramble: float = 0.0
     scramble_green: tuple = (24.0, 32.0)
+    # right-turn arrows (右折矢印): the chance that a signalised junction of two-phase signals (not a scramble) whose
+    # approaches have right-turn lanes (Lane kind "pocket") gets an arrow phase: after each phase's yellow, its cars'
+    # lights stay red for right_arrow_s s more while a green right arrow lets the right-turn lanes go (the oncoming
+    # cars have red: no one to give way to), then the all-red. The pedestrians' lights are red through it. Own
+    # random stream (one draw per such junction), so the rest of the town is that of right_arrow 0.
+    right_arrow: float = 0.0
+    right_arrow_s: float = 6.0
     # how a junction connector gets its turn (Lane.turn: the navigation command of the routes through it).
     # heading: by its change of heading alone (left over 0.5 rad, right under -0.5 rad, else straight); at a skewed
     # junction two exits of one approach can then share "left" (or "right"). ordered: the same, but where two exits of
@@ -247,6 +254,24 @@ class TrafficConfig:
     # to here; no random draw is made for them, so the old episodes stay as they were). max_bikes caps the number.
     bicycles: float = 0.0
     max_bikes: int = 40
+    # 二段階右折 (bicycles.two_stage_track): the weight of a right turn among a rider's choices at a signalised junction
+    # of two-phase signals, against 1.5 for straight on and 1 for left; a rider turning right there goes straight on
+    # to the far left corner, turns, and waits there for the green of the road it turns into, then rides on along it.
+    # 0: riders do not turn right where they have another way (as before; no other draw changes).
+    bike_two_stage: float = 0.0
+    # 追い越し (Traffic.overtake_room): cars (and the expert) pass a bicycle they cannot pass with room to spare inside
+    # their lane over the centre line, on two-way roads with one lane each way whose centre line is not yellow
+    # (はみ出し禁止), when the oncoming lane stays clear of cars for the whole pass and the pass ends well before the
+    # junction; an NPC that has begun to pass goes on to the end. Off: inside the lane only (as before).
+    bike_overtake: bool = False
+    # Bicycles on the sidewalks (keisim/sidewalk_bikes.py, 歩道を走る自転車): riders per km of sidewalk (walkways that are
+    # not in the road), on its road side at 10-16 km/h. At a junction they turn the corner, turn back, or ride on
+    # across the mouth of the road in front of them: at a two-phase signal with the pedestrian light, elsewhere after a
+    # look (some of them hardly look: 出会い頭, coming out from behind the corner). Cars treat them as obstacles once
+    # they are in the road; the expert sees where they will be (as for people crossing). 0: none (no random draw is
+    # made for them, so the old episodes stay as they were). max_sidewalk_bikes caps the number.
+    sidewalk_bikes: float = 0.0
+    max_sidewalk_bikes: int = 30
     # Parked cars (keisim/parked.py, 路上駐車): parked cars per km of kerb on two-way roads with one lane each way
     # (not main roads), away from junctions, curves and the other side's parked cars. Cars and the expert move out
     # round them, over the centre line only when the oncoming lane is clear (else they wait behind). 0: none (no
@@ -320,6 +345,11 @@ TOWN_STYLES = {
     "bigjunction": {"block_mode": "varied", "spacing_min": 100.0, "spacing_max": 220.0, "signal_mode": "two_phase",
                     "road_types": "mixed", "road_mix": (0.45, 0.45, 0.1), "main_lanes": 2, "main_roads": 3,
                     "main_median": 3.0, "scramble": 0.6, "edge_drop": 0.08, "turn_rule": "ordered"},
+    # big junctions without scramble crossings, every signalised junction with right-turn lanes under a right arrow
+    # (右折矢印, TownConfig.right_arrow): the layout and streets of bigjunction
+    "arrows": {"block_mode": "varied", "spacing_min": 100.0, "spacing_max": 220.0, "signal_mode": "two_phase",
+               "road_types": "mixed", "road_mix": (0.45, 0.45, 0.1), "main_lanes": 2, "main_roads": 3,
+               "main_median": 3.0, "scramble": 0.0, "edge_drop": 0.08, "turn_rule": "ordered", "right_arrow": 1.0},
     # suburban with at-grade left-turn ramps at the main roads' junctions (分流・合流)
     "ramps": {"block_mode": "varied", "spacing_min": 100.0, "spacing_max": 220.0, "signal_mode": "two_phase",
               "road_types": "mixed", "road_mix": (0.45, 0.45, 0.1), "main_lanes": 2, "ramps": 0.8},
@@ -328,7 +358,7 @@ TOWN_STYLES = {
 # TownConfig fields added after town_tag() was introduced: part of the tag only when they differ from the
 # default, so the tags (and exported town names) of the existing styles stay the same.
 _TAG_LATER = ("road_types", "main_roads", "road_mix", "main_lanes", "ramps", "scramble", "scramble_green",
-              "main_median", "turn_rule")
+              "main_median", "turn_rule", "right_arrow", "right_arrow_s")
 
 
 def town_config(style="classic"):
@@ -386,6 +416,16 @@ class EnvConfig:
     # horizontal field of view, not behind a building; Traffic.visible_from), so its labels follow from the image:
     # with all of them, a car outside the 100 deg view made the expert wait where the image looked clear.
     expert_yield_visible: bool = False
+    # 見えにくい右折: a right turn waiting at a two-phase signal (its connector's wait point) assumes a car wherever the
+    # oncoming lanes it gives way to are hidden from the camera behind another car (or a building) within reach of
+    # the crossing: an oncoming car waiting to turn right itself hides the lane beside it, and through traffic comes
+    # out from behind it (右直事故). Traffic.hidden_spot finds the nearest spot before the crossing where a kei car could
+    # be unseen; it counts as a car there at the lane's speed limit, with min_arrival's rules (it stops at a yellow
+    # light it can stop for, it queues behind a car standing to go elsewhere), never on red, and on the connector
+    # itself (inside the junction) only on green. So the expert waits until it sees the lane clear or the light
+    # stops the oncoming traffic, whether or not a car is really there: the labels follow from what the camera
+    # shows. With expert_yield_visible, cars hide one another too (Traffic.visible_from(cars=True)). Off: as before.
+    expert_hidden_cars: bool = False
     # Bicycles (TrafficConfig.bicycles) for the expert: only the riders the first camera (on the labelled pose) sees
     # right now (Bicycles.visible_from) count for the 巻き込み確認 before a left turn and for the give-way tables;
     # riders it does not see that come up from behind faster than the ego do not move its path over either

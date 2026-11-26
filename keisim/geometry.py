@@ -80,6 +80,16 @@ def rays_clear(origin, pts, edges):
     edges = np.asarray(edges, float).reshape(-1, 2, 2)
     if not len(pts) or not len(edges):
         return np.ones(len(pts), bool)
+    return ~np.any(rays_hit(origin, pts, edges), axis=1)
+
+
+def rays_hit(origin, pts, edges):
+    """Which of the segments `edges` (M,2,2) the rays from `origin` (2,) to `pts` (N,2) cross -> bool (N, M)
+    (as rays_clear: an edge through the end point itself does not count)."""
+    pts = np.asarray(pts, float).reshape(-1, 2)
+    edges = np.asarray(edges, float).reshape(-1, 2, 2)
+    if not len(pts) or not len(edges):
+        return np.zeros((len(pts), len(edges)), bool)
     a = np.asarray(origin, float)[None, None, :]
     r = pts[:, None, :] - a                                     # (N,1,2)
     c, s = edges[None, :, 0, :], edges[None, :, 1, :] - edges[None, :, 0, :]
@@ -91,7 +101,7 @@ def rays_clear(origin, pts, edges):
     den = np.where(ok, den, 1.0)
     t = cross(c - a, s) / den                                   # along the ray
     u = cross(c - a, r) / den                                   # along the edge
-    return ~np.any(ok & (t > 0.0) & (t < 0.999) & (u >= 0.0) & (u <= 1.0), axis=1)
+    return ok & (t > 0.0) & (t < 0.999) & (u >= 0.0) & (u <= 1.0)
 
 
 # ----------------------------------------------------------------------------

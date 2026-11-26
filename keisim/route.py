@@ -346,6 +346,9 @@ def random_route(town, rng, length, start_lane=None, s_start=None, turn_weights=
     return _finish(town, lanes, s_start, total, length)
 
 
+RIGHT_AHEAD = 160.0         # m: right_turn_route: the right turn within this far of the route's start
+
+
 def ramp_route(town, rng, length, ramp=None, turn_weights=None):
     """A random route that takes one of the town's ramps (Town.ramps, drawn; or index `ramp`). It starts on the road
     before the ramp's approach lane (70 %; else at that road's start), in the approach lane or in a sibling (then it
@@ -378,6 +381,25 @@ def ramp_route(town, rng, length, ramp=None, turn_weights=None):
     total += R.length + C.length
     total = _walk(town, rng, lanes, total, link_map(R, C, R.length), length, turn_weights)
     return _finish(town, lanes, s_start, total, length)
+
+
+def right_turn_route(town, rng, length, tries=400):
+    """見えにくい右折 (hidden_right suites): a random route whose first junction, within RIGHT_AHEAD m of its start, is
+    a right turn at a signal that gives way to two or more oncoming lanes (片側2車線: an oncoming car waiting to turn
+    right there hides the lanes beside it). Drawn by trying random_route from road lanes with a strong preference for
+    right turns; None when no try finds one (a town without such junctions)."""
+    cands = [l for l in town.road_lanes if town.lanes[l].length > 30.0 and town.lanes[l].nlanes >= 2]
+    if not cands:
+        return None
+    for _ in range(tries):
+        start = cands[int(rng.integers(len(cands)))]
+        r = random_route(town, rng, length, start_lane=start, turn_weights={"left": 0.2, "straight": 0.2, "right": 4.0})
+        jn = next((j for j in r.junctions if j["s_in"] > r.s_start), None)
+        if jn is None or jn["s_in"] - r.s_start > RIGHT_AHEAD or not jn["signalized"] or jn["turn"] != "right":
+            continue
+        if len({b for b, _, _ in town.lanes[jn["lane"]].yields}) >= 2:
+            return r
+    return None
 
 
 def _walk(town, rng, lanes, total, s_lo, length, turn_weights):

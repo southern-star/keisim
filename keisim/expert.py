@@ -12,15 +12,33 @@ import math
 import numpy as np
 
 from .config import TL_GREEN, TL_NONE, TL_RED, TL_YELLOW
-from .bicycles import BIKE_LEN, BIKE_R, NCB
+from .bicycles import BIKE_LEN, BIKE_R, BIKE_W, NCB
 from .geometry import world_to_local, wrap
 from .parked import (PARKED_OWNER, PK_CLEAR, PK_DECIDE, PK_GAP0, PK_GIVE_ROOM, PK_IN, PK_KEEP, PK_MARGIN, PK_OUT,
                      PK_PASS_V, PK_SLOW_AT, PK_SLOW_B, PK_WAIT, PK_ZONE)
 from .route import LC_CHECK, LC_PUSH, LC_PUSH_TO, change_room, link_map
 from .traffic import (BIKE_END, BIKE_FREE, BIKE_IN, BIKE_KEEP, BIKE_LEFT, BIKE_LEFT_WAIT, BIKE_MIN, BIKE_OUT,
-                      BIKE_PASS_DV, BIKE_PASS_V, CW_MARGIN, CW_REACH, PASS_SPEED, YIELD_GAP, Traffic, corridor_gaps,
-                      sweep_gaps, vehicle_circles)
+                      BIKE_PASS_DV, BIKE_PASS_V, CW_MARGIN, CW_REACH, HIDE_DIMS, OVERTAKE_AHEAD, PASS_SPEED,
+                      YIELD_GAP, Traffic, corridor_gaps, sweep_gaps, vehicle_circles)
 
+def _seg_cross(a, b, c, d):
+    """Where segment ab crosses segment cd: the fraction along ab, or None."""
+    r, q = b - a, d - c
+    den = r[0] * q[1] - r[1] * q[0]
+    if abs(den) < 1e-9:
+        return None
+    t = ((c - a)[0] * q[1] - (c - a)[1] * q[0]) / den
+    u = ((c - a)[0] * r[1] - (c - a)[1] * r[0]) / den
+    return t if 0.0 <= t <= 1.0 and 0.0 <= u <= 1.0 else None
+
+
+def _seg_frac(c, d, a, b):
+    """The fraction along cd where it crosses ab (0 when they do not)."""
+    t = _seg_cross(c, d, a, b)
+    return 0.0 if t is None else t
+
+
+RIDER_SIDE = 0.5                         # m beside the body: Expert.rider_crossings gives way where a rider's line comes
 PATH_S = np.arange(1, 11) * 2.0          # label waypoints every 2 m up to 20 m
 LABEL_VERSION = 7                        # 3: yellow per traffic law; 4: at yellow, stop whenever the ego still can;
                                          # 5: and always when creeping (< 1 m/s) with the bumper at the line;
@@ -333,6 +351,18 @@ class Expert:
                 # 0.5 m to the right, and the ego waiting there for oncoming cars stood in their way (long3c
                 # 1012/9400: the oncoming car and the ego blocked each other for good)
                 c = cap * min(max((s_j - s0) / BIKE_START, 0.0), 1.0)
+                # TrafficConfig.bike_overtake: over the centre line when the oncoming lane stays clear for the pass
+                # (Traffic.overtake_room, as the NPCs), from OVERTAKE_AHEAD behind the rider until past it
+                if w.traffic.cfg.bike_overtake and not out["nopass"][j]:
+                    need = max(hw + 0.3 + BIKE_FREE + 0.05 - d_j, 0.0)
+                    ds_ = s_j - s - hl - hb
+                    if need > c + 0.05 and -(2 * hl + 2 * hb + BIKE_OUT[0]) < ds_ < OVERTAKE_AHEAD and \
+                            lane.speed_limit > vb + 2.0:
+                        k0 = route.lane_index_at(s - hl)
+                        s_back = route.local_s(s - hl, k) if k0 == k else -1.0
+                        o = w.traffic.overtake_room(lane, s_back, route.local_s(s_j, k), vb, need, lane.speed_limit)
+                        if o > c:
+                            c = cap = o
             if lane.kind == "conn":
                 # in a junction (on the route's connector): the rider's line and the ego's are not side by side there
                 # (suburban 2007/9900: the ego caught up with a rider on its right turn and ran into it; 2001/9900: it
@@ -399,6 +429,86 @@ class Expert:
         x, y, yaw = float(pose[0]), float(pose[1]), float(pose[2])
         cam = (x + c.x * math.cos(yaw) - c.y * math.sin(yaw), y + c.x * math.sin(yaw) + c.y * math.cos(yaw))
         return w.bikes.visible_from(cam, yaw, math.radians(c.fov_deg) / 2, c.max_dist, w.town)
+
+    def with_hidden(self, conn, on_lane, pose):
+        """EnvConfig.expert_hidden_cars: the give-way tables `on_lane` with a car (HIDE_DIMS, at the lane's speed
+        limit) at the nearest spot of each lane `conn` gives way to that the rig's first camera on `pose` cannot see
+        (Traffic.hidden_spot) -> a new dict, or on_lane itself when every lane is in view. Such a car counts only
+        while its approach has green or yellow (min_arrival: on yellow, if it would not stop), and on the connector
+        itself (inside the junction) only on green."""
+        w = self.env.world
+        tr, lanes = w.traffic, w.town.lanes
+        c = self.env.cfg.camera
+        x, y, yaw = float(pose[0]), float(pose[1]), float(pose[2])
+        cam = (x + c.x * math.cos(yaw) - c.y * math.sin(yaw), y + c.x * math.sin(yaw) + c.y * math.cos(yaw))
+        half = math.radians(c.fov_deg) / 2
+        out = on_lane
+        self.hidden_why = []
+        for b, _, s2 in conn.yields:
+            spot = tr.hidden_spot(b, s2, cam, yaw, half, c.max_dist, w.town, why=True)
+            if spot is None:
+                continue
+            lid, sl, why = spot
+            st = w.town.signal_state_for_lane(lanes[b].pred[0], w.t)
+            if st == TL_RED or (lid == b and st != TL_GREEN):
+                continue            # (one hidden all along does not run the red: the ego clears the junction)
+            if out is on_lane:
+                out = dict(on_lane)
+            self.hidden_why.append(why)
+            row = (sl, lanes[lid].speed_limit, HIDE_DIMS[0], False, None if lid == b else b, None, False)
+            out[lid] = sorted(list(out.get(lid, ())) + [row], key=lambda e: -e[0])
+        return out
+
+    def rider_crossings(self, route, s, v, pose, hl):
+        """The speed for the sidewalk riders on their way across a road without a zebra whose line the route crosses
+        within 40 m (Expert.plan) -> target (inf: none binds)."""
+        sw = self.env.world.sw_bikes
+        seen = self.riders_seen(pose) if self.env.cfg.expert_bike_visible else None
+        s_front = s + hl
+        sp = np.arange(max(s_front - 2.0 * hl - 1.0, route.s_start), min(s_front + 40.0, route.poly.length), 0.5)
+        if len(sp) < 2:
+            return math.inf
+        rp = route.poly.interp(sp)
+        h = route.poly.heading(sp)
+        nrm = np.stack([-np.sin(h), np.cos(h)], -1) * (self.env.world.ego.WIDTH / 2 + RIDER_SIDE)
+        lines = (rp, rp + nrm, rp - nrm)                         # the path and the sides of the body along it
+        target = math.inf
+        for i, lk, d_kerb in sw.crossing_ahead():
+            if seen is not None and not seen[i]:
+                continue
+            a = np.array(lk["poly"].interp1(max(lk["u_in"] - RIDER_SIDE, 0.0)))
+            b = np.array(lk["poly"].interp1(lk["u_out"]))
+            best = None                                          # (route s, fraction along the rider's line)
+            for q in lines:
+                for k in range(len(q) - 1):
+                    t = _seg_cross(a, b, q[k], q[k + 1])
+                    if t is not None:
+                        s_k = float(sp[k]) + 0.5 * float(_seg_frac(q[k], q[k + 1], a, b))
+                        if best is None or s_k < best[0]:
+                            best = (s_k, t)
+                        break
+            if best is None:
+                continue
+            s_x, t = best
+            d_e = s_x - s_front - BIKE_W / 2                     # front bumper to the rider's line
+            if d_e < 0.5:
+                continue                                         # (on it already: clear it)
+            d_r = d_kerb - RIDER_SIDE + t * (lk["u_out"] - lk["u_in"] + RIDER_SIDE)   # the rider to that point
+            if d_r < -1.0:
+                continue
+            t_r = max(d_r - BIKE_LEN, 0.0) / max(float(sw.v[i]), 1.0)
+            t_c = (d_e + 2.0 * hl + BIKE_LEN + 1.0) / max(v, 2.0)
+            if t_r < t_c + 1.0 and t_r < 6.0:
+                target = min(target, stop_profile(d_e - CW_MARGIN, self.B_COMF))
+        return target
+
+    def riders_seen(self, pose):
+        """The sidewalk riders the rig's first camera on `pose` sees right now (EnvConfig.expert_bike_visible)."""
+        w = self.env.world
+        c = self.env.cfg.camera
+        x, y, yaw = float(pose[0]), float(pose[1]), float(pose[2])
+        cam = (x + c.x * math.cos(yaw) - c.y * math.sin(yaw), y + c.x * math.sin(yaw) + c.y * math.cos(yaw))
+        return w.sw_bikes.visible_from(cam, yaw, math.radians(c.fov_deg) / 2, c.max_dist, w.town)
 
     def bike_rules(self, route, s, v, bikes, pts, cum, real):
         """The speed rules for bicycles -> target speed (inf: none binds). Behind one the ego cannot pass (less
@@ -605,6 +715,27 @@ class Expert:
                 cmg = np.concatenate([cmg, np.tile(np.where(close, 0.25, 1.0), m)])
             else:
                 cmg = np.concatenate([cmg, np.full(len(pxy), 1.0)])
+        sw = getattr(w, "sw_bikes", None)
+        if sw is not None and sw.n:
+            # sidewalk riders (keisim/sidewalk_bikes.py) in or at the carriageway, and where the ones on their way into
+            # it will be (expert_bike_visible: only those the first camera sees)
+            rx, ro = sw.circles()
+            fut = sw.coming()
+            if env.cfg.expert_bike_visible:
+                seen = self.riders_seen(pose)
+                keep = seen[ro]
+                rx, ro = rx[keep], ro[keep]
+                fut = [f for f in fut if seen[f[0]]]
+            if fut:
+                rx = np.concatenate([rx, np.array([f[1] for f in fut])])
+                ro = np.concatenate([ro, np.array([f[0] for f in fut], int)])
+            if len(rx):
+                cxy = np.concatenate([cxy, rx])
+                cr = np.concatenate([cr, np.full(len(rx), BIKE_R)])
+                cow = np.concatenate([cow, -2 - (peds.n + ro)])
+                csp = np.concatenate([csp, np.zeros(len(rx))])
+                cyw = np.concatenate([cyw, np.zeros(len(rx))])
+                cmg = np.concatenate([cmg, np.full(len(rx), 1.0)])
         gap, lead_v, lead_o = corridor_gaps(pts[None], cum[None], np.ones((1, len(pts)), bool),
                                             np.array([[ego.x, ego.y]]), np.array([ego.yaw]), np.array([hl]),
                                             np.array([ego.WIDTH / 2]), cxy, cr, cow, csp, cyw,
@@ -621,7 +752,8 @@ class Expert:
             g0 = self.GAP0_PED if lead_o[0] <= -2 else self.GAP0_VEH
             v_obs = stop_profile(g - g0, self.B_COMF)
             if v_obs < target:
-                target, reason = v_obs, ("pedestrian" if lead_o[0] <= -2 else "vehicle")
+                target, reason = v_obs, ("vehicle" if lead_o[0] > -2 else
+                                         "bicycle" if lead_o[0] <= -2 - peds.n else "pedestrian")
         if w.town.in_road_walkways and peds.n:
             # pass people walking beside the lane at PASS_SPEED (they are within the usual 1 m margin)
             walk = peds.walking_in_road()
@@ -688,6 +820,7 @@ class Expert:
         # up to 16-21 km/h over the 5-10 m from its stop to the wait point, too fast where the corner hides the cars
         # with priority (KeiView's walls and hedges): models that saw a car late hit it.
         yield_tta = math.nan          # label for the model's auxiliary head: earliest arrival of a car with priority
+        hidden = False                # EnvConfig.expert_hidden_cars: the yield binds for a hidden spot alone
         ss_creep = False              # 徐行 after a 止まれ line (diagnostics)
         if tr.has_yields:
             s_front = s + hl
@@ -702,7 +835,8 @@ class Expert:
                 x, y, yaw = float(pose[0]), float(pose[1]), float(pose[2])
                 cam = (x + c.x * math.cos(yaw) - c.y * math.sin(yaw), y + c.x * math.sin(yaw) + c.y * math.cos(yaw))
                 half = math.radians(c.fov_deg) / 2
-                return tr.yield_tables(visible=tr.visible_from(cam, yaw, half, c.max_dist, w.town),
+                return tr.yield_tables(visible=tr.visible_from(cam, yaw, half, c.max_dist, w.town,
+                                                               cars=env.cfg.expert_hidden_cars),
                                        bikes_visible=None if w.bikes is None else
                                        w.bikes.visible_from(cam, yaw, half, c.max_dist, w.town))
             for jn in route.junctions:
@@ -727,12 +861,18 @@ class Expert:
                                 v_x, ss_creep = min(v_x, CROSSING_V), True
                             if v_x < target:
                                 target, reason = v_x, "crossing"
-                        tta = tr.min_arrival(conn, w.t, tables())
+                        on = tables()
+                        tta = tr.min_arrival(conn, w.t, on)
+                        seen_clear = tta >= YIELD_GAP
+                        if env.cfg.expert_hidden_cars and jn["signalized"]:
+                            on_h = self.with_hidden(conn, on, pose)
+                            if on_h is not on:
+                                tta = min(tta, tr.min_arrival(conn, w.t, on_h))
                         yield_tta = min(tta, YIELD_TTA_MAX)
                         if tta < YIELD_GAP:
                             v_y = stop_profile(max(d_wait, 0.0), self.B_COMF)
                             if v_y < target:
-                                target, reason = v_y, "yield"
+                                target, reason, hidden = v_y, "yield", seen_clear
                     elif not jn["signalized"]:
                         # priority crossings: the first crossing only (past the near lane, a stop for the far one
                         # would leave the car standing across the near one)
@@ -766,7 +906,7 @@ class Expert:
         # while the zebra of its exit is taken within CW_REACH s plus the drive on to it, so that it does not stand
         # across the oncoming lanes. Past the zebra's start (committed) the corridor check alone stops for someone
         # in the way. Independent of the ego speed: part of target_nolight.
-        if peds.cw_on and route.crossings:
+        if peds.zebra_on and route.crossings:
             s_front = s + hl
             for s0c, _, ci, u0, u1, kc in route.crossings:
                 d = s0c - s_front
@@ -788,6 +928,15 @@ class Expert:
                     v_c = stop_profile(stop_at, self.B_COMF)
                     if v_c < target:
                         target, reason = v_c, "crosswalk"
+
+        # --- sidewalk riders crossing a road mouth without a zebra (TrafficConfig.sidewalk_bikes): the ego gives way
+        # to a rider who will be on its way before it has cleared it (a left turn across a rider going straight on
+        # beside it: 巻き込み; one coming out from behind a corner: 出会い頭); it stops with its front bumper
+        # CW_MARGIN before the rider's line. On a zebra the crosswalk rule above holds them (on_zebras).
+        if sw is not None and sw.n:
+            v_r = self.rider_crossings(route, s, v, pose, hl)
+            if v_r < target:
+                target, reason = v_r, "bicycle"
 
         # --- 止まれ (Town.from_graph: the minor road's approaches to priority crossings, Lane.stop_sign_s). The ego
         # stops with its front bumper STOP_SIGN_MARGIN before the painted line (the line stays in the camera's view),
@@ -837,6 +986,7 @@ class Expert:
         # --- traffic light. The speed-independent inputs of the decision are returned too (lt_*), so recorded
         # frames can be relabelled for other ego speeds (and for later versions of the rule).
         tl = TL_NONE
+        arrow = False
         target_nolight = target
         lt = {"lt_over": False, "lt_d": math.nan, "lt_st": TL_NONE, "lt_trem": math.nan, "lt_blocked": False,
               "lt_in": math.nan}
@@ -855,6 +1005,9 @@ class Expert:
                         target, reason = 0.0, "red_light"
                 continue
             tl = st
+            lane = w.town.lanes[lid]
+            if lane.arrow:                                  # under a lit right arrow (TownConfig.right_arrow): the
+                arrow = w.town.junctions[lane.signal[0]].arrow_on(lane.signal[1], w.t)    # light reads green
             t_rem = math.nan
             if st == TL_YELLOW:
                 J = w.town.junctions[w.town.lanes[lid].signal[0]]
@@ -874,7 +1027,8 @@ class Expert:
         # lead_owner: what the gap is to (>= 0: NPC vehicle index in world.traffic, <= -2: pedestrian, -1: nothing)
         return {"path": path, "target_speed": float(target), "tl_state": int(tl), "reason": reason,
                 "gap": g, "lead_owner": int(lead_o[0]), "target_nolight": float(target_nolight),
-                "yield_tta": float(yield_tta), "ss_d": float(ss_d), "ss_go": float(ss_go), "ss_creep": ss_creep, **lt}
+                "yield_tta": float(yield_tta), "hidden": hidden, "arrow": arrow,
+                "ss_d": float(ss_d), "ss_go": float(ss_go), "ss_creep": ss_creep, **lt}
 
     def blocked_at(self, route, s_stop):
         """Don't block the box: True if the exit beyond the junction of the route's stop line at `s_stop` has no

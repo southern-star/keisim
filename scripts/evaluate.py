@@ -83,10 +83,20 @@ SUITES = {
     # so a model's gain there is partly the luck of those routes): their towns with episodes no suite uses
     "suburban2": [(t, 9820 + e) for t in range(2000, 2010) for e in range(2)],
     "ramps2": [(t, 9820 + e) for t in range(2000, 2010) for e in range(2)],
+    # 見えにくい右折: every route starts before a signalised right turn across two or more oncoming lanes (route.
+    # right_turn_route: an oncoming car waiting to turn right there hides the lanes beside it), 600 m, episodes no
+    # other suite uses; the big-junction towns (right-turn lanes) and the suburban towns (片側2車線)
+    "hidden_right": [(t, 9970 + e) for t in range(3000, 3010) for e in range(3)],
+    "hidden_right_sub": [(t, 9970 + e) for t in range(2000, 2010) for e in range(3)],
+    # 右折矢印: the "arrows" towns (bigjunction without scrambles, a right arrow wherever there are right-turn lanes),
+    # every route starting before a signalised right turn across two or more oncoming lanes (as hidden_right; the
+    # town seed without right-turn lanes, 3002, left out), 600 m, people on the zebras
+    "arrows": [(t, 9970 + e) for t in (3000, 3001, 3003, 3004, 3005, 3006, 3007, 3008, 3009) for e in range(3)],
     "ramp_routes2": [(t, 9920 + e) for t in (2000, 2001, 2002, 2003, 2005, 2008, 2010, 2011, 2012, 2014)
                      for e in range(3)],
 }
-CAP_SCALE = {"classic": 1, "varied": 2, "twophase": 2, "roadtypes": 2, "suburban": 2, "ramps": 2, "bigjunction": 2}      # NPC count caps per town style
+CAP_SCALE = {"classic": 1, "varied": 2, "twophase": 2, "roadtypes": 2, "suburban": 2, "ramps": 2, "bigjunction": 2,
+             "arrows": 2}      # NPC count caps per town style
 # per-suite defaults for arguments left unset on the command line
 SUITE_DEFAULTS = {
     "long": {"route_length": 2500.0, "max_steps": 20000},
@@ -112,6 +122,10 @@ SUITE_DEFAULTS["bigjunction"] = {**SUITE_DEFAULTS["long3"], "town_style": "bigju
 # waiting to pass parked cars and the oncoming queues standing beside them lock up a junction now and then)
 SUITE_DEFAULTS["parked"] = {**SUITE_DEFAULTS["long3"], "town_style": "roadtypes", "parked": 4.0, "dart_out": 0.6,
                             "cap_scale": 1}
+SUITE_DEFAULTS["hidden_right"] = {"route_length": 600.0, "max_steps": 6000, "town_style": "bigjunction",
+                                  "jam_fixes": True, "blocked_timeout": 180.0, "via_right": 1, "crosswalks": 0.7}
+SUITE_DEFAULTS["arrows"] = {**SUITE_DEFAULTS["hidden_right"], "town_style": "arrows"}
+SUITE_DEFAULTS["hidden_right_sub"] = {**SUITE_DEFAULTS["hidden_right"], "town_style": "suburban", "crosswalks": 0.0}
 for _s in ("suburban", "ramps", "ramp_routes"):
     SUITE_DEFAULTS[_s + "2"] = SUITE_DEFAULTS[_s]
 for _k in ("crosswalks", "crosswalks_sub", "bigjunction"):
@@ -148,6 +162,7 @@ def run_route(job):
     cfg.keiview_roads = args.get("keiview_roads", "plain")
     cfg.keiview_peds = args.get("keiview_peds", "plain")
     cfg.expert_yield_visible = bool(args.get("yield_visible", False))
+    cfg.expert_hidden_cars = bool(args.get("hidden_cars", False))
     cfg.expert_bike_visible = bool(args.get("bike_visible", False))
     cfg.expert_bike_sweep = bool(args.get("bike_sweep", False))
     cfg.expert_wait_back = float(args.get("expert_wait_back", 0.0))
@@ -161,6 +176,9 @@ def run_route(job):
     cfg.traffic.bike_hook = bool(args.get("bike_hook", False))
     cfg.traffic.crosswalks = float(args.get("crosswalks", 0.0))
     cfg.traffic.bicycles = float(args.get("bicycles", 0.0))
+    cfg.traffic.sidewalk_bikes = float(args.get("sidewalk_bikes", 0.0))
+    cfg.traffic.bike_two_stage = float(args.get("bike_two_stage", 0.0))
+    cfg.traffic.bike_overtake = bool(args.get("bike_overtake", False))
     cfg.traffic.parked = float(args.get("parked", 0.0))
     cfg.traffic.dart_out = float(args.get("dart_out", 0.0))
     if args.get("dense"):
@@ -191,7 +209,8 @@ def run_route(job):
         agent = _AGENT
         agent.reset()
     obs = env.reset(town_seed=osm if osm is not None else town, episode_seed=ep, route_length=args["route_length"],
-                    weather=args["weather"], via_ramp=bool(args.get("via_ramp", False)))
+                    weather=args["weather"], via_ramp=bool(args.get("via_ramp", False)),
+                    via_right=bool(args.get("via_right", False)))
     kv = env._keiview if cfg.renderer == "keiview" else None
     kv_ms = []                                  # KeiView: ego_server's render time per frame (ms)
     kv_town_ms = kv.town_ms if kv is not None else None
@@ -460,6 +479,10 @@ def main():
     ap.add_argument("--yield_visible", type=int, default=0, choices=[0, 1],
                     help="the expert gives way only to cars the camera sees (EnvConfig.expert_yield_visible): "
                          "--agent expert, and the expert's reasons in the logs; tag suffix _yv")
+    ap.add_argument("--hidden_cars", type=int, default=0, choices=[0, 1],
+                    help="見えにくい右折: a right turn at a two-phase signal waits while the oncoming lanes it gives way "
+                         "to are hidden behind other cars (EnvConfig.expert_hidden_cars): --agent expert, and the "
+                         "expert's reasons in the logs; tag suffix _hc")
     ap.add_argument("--brake_hold", action="store_true", help="safety layer: no throttle burst right after firm braking")
     ap.add_argument("--red_hold", action="store_true", help="safety layer: no creeping while the model sees red/yellow")
     ap.add_argument("--yield_hold", type=float, nargs="*", default=None, metavar="X",
@@ -481,6 +504,9 @@ def main():
     ap.add_argument("--episode0", type=int, default=100, help="--osm_town: first episode seed")
     ap.add_argument("--via_ramp", type=int, default=None, choices=[0, 1],
                     help="routes that take a ramp (route.ramp_route; ramps towns; default 0, ramp_routes: 1)")
+    ap.add_argument("--via_right", type=int, default=None, choices=[0, 1],
+                    help="routes that start before a signalised right turn across two or more oncoming lanes "
+                         "(route.right_turn_route; default 0, hidden_right suites: 1)")
     ap.add_argument("--rig", default=None, choices=list(CAMERA_RIGS),
                     help="camera rig (keisim CAMERA_RIGS); default: the model's (front for the expert)")
     ap.add_argument("--ego_patience", type=float, default=0.0,
@@ -515,6 +541,15 @@ def main():
     ap.add_argument("--bicycles", type=float, default=None,
                     help="bicycles per km of road (TrafficConfig.bicycles; 0: none, as in every evaluation before "
                          "them); suffix _bk<N>")
+    ap.add_argument("--sidewalk_bikes", type=float, default=None,
+                    help="bicycles per km of sidewalk (TrafficConfig.sidewalk_bikes, keisim/sidewalk_bikes.py; 0: none, "
+                         "as in every evaluation before them); suffix _sw<N>")
+    ap.add_argument("--bike_two_stage", type=float, default=0.0,
+                    help="二段階右折: the weight of a two-stage right turn among the riders' choices at two-phase "
+                         "signals (TrafficConfig.bike_two_stage; 0: none); suffix _ts<W>")
+    ap.add_argument("--bike_overtake", type=int, default=0, choices=[0, 1],
+                    help="cars and the expert pass bicycles over the centre line when the oncoming lane is clear "
+                         "(TrafficConfig.bike_overtake); suffix _ot")
     ap.add_argument("--bike_visible", type=int, default=None, choices=[0, 1],
                     help="the expert counts only the riders the camera sees for its 巻き込み確認 and give-way "
                          "(EnvConfig.expert_bike_visible); suffix _bv")
@@ -556,11 +591,13 @@ def main():
         SUITE_DEFAULTS["osm"] = {"town_style": "twophase", "jam_fixes": True, "blocked_timeout": 180.0}
         args.suite = "osm"
     dflt = {"route_length": 600.0, "max_steps": 4000, "town_style": "classic", "jam_fixes": 0, "blocked_timeout": 90.0,
-            "via_ramp": 0, "crosswalks": 0.0, "bicycles": 0.0, "bike_visible": 0, "npc_past_line": 0, "bike_sweep": 0,
+            "via_ramp": 0, "via_right": 0,
+            "crosswalks": 0.0, "bicycles": 0.0, "sidewalk_bikes": 0.0, "bike_visible": 0, "npc_past_line": 0, "bike_sweep": 0,
             "npc_sweep": 0, "npc_axles": 0, "box_fix": 0, "bike_defer": 0, "bike_hook": 0,
             "parked": 0.0, "dart_out": 0.0, "cap_scale": 0, **SUITE_DEFAULTS.get(args.suite, {})}
     suite_style, suite_fixes, suite_timeout = dflt["town_style"], int(dflt["jam_fixes"]), dflt["blocked_timeout"]
     suite_cw, suite_bk, suite_bv = float(dflt["crosswalks"]), float(dflt["bicycles"]), int(dflt["bike_visible"])
+    suite_sw = float(dflt["sidewalk_bikes"])
     suite_npc, suite_bs, suite_nsw = int(dflt["npc_past_line"]), int(dflt["bike_sweep"]), int(dflt["npc_sweep"])
     suite_nax, suite_bf, suite_bdf = int(dflt["npc_axles"]), int(dflt["box_fix"]), int(dflt["bike_defer"])
     suite_hook = int(dflt["bike_hook"])
@@ -585,6 +622,8 @@ def main():
         tag += "_yh" + "".join(f"_{x:g}" for x in args.yield_hold)
     if args.yield_visible:
         tag += "_yv"
+    if args.hidden_cars:
+        tag += "_hc"
     if args.osm_town:
         jobs = [(args.osm_town, args.episode0 + e) for e in range(args.routes)]
     else:
@@ -610,6 +649,8 @@ def main():
         ("" if int(args.bike_hook) == suite_hook else ("_hook" if args.bike_hook else "_nohook")) + \
         ("" if args.crosswalks == suite_cw else f"_cw{args.crosswalks:g}") + \
         ("" if args.bicycles == suite_bk else f"_bk{args.bicycles:g}") + \
+        ("" if args.sidewalk_bikes == suite_sw else f"_sw{args.sidewalk_bikes:g}") + \
+        (f"_ts{args.bike_two_stage:g}" if args.bike_two_stage else "") + ("_ot" if args.bike_overtake else "") + \
         ("" if int(args.bike_visible) == suite_bv else ("_bv" if args.bike_visible else "_nobv")) + \
         ("" if int(args.bike_sweep) == suite_bs else ("_bs" if args.bike_sweep else "_nobs")) + \
         ("" if args.parked == suite_pk else f"_pk{args.parked:g}") + \
@@ -636,13 +677,18 @@ def main():
          "red_hold": args.red_hold, "town_style": args.town_style, "jam_fixes": bool(args.jam_fixes),
          "blocked_timeout": args.blocked_timeout, "osm_bbox": args.osm_bbox, "yield_visible": bool(args.yield_visible),
          "rig": args.rig, "ego_patience": args.ego_patience, "via_ramp": bool(args.via_ramp),
+         **({"via_right": True} if args.via_right else {}),
          "npc_past_line": int(args.npc_past_line), "npc_sweep": bool(args.npc_sweep), "npc_axles": bool(args.npc_axles),
          "box_fix": bool(args.box_fix), "bike_defer": bool(args.bike_defer), "bike_hook": bool(args.bike_hook),
          "crosswalks": args.crosswalks,
          "bicycles": args.bicycles,
+         **({"sidewalk_bikes": args.sidewalk_bikes} if args.sidewalk_bikes else {}),
+         **({"bike_two_stage": args.bike_two_stage} if args.bike_two_stage else {}),
+         **({"bike_overtake": True} if args.bike_overtake else {}),
          "bike_visible": bool(args.bike_visible), "bike_sweep": bool(args.bike_sweep), "parked": args.parked,
          "dart_out": args.dart_out, "cap_scale": int(args.cap_scale),
          **({"expert_wait_back": args.expert_wait_back} if args.expert_wait_back else {}),
+         **({"hidden_cars": True} if args.hidden_cars else {}),
          **({"expert_delay": args.expert_delay, "expert_delay_mode": args.expert_delay_mode}
             if args.expert_delay else {})}
     t0 = time.time()

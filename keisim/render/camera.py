@@ -101,6 +101,8 @@ class SceneState:
     bike_kind: np.ndarray = None  # (B,) 0 city, 1 sport, 2 slow
     bike_height: np.ndarray = None    # the rider's
     bike_colors: np.ndarray = None    # (B,4,3): frame, shirt, pants, skin
+    # right arrows (TownConfig.right_arrow): (n_heads,) bool, lit; None without any
+    arrow_state: np.ndarray = None
 
 
 def _gather_ranges(f0, f1):
@@ -417,6 +419,18 @@ class CameraRenderer:
         guard = [sf["guard"][idx]]
         odist = [odist_s]
         lamp = sf["lamp"][idx]
+        n_h = len(self.head_pos)
+        am = lamp >= 3 * n_h                             # right-arrow lamps (meshes: 3 * n_heads + head)
+        if am.any():
+            head = lamp[am] - 3 * n_h
+            lit = np.zeros(len(head), bool) if scene.arrow_state is None else scene.arrow_state[head].astype(bool)
+            to_cam = C[None] - self.head_pos[head]
+            cosv = (to_cam * self.head_nrm[head]).sum(1) / np.maximum(np.linalg.norm(to_cam, axis=1), 1e-6)
+            f = np.clip((cosv - math.cos(math.pi / 3)) / (math.cos(math.pi / 6) - math.cos(math.pi / 3)), 0.0, 1.0)
+            on = LAMP_COLORS_ON[2][None]
+            color[0][am] = np.where(lit[:, None], LAMP_OFF[None] + f[:, None] * (on - LAMP_OFF[None]), LAMP_OFF[None])
+            sem[0][am] = np.where(lit & (cosv >= math.cos(math.pi / 4)), SEM["tl_green"], SEM["pole"]).astype(np.uint8)
+            lamp = np.where(am, -1, lamp)
         lm = lamp >= 0
         if lm.any():
             head = lamp[lm] // 3
