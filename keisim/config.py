@@ -247,6 +247,14 @@ class TrafficConfig:
     # to here; no random draw is made for them, so the old episodes stay as they were). max_bikes caps the number.
     bicycles: float = 0.0
     max_bikes: int = 40
+    # Bicycles on the sidewalks (keisim/sidewalk_bikes.py, 歩道を走る自転車): riders per km of sidewalk (walkways that are
+    # not in the road), on its road side at 10-16 km/h. At a junction they turn the corner, turn back, or ride on
+    # across the mouth of the road in front of them: at a two-phase signal with the pedestrian light, elsewhere after a
+    # look (some of them hardly look: 出会い頭, coming out from behind the corner). Cars treat them as obstacles once
+    # they are in the road; the expert sees where they will be (as for people crossing). 0: none (no random draw is
+    # made for them, so the old episodes stay as they were). max_sidewalk_bikes caps the number.
+    sidewalk_bikes: float = 0.0
+    max_sidewalk_bikes: int = 30
     # Parked cars (keisim/parked.py, 路上駐車): parked cars per km of kerb on two-way roads with one lane each way
     # (not main roads), away from junctions, curves and the other side's parked cars. Cars and the expert move out
     # round them, over the centre line only when the oncoming lane is clear (else they wait behind). 0: none (no

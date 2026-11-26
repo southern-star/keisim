@@ -376,6 +376,7 @@ def worker(wid, args, quota, out_dir, counter):
     if args.crosswalk_spawn is not None:
         cfg.traffic.crosswalk_spawn = args.crosswalk_spawn
     cfg.traffic.bicycles = args.bicycles
+    cfg.traffic.sidewalk_bikes = args.sidewalk_bikes
     cfg.traffic.parked, cfg.traffic.dart_out = args.parked, args.dart_out
     if args.mode == "dagger":
         cfg.blocked_timeout = 40.0
@@ -663,6 +664,8 @@ def parse_args(argv=None):
                          "to the ego's stretch of it within CW_FOCUS_REACH s (crosswalk_near)")
     ap.add_argument("--bicycles", type=float, default=0.0,
                     help="bicycles per km of road (TrafficConfig.bicycles; 0: none)")
+    ap.add_argument("--sidewalk_bikes", type=float, default=0.0,
+                    help="bicycles per km of sidewalk (TrafficConfig.sidewalk_bikes; 0: none)")
     ap.add_argument("--bike_visible", type=int, default=0, choices=[0, 1],
                     help="the expert's 巻き込み確認 and give-way counts only the riders the camera sees, and riders "
                          "coming unseen from behind do not move its path (EnvConfig.expert_bike_visible)")
@@ -762,6 +765,7 @@ def main():
                **({"crosswalk_spawn": args.crosswalk_spawn} if args.crosswalk_spawn is not None else {}),
                **({"focus_crosswalk": args.focus_crosswalk} if args.focus_crosswalk > 0 else {}),
                **({"bicycles": args.bicycles} if args.bicycles > 0 else {}),
+               **({"sidewalk_bikes": args.sidewalk_bikes} if args.sidewalk_bikes > 0 else {}),
                **({"bike_visible": 1} if args.bike_visible else {}),
                **({"bike_sweep": 1} if args.bike_sweep else {}),
                **({"focus_bicycle": args.focus_bicycle} if args.focus_bicycle > 0 else {}),

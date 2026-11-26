@@ -1382,7 +1382,7 @@ class Traffic:
             self._yield_gaps(stop_gap, t, ego_info, hl)
         if sg0 is not None:          # (bike_defer: the riders do not keep out of the way of a car giving way)
             self.giving_way = stop_gap < sg0
-        if peds is not None and peds.cw_on:      # crosswalks at signals: give way to the people on them
+        if peds is not None and peds.zebra_on:   # crosswalks at signals: give way to the people on them
             self._crosswalk_gaps(stop_gap, hl, peds, t)
         bike_pair = ()
         pk_target = pk_swing = None
@@ -2034,6 +2034,7 @@ class Pedestrians:
             for side in (0, 1):
                 self.ww_cw[c["ww"][side]].append((ci, side, c["ww_s"][side]))
         self._cw_t = None                      # crosswalk_people's cache (the time it is for)
+        self.riders = None                     # the sidewalk riders (World; keisim/sidewalk_bikes.py), on the zebras too
         self.dart = np.zeros(n, bool)          # the children who hide and run out (add_hidden, start_dart)
         self.parked = None                     # the ParkedCars (set_parked)
         self.ww_block = None                   # 路側帯 walkway -> [(s0, s1)] beside parked cars (set_parked)
@@ -2103,8 +2104,16 @@ class Pedestrians:
                         continue
                     u = 0.0 if sgn > 0 else c["width"]
                 out.setdefault(ci, []).append((u, sgn, max(v, 1.0)))
+        if self.riders is not None and self.riders.n:          # sidewalk riders on (or coming up to) a zebra
+            for ci, lst in self.riders.on_zebras(t).items():
+                out.setdefault(ci, []).extend(lst)
         self._cw_t, self._cw_cache = t, {k: np.array(v) for k, v in out.items()}
         return self._cw_cache
+
+    @property
+    def zebra_on(self):
+        """Anyone uses the zebras at signals: the people (cw_on) or the sidewalk riders."""
+        return self.cw_on or (self.riders is not None and self.riders.n > 0)
 
     def crosswalk_blocked(self, ci, u0, u1, t, horizon=CW_REACH):
         """Is the stretch [u0, u1] of zebra ci (a lane's car, Town.lane_crossings) walked on now, or within `horizon` s,

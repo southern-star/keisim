@@ -2702,3 +2702,151 @@ def test_bike_hook_riders_pass_people_waiting_at_the_kerb_closely():
             ride()
             assert (int(bk.lead[j]) == -2 - q) == (mode == pd.WALK or not hook), (mode, hook)
     tr.cfg.bike_hook = False
+
+
+def test_sidewalk_bikes_links_and_riding():
+    """TrafficConfig.sidewalk_bikes (keisim/sidewalk_bikes.py): the links join sidewalk ends at a junction; a crossing
+    at a signal goes over that road's zebra with its pedestrian light. Off, the world has no riders (and draws nothing
+    for them); on, the riders keep moving (no two stand in each other's way for good), turn corners and cross roads."""
+    import math
+    from keisim.config import town_config
+    from keisim.roadnet import Town
+    from keisim.roadnet import PED_RED
+    from keisim.sidewalk_bikes import RIDE, sidewalk_links
+
+    T = Town(1010, town_config("twophase"))
+    links = sidewalk_links(T)
+    kinds = {lk["kind"] for lst in links.values() for lk in lst}
+    assert kinds == {"turn", "cross"}
+    for lst in links.values():
+        for lk in lst:
+            if lk["kind"] == "cross":
+                assert lk["signal"] and lk["zebra"] >= 0 and lk["u_out"] > lk["u_in"] > 0.0
+                c = T.ped_crossings[lk["zebra"]]
+                assert c["junction"] == lk["junction"] and c["road"] == lk["road"]
+
+    cfg = EnvConfig()
+    cfg.render_rgb = cfg.render_seg = False
+    cfg.town = town_config("twophase")
+    env = KeiEnv(cfg)
+    env.reset(town_seed=1010, episode_seed=5, route_length=600.0)
+    assert env.world.sw_bikes is None and env.world.peds.riders is None
+    rng_state = env.world.rng.bit_generator.state
+    cfg.traffic.sidewalk_bikes = 12.0
+    env.reset(town_seed=1010, episode_seed=5, route_length=600.0)
+    sw = env.world.sw_bikes
+    assert sw.n > 10 and env.world.peds.riders is sw
+    assert env.world.rng.bit_generator.state != rng_state
+    start = sw.xy.copy()
+    moved = np.zeros(sw.n)
+    crossed = set()
+    for _ in range(900):                                    # 90 s, the ego standing still
+        prev, prev_u = sw.xy.copy(), sw.u.copy()
+        env.step(np.array([0.0, 0.0, 1.0]))
+        moved += np.hypot(*(sw.xy - prev).T)
+        for i in range(sw.n):
+            lk = sw.link[i]
+            if sw.mode[i] != RIDE and isinstance(lk, dict) and lk["kind"] == "cross":
+                crossed.add(i)
+                if prev_u[i] < lk["u_in"] <= sw.u[i] and not sw.red_run[i]:     # into the road: not on red
+                    J = env.world.town.junctions[lk["junction"]]
+                    assert J.ped_signal(lk["phase"], env.world.t, cfg.traffic.ped_flash)[0] != PED_RED
+    assert (moved > 60.0).mean() > 0.8 and (sw.v < 0.15).mean() < 0.5
+    assert crossed
+    st = env.world.scene_state()
+    assert len(st.bike_xy) == sw.n + (env.world.bikes.n if env.world.bikes is not None else 0)
+    assert np.hypot(*(sw.xy - start).T).max() > 50.0
+
+
+def test_expert_stops_for_a_sidewalk_rider_in_the_road():
+    """A sidewalk rider crossing the road in front of the ego (in the carriageway of its crossing link) is an obstacle
+    for the expert (reason "bicycle"); the same rider back on its sidewalk is not."""
+    import math
+    from keisim.config import town_config
+    from keisim.sidewalk_bikes import LINK, RIDE
+
+    cfg = EnvConfig()
+    cfg.render_rgb = cfg.render_seg = False
+    cfg.town = town_config("twophase")
+    cfg.traffic.sidewalk_bikes = 12.0
+    cfg.traffic.max_vehicles = 0
+    env = KeiEnv(cfg)
+    env.reset(town_seed=1010, episode_seed=3, route_length=600.0)
+    w, sw, route = env.world, env.world.sw_bikes, env.route
+    s = route.s_start + 5.0
+    p = route.poly.interp(np.array([s + 14.0]))[0]           # a rider 14 m ahead of the front, across the route
+    h = float(route.poly.heading(np.array([s + 14.0]))[0])
+    lk = next(lk for lst in sw.links.values() for lk in lst if lk["kind"] == "cross")
+    i = 0
+    sw.mode[i], sw.link[i] = LINK, dict(lk)
+    sw.u[i] = (lk["u_in"] + lk["u_out"]) / 2
+    sw.xy[i] = p
+    sw.yaw[i] = h + math.pi / 2
+    sw.v[i] = 0.0
+    sw.xy[1:] = 1e4
+    plan = env.expert.plan()
+    sw.mode[i], sw.link[i] = RIDE, None
+    free = env.expert.plan()
+    assert plan["reason"] == "bicycle" and free["reason"] != "bicycle"
+    assert plan["target_speed"] < free["target_speed"] - 2.0
+
+
+def test_expert_gives_way_to_a_sidewalk_rider_crossing_its_turn():
+    """Expert.rider_crossings: a sidewalk rider riding on towards a road mouth without a zebra, whose line the route
+    crosses ahead, and who gets there before the ego has cleared it, holds the ego short of that line (reason
+    "bicycle"); standing at its kerb (for a gap) the rider does not (SidewalkRiders.crossing_ahead)."""
+    import math
+    from keisim.realworld import OSM_BOXES, osm_town
+    from keisim.sidewalk_bikes import RIDE
+
+    osm = osm_town(tuple(OSM_BOXES["osm_sapporo"]), cache="data/osm/osm_sapporo.json", name="osm_sapporo")
+    cfg = EnvConfig()
+    cfg.render_rgb = cfg.render_seg = False
+    cfg.town = osm.cfg
+    cfg.traffic.sidewalk_bikes = 12.0
+    cfg.traffic.max_vehicles = 0
+    env = KeiEnv(cfg)
+    env.reset(town_seed=osm, episode_seed=101, route_length=600.0)
+    w, sw, route = env.world, env.world.sw_bikes, env.route
+    lanes = w.town.lanes
+    # an unsignalised crossing link whose line the route crosses, between 15 and 35 m ahead of the start
+    s0 = route.s_start
+    pts = route.poly.interp(np.arange(s0, min(s0 + 200.0, route.poly.length), 0.5))
+    found = None
+    for (wid, e), lst in sw.links.items():
+        for lk in lst:
+            if lk["kind"] != "cross" or lk["signal"]:
+                continue
+            a = np.array(lk["poly"].interp1(lk["u_in"]))
+            b = np.array(lk["poly"].interp1(lk["u_out"]))
+            for k in range(len(pts) - 1):
+                from keisim.expert import _seg_cross
+                if _seg_cross(a, b, pts[k], pts[k + 1]) is not None:
+                    found = (wid, e, lk, s0 + 0.5 * k)
+                    break
+            if found:
+                break
+        if found:
+            break
+    assert found is not None
+    wid, e, lk, s_x = found
+    s = s_x - 20.0 - env.world.ego.LENGTH / 2              # the front 20 m before the rider's line
+    i = 0
+    sw.xy[1:] = 1e4
+    sw.link[1:] = [None] * (sw.n - 1)
+    sw.mode[i], sw.w[i], sw.link[i] = RIDE, wid, lk
+    L = w.town.walkways[wid]["poly"].length
+    sw.dir[i] = 1.0 if e == 1 else -1.0
+    sw.s[i] = L - 3.0 if e == 1 else 3.0                     # 3 m before its sidewalk's end
+    sw.xy[i] = sw._path_pt(i, 0.0)
+    sw.v[i] = 3.5
+    p0, p1 = route.poly.interp(np.array([s, s + 0.5]))
+    pose = (float(p0[0]), float(p0[1]), float(np.arctan2(p1[1] - p0[1], p1[0] - p0[0])))
+    hl = env.world.ego.LENGTH / 2
+    v_r = env.expert.rider_crossings(route, s, 6.0, pose, hl)
+    assert v_r < math.sqrt(2 * env.expert.B_COMF * 20.0)          # stops short of the rider's line
+    sw.v[i] = 0.0
+    sw.s[i] = L if e == 1 else 0.0
+    sw.u[i] = 0.0
+    assert all(x[0] != i for x in sw.crossing_ahead())
+    assert env.expert.rider_crossings(route, s, 6.0, pose, hl) == math.inf

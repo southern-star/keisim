@@ -170,6 +170,7 @@ def run_route(job):
     cfg.traffic.bike_hook = bool(args.get("bike_hook", False))
     cfg.traffic.crosswalks = float(args.get("crosswalks", 0.0))
     cfg.traffic.bicycles = float(args.get("bicycles", 0.0))
+    cfg.traffic.sidewalk_bikes = float(args.get("sidewalk_bikes", 0.0))
     cfg.traffic.parked = float(args.get("parked", 0.0))
     cfg.traffic.dart_out = float(args.get("dart_out", 0.0))
     if args.get("dense"):
@@ -532,6 +533,9 @@ def main():
     ap.add_argument("--bicycles", type=float, default=None,
                     help="bicycles per km of road (TrafficConfig.bicycles; 0: none, as in every evaluation before "
                          "them); suffix _bk<N>")
+    ap.add_argument("--sidewalk_bikes", type=float, default=None,
+                    help="bicycles per km of sidewalk (TrafficConfig.sidewalk_bikes, keisim/sidewalk_bikes.py; 0: none, "
+                         "as in every evaluation before them); suffix _sw<N>")
     ap.add_argument("--bike_visible", type=int, default=None, choices=[0, 1],
                     help="the expert counts only the riders the camera sees for its 巻き込み確認 and give-way "
                          "(EnvConfig.expert_bike_visible); suffix _bv")
@@ -574,11 +578,12 @@ def main():
         args.suite = "osm"
     dflt = {"route_length": 600.0, "max_steps": 4000, "town_style": "classic", "jam_fixes": 0, "blocked_timeout": 90.0,
             "via_ramp": 0, "via_right": 0,
-            "crosswalks": 0.0, "bicycles": 0.0, "bike_visible": 0, "npc_past_line": 0, "bike_sweep": 0,
+            "crosswalks": 0.0, "bicycles": 0.0, "sidewalk_bikes": 0.0, "bike_visible": 0, "npc_past_line": 0, "bike_sweep": 0,
             "npc_sweep": 0, "npc_axles": 0, "box_fix": 0, "bike_defer": 0, "bike_hook": 0,
             "parked": 0.0, "dart_out": 0.0, "cap_scale": 0, **SUITE_DEFAULTS.get(args.suite, {})}
     suite_style, suite_fixes, suite_timeout = dflt["town_style"], int(dflt["jam_fixes"]), dflt["blocked_timeout"]
     suite_cw, suite_bk, suite_bv = float(dflt["crosswalks"]), float(dflt["bicycles"]), int(dflt["bike_visible"])
+    suite_sw = float(dflt["sidewalk_bikes"])
     suite_npc, suite_bs, suite_nsw = int(dflt["npc_past_line"]), int(dflt["bike_sweep"]), int(dflt["npc_sweep"])
     suite_nax, suite_bf, suite_bdf = int(dflt["npc_axles"]), int(dflt["box_fix"]), int(dflt["bike_defer"])
     suite_hook = int(dflt["bike_hook"])
@@ -630,6 +635,7 @@ def main():
         ("" if int(args.bike_hook) == suite_hook else ("_hook" if args.bike_hook else "_nohook")) + \
         ("" if args.crosswalks == suite_cw else f"_cw{args.crosswalks:g}") + \
         ("" if args.bicycles == suite_bk else f"_bk{args.bicycles:g}") + \
+        ("" if args.sidewalk_bikes == suite_sw else f"_sw{args.sidewalk_bikes:g}") + \
         ("" if int(args.bike_visible) == suite_bv else ("_bv" if args.bike_visible else "_nobv")) + \
         ("" if int(args.bike_sweep) == suite_bs else ("_bs" if args.bike_sweep else "_nobs")) + \
         ("" if args.parked == suite_pk else f"_pk{args.parked:g}") + \
@@ -661,6 +667,7 @@ def main():
          "box_fix": bool(args.box_fix), "bike_defer": bool(args.bike_defer), "bike_hook": bool(args.bike_hook),
          "crosswalks": args.crosswalks,
          "bicycles": args.bicycles,
+         **({"sidewalk_bikes": args.sidewalk_bikes} if args.sidewalk_bikes else {}),
          "bike_visible": bool(args.bike_visible), "bike_sweep": bool(args.bike_sweep), "parked": args.parked,
          "dart_out": args.dart_out, "cap_scale": int(args.cap_scale),
          **({"expert_wait_back": args.expert_wait_back} if args.expert_wait_back else {}),
