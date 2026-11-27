@@ -238,6 +238,12 @@ class TrafficConfig:
     #   (bigjunction 3003/9801, 2.5 km).
     # Off by default: the old evaluations stay reproducible.
     bike_hook: bool = False
+    # bike_ego_sides: the riders see points along the ego's long sides too, its corners included (as bike_hook's for
+    # the NPCs): a rider following the ego rode into its rear corner as the ego stood half way round its left turn
+    # for a pedestrian, its body at an angle across the rider's line; the ego's three circles left the corner
+    # uncovered (crosswalks_bk8 1011/9801 with bike_two_stage and bike_overtake). Off by default: the old
+    # evaluations stay reproducible.
+    bike_ego_sides: bool = False
     # Crosswalks at signals (Town.ped_crossings: the zebras at the ends of the roads of two-phase signalised junctions).
     # crosswalks: the chance that a person walking up to such an end crosses there: they wait at the kerb for the
     # pedestrian green (the green of the cars crossing that road's flow, minus ped_flash s of flashing) and walk over

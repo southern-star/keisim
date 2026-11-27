@@ -174,6 +174,7 @@ def run_route(job):
     cfg.traffic.box_fix = bool(args.get("box_fix", False))
     cfg.traffic.bike_defer = bool(args.get("bike_defer", False))
     cfg.traffic.bike_hook = bool(args.get("bike_hook", False))
+    cfg.traffic.bike_ego_sides = bool(args.get("bike_ego_sides", False))
     cfg.traffic.crosswalks = float(args.get("crosswalks", 0.0))
     cfg.traffic.bicycles = float(args.get("bicycles", 0.0))
     cfg.traffic.sidewalk_bikes = float(args.get("sidewalk_bikes", 0.0))
@@ -534,6 +535,9 @@ def main():
                     help="1: bicycles see the sides and corners of the cars, drop back when closer than their standing "
                          "distance, start clear of the cars and pass people waiting at a zebra's kerb closely "
                          "(TrafficConfig.bike_hook); suffix _hook")
+    ap.add_argument("--bike_ego_sides", type=int, default=0, choices=[0, 1],
+                    help="1: bicycles see the sides and corners of the ego too (TrafficConfig.bike_ego_sides); "
+                         "suffix _egs")
     ap.add_argument("--crosswalks", type=float, default=None,
                     help="crosswalks at signals: the chance that a person at a two-phase signal's road end crosses on "
                          "the zebra with the pedestrian light; turning cars give way (TrafficConfig.crosswalks; "
@@ -647,6 +651,7 @@ def main():
         ("" if int(args.box_fix) == suite_bf else ("_boxfix" if args.box_fix else "_noboxfix")) + \
         ("" if int(args.bike_defer) == suite_bdf else ("_bdf" if args.bike_defer else "_nobdf")) + \
         ("" if int(args.bike_hook) == suite_hook else ("_hook" if args.bike_hook else "_nohook")) + \
+        ("_egs" if args.bike_ego_sides else "") + \
         ("" if args.crosswalks == suite_cw else f"_cw{args.crosswalks:g}") + \
         ("" if args.bicycles == suite_bk else f"_bk{args.bicycles:g}") + \
         ("" if args.sidewalk_bikes == suite_sw else f"_sw{args.sidewalk_bikes:g}") + \
@@ -680,6 +685,7 @@ def main():
          **({"via_right": True} if args.via_right else {}),
          "npc_past_line": int(args.npc_past_line), "npc_sweep": bool(args.npc_sweep), "npc_axles": bool(args.npc_axles),
          "box_fix": bool(args.box_fix), "bike_defer": bool(args.bike_defer), "bike_hook": bool(args.bike_hook),
+         **({"bike_ego_sides": True} if args.bike_ego_sides else {}),
          "crosswalks": args.crosswalks,
          "bicycles": args.bicycles,
          **({"sidewalk_bikes": args.sidewalk_bikes} if args.sidewalk_bikes else {}),

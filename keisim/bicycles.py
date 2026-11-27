@@ -710,6 +710,10 @@ class Bicycles:
         ncar = len(cxy)
         parts = [(cxy, cr, cow, csp, cyw, np.full(ncar, MARGIN_CAR))]
         exy, er = ego_circ
+        if cfg.bike_ego_sides and ego_dims is not None and ego_yaw is not None:   # the ego's sides and corners too
+            sxy, _ = car_side_points(np.asarray(ego_xy, float).reshape(1, 2), np.array([float(ego_yaw)]),
+                                     np.array([float(ego_dims[0])]), np.array([float(ego_dims[1])]))
+            exy, er = np.concatenate([exy, sxy]), np.concatenate([er, np.full(len(sxy), SIDE_R)])
         parts.append((exy, er, np.full(len(exy), -1), np.full(len(exy), ego_v), np.full(len(exy), ego_yaw),
                       np.full(len(exy), MARGIN_CAR)))
         # where turning cars will be (the cars on a turn's connector or about to enter one)

@@ -3003,3 +3003,43 @@ def test_bicycles_overtake_over_centre_line():
         if L.kind == "road" and L.road >= 0 and (L.nlanes != 1 or town.roads[L.road].spec.center == "yellow"
                                                  or town.roads[L.road].spec.oneway):
             assert tr.overtake_room(L, 0.0, 10.0, 3.0, 1.0, L.speed_limit) == 0.0
+
+
+def test_bicycles_see_ego_corners():
+    """TrafficConfig.bike_ego_sides: with the ego standing at an angle ahead of a rider, its rear corner on the
+    rider's line, the rider rides into the corner without the option (the ego's three circles leave it uncovered:
+    crosswalks_bk8 1011/9801) and stops short of it with it."""
+    import math
+    from keisim.config import town_config
+
+    def run(flag):
+        cfg = EnvConfig()
+        cfg.render_rgb = cfg.render_seg = False
+        cfg.town = town_config("twophase")
+        cfg.route_deviation = 1e9                       # (the ego is put off its route)
+        cfg.traffic.bicycles = 12.0
+        cfg.traffic.bike_hook = True
+        cfg.traffic.bike_ego_sides = flag
+        env = KeiEnv(cfg)
+        env.reset(town_seed=1010, episode_seed=1, route_length=600.0)
+        w = env.world
+        bk, tr, lanes = w.bikes, w.traffic, w.town.lanes
+        i = next(j for j in range(bk.n) if lanes[int(bk.lane[j])].kind == "road" and bk.v[j] > 2.0
+                 and 5.0 < bk.lane_s[j] < lanes[int(bk.lane[j])].length - 30.0
+                 and (not tr.n or np.min(np.hypot(*(tr.xy - bk.xy[j]).T)) > 25.0))
+        h = float(bk.yaw[i])
+        u, left = np.array([math.cos(h), math.sin(h)]), np.array([-math.sin(h), math.cos(h)])
+        corner = bk.xy[i] + 9.0 * u + 0.25 * left       # the rider's right edge is 0.05 m right of the corner
+        e = w.ego
+        yaw = h + 0.8                                   # half way round a left turn
+        c, s = math.cos(yaw), math.sin(yaw)
+        ctr = corner + np.array([c * e.LENGTH / 2 - s * e.WIDTH / 2, s * e.LENGTH / 2 + c * e.WIDTH / 2])
+        e.x, e.y, e.yaw, e.v = float(ctr[0]), float(ctr[1]), yaw, 0.0
+        for _ in range(80):
+            _, _, done, info = env.step(np.array([0.0, 0.0, 1.0]))
+            if done:
+                return info.get("status")
+        return "ok"
+
+    assert run(False) == "collision_bicycle"
+    assert run(True) == "ok"
